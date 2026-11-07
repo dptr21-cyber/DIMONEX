@@ -22,6 +22,7 @@ import { BotInstance, OrderBotConfig, VolumeBotConfig, PriceFollowerConfig, Dept
 import { PriceFollowerBotExecutor } from './bots/PriceFollowerBot.js';
 import { DepthLiquidityBotExecutor } from './bots/DepthLiquidityBot.js';
 import { QuantHftBotExecutor } from './bots/QuantHftBot.js';
+import { SmartHftLadderBotExecutor } from './bots/SmartHftLadderBot.js';
 
 interface WorkerRuntime {
   botId: string;
@@ -256,6 +257,30 @@ export class BotWorkerManager {
       if (!cfg.max_ladder_levels || cfg.max_ladder_levels < 1 || cfg.max_ladder_levels > 3) {
         cfg.max_ladder_levels = 3;
       }
+    } else if (bot.botType === 'SMART_HFT_LADDER') {
+      const cfg = bot.smartHftConfig;
+      if (!cfg) {
+        errors.push('Konfigurasi Smart HFT Ladder Bot tidak boleh kosong.');
+        return { isValid: false, errors };
+      }
+      const minBound = parseFloat(cfg.min_price_bound || '0');
+      const maxBound = parseFloat(cfg.max_price_bound || '0');
+      if (minBound <= 0 || maxBound <= 0 || minBound >= maxBound) {
+        errors.push(`Batas harga tidak valid: min_price_bound (${minBound}) harus positif dan < max_price_bound (${maxBound}).`);
+      }
+      const minBuy = parseFloat(cfg.min_buy_lot || '0');
+      const maxBuy = parseFloat(cfg.max_buy_lot || '0');
+      const minSell = parseFloat(cfg.min_sell_lot || '0');
+      const maxSell = parseFloat(cfg.max_sell_lot || '0');
+      if (minBuy <= 0 || maxBuy < minBuy) {
+        errors.push(`Ukuran buy lot tidak valid: min_buy_lot (${minBuy}) harus > 0 dan <= max_buy_lot (${maxBuy}).`);
+      }
+      if (minSell <= 0 || maxSell < minSell) {
+        errors.push(`Ukuran sell lot tidak valid: min_sell_lot (${minSell}) harus > 0 dan <= max_sell_lot (${maxSell}).`);
+      }
+      if (!cfg.total_orders || cfg.total_orders < 2 || cfg.total_orders > 100) {
+        cfg.total_orders = 40; // Default 40
+      }
     }
 
     return { isValid: errors.length === 0, errors };
@@ -321,6 +346,8 @@ export class BotWorkerManager {
       this.scheduleDepthLiquidityTick(runtime);
     } else if (bot.botType === 'QUANT_HFT_MM') {
       this.scheduleQuantHftBotTick(runtime);
+    } else if (bot.botType === 'SMART_HFT_LADDER') {
+      this.scheduleSmartHftLadderTick(runtime);
     }
 
     db.scheduleSave();
@@ -375,6 +402,8 @@ export class BotWorkerManager {
         cancelledOrdersCount += DepthLiquidityBotExecutor.cancelOpenDepthOrders(bot, this.addLog.bind(this));
       } else if (bot.botType === 'QUANT_HFT_MM') {
         cancelledOrdersCount += QuantHftBotExecutor.cancelOpenBotOrders(bot, this.addLog.bind(this));
+      } else if (bot.botType === 'SMART_HFT_LADDER') {
+        cancelledOrdersCount += SmartHftLadderBotExecutor.cancelOpenBotOrders(bot, this.addLog.bind(this));
       }
       for (const orderId of bot.deployedOrderIds) {
         const order = db.orders.get(orderId);
@@ -979,6 +1008,41 @@ export class BotWorkerManager {
         }
       }
       this.scheduleQuantHftBotTick(runtime);
+    }, intervalMs);
+  }
+
+  /**
+   * Smart HFT Ladder & Pattern Creator Scheduling Loop
+   */
+  private scheduleSmartHftLadderTick(runtime: WorkerRuntime) {
+    if (!runtime.isRunning) return;
+
+    const bot = db.botInstances.get(runtime.botId);
+    if (!bot || bot.status !== 'RUNNING') {
+      runtime.isRunning = false;
+      this.workers.delete(runtime.botId);
+      return;
+    }
+
+    const intervalMs = Math.max(1500, bot.smartHftConfig?.reprice_interval_ms || 4000);
+
+    runtime.timer = setTimeout(() => {
+      if (!runtime.isRunning) return;
+      try {
+        SmartHftLadderBotExecutor.executeCycle(bot, this.addLog.bind(this));
+        runtime.consecutiveErrors = 0;
+      } catch (err: any) {
+        runtime.consecutiveErrors++;
+        this.addLog(bot, `Error pada Smart HFT Ladder cycle: ${err.message}`, 'ERROR');
+        if (runtime.consecutiveErrors >= db.riskControls.maxConsecutiveErrors) {
+          bot.status = 'RISK_HALTED';
+          bot.errorInfo = `Consecutive error threshold breached (${runtime.consecutiveErrors}).`;
+          this.addLog(bot, bot.errorInfo, 'RISK');
+          this.stopWorker(bot.id, false);
+          return;
+        }
+      }
+      this.scheduleSmartHftLadderTick(runtime);
     }, intervalMs);
   }
 }

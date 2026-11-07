@@ -19,6 +19,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { UserProfile, TradingPairItem, BotInstance, OrderItem, TradeItem, Environment, BotStatus, BotType } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
+import { SmartHftLadderSection } from './SmartHftLadderSection.js';
 
 interface Props {
   user: UserProfile | null;
@@ -29,6 +30,7 @@ interface Props {
 
 type MMTab = 
   | 'OVERVIEW' 
+  | 'SMART_HFT_LADDER'
   | 'QUANT_HFT_MM'
   | 'DEPTH_LIQUIDITY'
   | 'PRICE_FOLLOWER'
@@ -1173,7 +1175,7 @@ export const MMConsoleView: React.FC<Props> = ({
               </span>
             </div>
             <span className="text-[10px] text-slate-400 mt-1 block">
-              Quant HFT: {instances.filter(b => b.botType === 'QUANT_HFT_MM' && b.status === 'RUNNING').length} · Depth: {instances.filter(b => b.botType === 'DEPTH_LIQUIDITY' && b.status === 'RUNNING').length} · Price Follower: {instances.filter(b => b.botType === 'PRICE_FOLLOWER' && b.status === 'RUNNING').length} · Order: {instances.filter(b => b.botType === 'ORDER_BOT' && b.status === 'RUNNING').length} · Volume: {instances.filter(b => b.botType === 'VOLUME_BOT' && b.status === 'RUNNING').length}
+              Smart HFT: {instances.filter(b => b.botType === 'SMART_HFT_LADDER' && b.status === 'RUNNING').length} · Quant HFT: {instances.filter(b => b.botType === 'QUANT_HFT_MM' && b.status === 'RUNNING').length} · Depth: {instances.filter(b => b.botType === 'DEPTH_LIQUIDITY' && b.status === 'RUNNING').length} · Price Follower: {instances.filter(b => b.botType === 'PRICE_FOLLOWER' && b.status === 'RUNNING').length} · Order: {instances.filter(b => b.botType === 'ORDER_BOT' && b.status === 'RUNNING').length} · Volume: {instances.filter(b => b.botType === 'VOLUME_BOT' && b.status === 'RUNNING').length}
             </span>
           </div>
 
@@ -1278,6 +1280,7 @@ export const MMConsoleView: React.FC<Props> = ({
       <div className="flex items-center gap-1 overflow-x-auto pb-1 border-b border-[#1e293b]">
         {[
           { id: 'OVERVIEW', label: 'Overview' },
+          { id: 'SMART_HFT_LADDER', label: '📐 Smart HFT Ladder' },
           { id: 'QUANT_HFT_MM', label: '⚡ Quant HFT MM' },
           { id: 'DEPTH_LIQUIDITY', label: '📊 Depth & Liquidity' },
           { id: 'PRICE_FOLLOWER', label: '🎯 Price Follower' },
@@ -1341,6 +1344,13 @@ export const MMConsoleView: React.FC<Props> = ({
           {/* Quick Action Strip */}
           <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[#0c121d] border border-[#1e293b] rounded-xl">
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => setActiveTab('SMART_HFT_LADDER')}
+                className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-semibold rounded-lg shadow transition-colors flex items-center gap-1"
+              >
+                <span>📐</span>
+                <span>Smart HFT Ladder</span>
+              </button>
               <button
                 onClick={() => setIsOrderBotModalOpen(true)}
                 className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg shadow transition-colors"
@@ -2500,6 +2510,17 @@ export const MMConsoleView: React.FC<Props> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* TAB: SMART HFT LADDER BOT & PATTERN CHART CREATOR ENGINE */}
+      {activeTab === 'SMART_HFT_LADDER' && (
+        <SmartHftLadderSection
+          user={user}
+          instances={instances}
+          tradingPairs={tradingPairs}
+          onRefresh={loadData}
+          onSetFeedback={setFeedbackMsg}
+        />
       )}
 
       {/* TAB: QUANTITATIVE HFT MARKET MAKER (HFT-MM) */}

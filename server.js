@@ -2973,8 +2973,8 @@ import express from "express";
 import http from "http";
 import { WebSocketServer as WebSocketServer2 } from "ws";
 import { createServer as createViteServer } from "vite";
-import path4 from "path";
-import fs4 from "fs";
+import path5 from "path";
+import fs5 from "fs";
 
 // server/routes/auth.ts
 import { Router } from "express";
@@ -9415,6 +9415,8 @@ botRouter.post("/cancel-all", requireAuthOrHmac, (req, res) => {
 });
 
 // server/routes/mmConsole.ts
+import fs4 from "fs";
+import path4 from "path";
 import { Router as Router11 } from "express";
 import crypto18 from "crypto";
 init_database();
@@ -10294,6 +10296,394 @@ var QuantHftBotExecutor = class {
   }
 };
 
+// server/services/bots/SmartHftLadderBot.ts
+init_database();
+init_PrecisionMath();
+var SmartHftLadderBotExecutor = class {
+  /**
+   * Determine pair-specific tick size in quote units
+   */
+  static getTickSize(pair) {
+    const isUsdtQuote = pair.quoteCurrency === "USDT" || pair.id.endsWith("-USDT");
+    if (isUsdtQuote) return 0.01;
+    if (pair.id === "USDT-IDR") return 1;
+    if (pair.id === "ETH-IDR") return 100;
+    return 1e3;
+  }
+  /**
+   * Format quote price units for human-readable display
+   */
+  static formatDisplayPrice(priceUnits, pair) {
+    if (pair.quoteCurrency === "IDR") {
+      return PrecisionMath.formatIDRDisplay(priceUnits);
+    }
+    const val = Number(priceUnits) / 10 ** (pair.quoteDecimals || 2);
+    return `${val.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: pair.quoteDecimals || 4 })} ${pair.quoteCurrency}`;
+  }
+  /**
+   * Generates mathematical normalized trajectory [-1.0 to +1.0] for the 14 chart formations
+   */
+  static generatePatternCurve(pattern, count) {
+    const curve = new Array(count).fill(0);
+    const n = Math.max(10, count);
+    for (let i = 0; i < n; i++) {
+      const x = i / (n - 1);
+      switch (pattern) {
+        case "HEAD_AND_SHOULDERS": {
+          const ls = 0.55 * Math.exp(-Math.pow(x - 0.22, 2) / (2 * Math.pow(0.07, 2)));
+          const hd = 1 * Math.exp(-Math.pow(x - 0.5, 2) / (2 * Math.pow(0.08, 2)));
+          const rs = 0.5 * Math.exp(-Math.pow(x - 0.78, 2) / (2 * Math.pow(0.07, 2)));
+          const neckline = -0.1 * Math.sin(Math.PI * x);
+          curve[i] = ls + hd + rs + neckline - 0.4;
+          break;
+        }
+        case "INVERSE_HEAD_AND_SHOULDERS": {
+          const ls = -0.55 * Math.exp(-Math.pow(x - 0.22, 2) / (2 * Math.pow(0.07, 2)));
+          const hd = -1 * Math.exp(-Math.pow(x - 0.5, 2) / (2 * Math.pow(0.08, 2)));
+          const rs = -0.5 * Math.exp(-Math.pow(x - 0.78, 2) / (2 * Math.pow(0.07, 2)));
+          curve[i] = ls + hd + rs + 0.4;
+          break;
+        }
+        case "DOUBLE_TOP": {
+          const top1 = 0.85 * Math.exp(-Math.pow(x - 0.3, 2) / (2 * Math.pow(0.1, 2)));
+          const top2 = 0.82 * Math.exp(-Math.pow(x - 0.7, 2) / (2 * Math.pow(0.1, 2)));
+          curve[i] = top1 + top2 - 0.35;
+          break;
+        }
+        case "TRIPLE_TOP": {
+          const p1 = 0.8 * Math.exp(-Math.pow(x - 0.2, 2) / (2 * Math.pow(0.07, 2)));
+          const p2 = 0.82 * Math.exp(-Math.pow(x - 0.5, 2) / (2 * Math.pow(0.07, 2)));
+          const p3 = 0.79 * Math.exp(-Math.pow(x - 0.8, 2) / (2 * Math.pow(0.07, 2)));
+          curve[i] = p1 + p2 + p3 - 0.4;
+          break;
+        }
+        case "DOUBLE_BOTTOM": {
+          const bot1 = -0.85 * Math.exp(-Math.pow(x - 0.3, 2) / (2 * Math.pow(0.1, 2)));
+          const bot2 = -0.82 * Math.exp(-Math.pow(x - 0.7, 2) / (2 * Math.pow(0.1, 2)));
+          curve[i] = bot1 + bot2 + 0.35;
+          break;
+        }
+        case "TRIPLE_BOTTOM": {
+          const b1 = -0.8 * Math.exp(-Math.pow(x - 0.2, 2) / (2 * Math.pow(0.07, 2)));
+          const b2 = -0.82 * Math.exp(-Math.pow(x - 0.5, 2) / (2 * Math.pow(0.07, 2)));
+          const b3 = -0.79 * Math.exp(-Math.pow(x - 0.8, 2) / (2 * Math.pow(0.07, 2)));
+          curve[i] = b1 + b2 + b3 + 0.4;
+          break;
+        }
+        case "BULLISH_FLAG": {
+          if (x <= 0.35) {
+            curve[i] = x / 0.35 * 0.9;
+          } else {
+            const progress = (x - 0.35) / 0.65;
+            curve[i] = 0.9 - progress * 0.3 + 0.1 * Math.sin(progress * 5 * Math.PI);
+          }
+          break;
+        }
+        case "BEARISH_FLAG": {
+          if (x <= 0.35) {
+            curve[i] = -(x / 0.35) * 0.9;
+          } else {
+            const progress = (x - 0.35) / 0.65;
+            curve[i] = -0.9 + progress * 0.3 + 0.1 * Math.sin(progress * 5 * Math.PI);
+          }
+          break;
+        }
+        case "PENNANT": {
+          if (x <= 0.3) {
+            curve[i] = x / 0.3 * 0.85;
+          } else {
+            const progress = (x - 0.3) / 0.7;
+            const amp = (1 - progress) * 0.25;
+            curve[i] = 0.85 + amp * Math.sin(progress * 6 * Math.PI);
+          }
+          break;
+        }
+        case "CUP_AND_HANDLE": {
+          if (x <= 0.75) {
+            const t = x / 0.75 * 2 - 1;
+            curve[i] = Math.pow(t, 2) * 0.75;
+          } else {
+            const progress = (x - 0.75) / 0.25;
+            curve[i] = 0.75 - progress * 0.15 + 0.05 * Math.sin(progress * 3 * Math.PI);
+          }
+          break;
+        }
+        case "RECTANGLE": {
+          curve[i] = 0.5 * Math.sin(x * 8 * Math.PI);
+          break;
+        }
+        case "ASCENDING_TRIANGLE": {
+          const upper = 0.6;
+          const lower = -0.6 + x * 1.05;
+          const cycle = 0.5 * (1 + Math.sin(x * 7 * Math.PI));
+          curve[i] = lower + cycle * (upper - lower);
+          break;
+        }
+        case "DESCENDING_TRIANGLE": {
+          const lower = -0.6;
+          const upper = 0.6 - x * 1.05;
+          const cycle = 0.5 * (1 + Math.sin(x * 7 * Math.PI));
+          curve[i] = lower + cycle * (upper - lower);
+          break;
+        }
+        case "SYMMETRICAL_TRIANGLE": {
+          const upper = 0.7 * (1 - 0.85 * x);
+          const lower = -0.7 * (1 - 0.85 * x);
+          const cycle = 0.5 * (1 + Math.sin(x * 8 * Math.PI));
+          curve[i] = lower + cycle * (upper - lower);
+          break;
+        }
+        default:
+          curve[i] = 0.4 * Math.sin(x * 4 * Math.PI);
+          break;
+      }
+    }
+    return curve;
+  }
+  /**
+   * Calculates timeframe bar count and Gaussian noise scale
+   */
+  static getTimeframeConfig(tf) {
+    switch (tf) {
+      case "5m":
+        return { bars: 60, noiseStd: 2e-3 };
+      case "15m":
+        return { bars: 100, noiseStd: 35e-4 };
+      case "1h":
+        return { bars: 150, noiseStd: 65e-4 };
+      case "4h":
+        return { bars: 240, noiseStd: 0.012 };
+      default:
+        return { bars: 100, noiseStd: 35e-4 };
+    }
+  }
+  /**
+   * Preview synthetic pattern points and calculate current anchor pivot price
+   */
+  static previewPattern(basePrice, pattern, timeframe, amplitudePct = 5) {
+    const { bars, noiseStd } = this.getTimeframeConfig(timeframe);
+    const rawCurve = this.generatePatternCurve(pattern, bars);
+    const amplitude = basePrice * (amplitudePct / 100);
+    const points = [];
+    for (let i = 0; i < bars; i++) {
+      const u1 = Math.max(1e-4, Math.random());
+      const u2 = Math.random();
+      const z0 = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+      const noise = z0 * (basePrice * noiseStd);
+      const price = basePrice + rawCurve[i] * amplitude + noise;
+      points.push({
+        index: i,
+        normalizedValue: rawCurve[i],
+        price: Math.round(price * 100) / 100
+      });
+    }
+    const anchorPrice = points[points.length - 1].price;
+    return { points, anchorPrice };
+  }
+  /**
+   * Calculates the Guarded 20 Buy and 20 Sell ladder levels based on linear interpolation
+   * within [min_price_bound, max_price_bound] and volume scaling [min_lot, max_lot].
+   */
+  static calculateLadder(pair, anchorPriceNum, cfg) {
+    const quoteDecimals = pair.quoteDecimals !== void 0 ? pair.quoteDecimals : pair.quoteCurrency === "USDT" ? 6 : 2;
+    const baseDecimals = pair.baseDecimals || 8;
+    const tickSize = this.getTickSize(pair);
+    const minBoundNum = parseFloat(cfg.min_price_bound);
+    const maxBoundNum = parseFloat(cfg.max_price_bound);
+    if (isNaN(minBoundNum) || isNaN(maxBoundNum) || minBoundNum >= maxBoundNum) {
+      throw new Error(`Batas harga tidak valid: min_price_bound (${minBoundNum}) harus < max_price_bound (${maxBoundNum})`);
+    }
+    if (anchorPriceNum <= minBoundNum || anchorPriceNum >= maxBoundNum) {
+      throw new Error(`[Anti-Out of Bounds Guard] Running Anchor Price (${anchorPriceNum}) berada di luar batas aman [${minBoundNum}, ${maxBoundNum}]!`);
+    }
+    const totalOrders = Math.min(100, Math.max(2, cfg.total_orders || 40));
+    const levelsPerSide = Math.floor(totalOrders / 2);
+    const minBuyLot = parseFloat(cfg.min_buy_lot || "0.01");
+    const maxBuyLot = parseFloat(cfg.max_buy_lot || "0.50");
+    const minSellLot = parseFloat(cfg.min_sell_lot || "0.01");
+    const maxSellLot = parseFloat(cfg.max_sell_lot || "0.50");
+    const buyLevels = [];
+    const sellLevels = [];
+    const buyStartPrice = anchorPriceNum - tickSize;
+    const buyEndPrice = minBoundNum;
+    for (let i = 1; i <= levelsPerSide; i++) {
+      const t = (i - 1) / Math.max(1, levelsPerSide - 1);
+      const rawPrice = buyStartPrice - t * (buyStartPrice - buyEndPrice);
+      const quantizedPrice = Math.round(rawPrice / tickSize) * tickSize;
+      const safePrice = Math.max(minBoundNum, Math.min(buyStartPrice, quantizedPrice));
+      const rawLot = minBuyLot + t * (maxBuyLot - minBuyLot);
+      const safeLot = Math.min(maxBuyLot, Math.max(minBuyLot, rawLot));
+      const priceUnits = PrecisionMath.parseToUnits(safePrice.toFixed(quoteDecimals), quoteDecimals);
+      const qtyUnits = PrecisionMath.parseToUnits(safeLot.toFixed(baseDecimals), baseDecimals);
+      buyLevels.push({
+        level: i,
+        side: "BUY",
+        priceUnits,
+        priceDisplay: this.formatDisplayPrice(priceUnits, pair),
+        quantityUnits: qtyUnits,
+        lotDisplay: safeLot.toFixed(4)
+      });
+    }
+    const sellStartPrice = anchorPriceNum + tickSize;
+    const sellEndPrice = maxBoundNum;
+    for (let i = 1; i <= levelsPerSide; i++) {
+      const t = (i - 1) / Math.max(1, levelsPerSide - 1);
+      const rawPrice = sellStartPrice + t * (sellEndPrice - sellStartPrice);
+      const quantizedPrice = Math.round(rawPrice / tickSize) * tickSize;
+      const safePrice = Math.min(maxBoundNum, Math.max(sellStartPrice, quantizedPrice));
+      const rawLot = minSellLot + t * (maxSellLot - minSellLot);
+      const safeLot = Math.min(maxSellLot, Math.max(minSellLot, rawLot));
+      const priceUnits = PrecisionMath.parseToUnits(safePrice.toFixed(quoteDecimals), quoteDecimals);
+      const qtyUnits = PrecisionMath.parseToUnits(safeLot.toFixed(baseDecimals), baseDecimals);
+      sellLevels.push({
+        level: i,
+        side: "SELL",
+        priceUnits,
+        priceDisplay: this.formatDisplayPrice(priceUnits, pair),
+        quantityUnits: qtyUnits,
+        lotDisplay: safeLot.toFixed(4)
+      });
+    }
+    return { buyLevels, sellLevels };
+  }
+  /**
+   * Cancels all active orders deployed by this Smart HFT Ladder bot
+   */
+  static cancelOpenBotOrders(bot, addLog, reason) {
+    const cfg = bot.smartHftConfig;
+    let cancelledCount = 0;
+    const orderIdsToCancel = /* @__PURE__ */ new Set();
+    if (cfg?.activeOrderIds) {
+      cfg.activeOrderIds.forEach((id) => orderIdsToCancel.add(id));
+    }
+    bot.deployedOrderIds.forEach((id) => orderIdsToCancel.add(id));
+    for (const orderId of orderIdsToCancel) {
+      const order = db.orders.get(orderId);
+      if (order && (order.status === "NEW" || order.status === "PARTIALLY_FILLED")) {
+        try {
+          matchingEngine.cancelOrder(orderId, bot.ownerUserId, bot.pairId);
+          cancelledCount++;
+        } catch {
+        }
+      }
+    }
+    if (cfg) {
+      cfg.activeOrderIds = [];
+    }
+    if (cancelledCount > 0) {
+      addLog(bot, `Membatalkan ${cancelledCount} order ladder terbuka (${reason || "Rotasi/Penyegaran Ladder"}).`, "INFO");
+    }
+    return cancelledCount;
+  }
+  /**
+   * Main Execution Cycle:
+   * 1. Evaluates or updates synthetic geometric pattern to derive anchor price
+   * 2. Calculates 20 Buy / 20 Sell ladder levels with strict price bounds & volume scaling
+   * 3. Submits orders directly into the Matching Engine
+   * 4. Updates bot metrics and state
+   */
+  static executeCycle(bot, addLog) {
+    const pair = db.tradingPairs.get(bot.pairId);
+    if (!pair || pair.isHalted) {
+      addLog(bot, `Trading pair ${bot.pairId} dihentikan sementara (HALTED). Menunggu cycle berikutnya...`, "RISK");
+      return;
+    }
+    const cfg = bot.smartHftConfig;
+    if (!cfg) {
+      addLog(bot, "Konfigurasi Smart HFT Ladder kosong. Melewati cycle.", "ERROR");
+      return;
+    }
+    const quoteDecimals = pair.quoteDecimals !== void 0 ? pair.quoteDecimals : pair.quoteCurrency === "USDT" ? 6 : 2;
+    const currentMarketPriceNum = Number(BigInt(pair.lastPrice)) / 10 ** quoteDecimals;
+    const { points, anchorPrice } = this.previewPattern(
+      currentMarketPriceNum,
+      cfg.pattern,
+      cfg.timeframe,
+      5
+    );
+    const minBound = parseFloat(cfg.min_price_bound);
+    const maxBound = parseFloat(cfg.max_price_bound);
+    const safeAnchor = Math.max(minBound + this.getTickSize(pair) * 2, Math.min(maxBound - this.getTickSize(pair) * 2, anchorPrice));
+    cfg.lastAnchorPrice = safeAnchor.toFixed(quoteDecimals);
+    const { buyLevels, sellLevels } = this.calculateLadder(pair, safeAnchor, cfg);
+    this.cancelOpenBotOrders(bot, addLog, "Rotasi Tangga HFT Baru");
+    const newOrderIds = [];
+    let placedBuys = 0;
+    let placedSells = 0;
+    for (const lvl of buyLevels) {
+      try {
+        const clientOrderId = `shft-b${lvl.level}-${bot.id.slice(4, 9)}-${Date.now()}`;
+        const matchRes = matchingEngine.placeOrder({
+          userId: bot.accountId || bot.ownerUserId,
+          pairId: bot.pairId,
+          side: "BUY",
+          orderType: "LIMIT",
+          timeInForce: "GTC",
+          price: lvl.priceUnits.toString(),
+          quantity: lvl.quantityUnits.toString(),
+          clientOrderId
+        });
+        const orderId = matchRes.takerOrder?.id || matchRes?.order?.id;
+        if (orderId) {
+          newOrderIds.push(orderId);
+          placedBuys++;
+          bot.stats.ordersSubmitted++;
+          bot.stats.ordersAccepted++;
+        }
+      } catch (err) {
+        addLog(bot, `Gagal menaruh Buy Lvl ${lvl.level} (${lvl.priceDisplay}): ${err.message}`, "ERROR");
+      }
+    }
+    for (const lvl of sellLevels) {
+      try {
+        const clientOrderId = `shft-s${lvl.level}-${bot.id.slice(4, 9)}-${Date.now()}`;
+        const matchRes = matchingEngine.placeOrder({
+          userId: bot.accountId || bot.ownerUserId,
+          pairId: bot.pairId,
+          side: "SELL",
+          orderType: "LIMIT",
+          timeInForce: "GTC",
+          price: lvl.priceUnits.toString(),
+          quantity: lvl.quantityUnits.toString(),
+          clientOrderId
+        });
+        const orderId = matchRes.takerOrder?.id || matchRes?.order?.id;
+        if (orderId) {
+          newOrderIds.push(orderId);
+          placedSells++;
+          bot.stats.ordersSubmitted++;
+          bot.stats.ordersAccepted++;
+        }
+      } catch (err) {
+        addLog(bot, `Gagal menaruh Sell Lvl ${lvl.level} (${lvl.priceDisplay}): ${err.message}`, "ERROR");
+      }
+    }
+    cfg.activeOrderIds = newOrderIds;
+    bot.deployedOrderIds.push(...newOrderIds);
+    if (bot.deployedOrderIds.length > 80) {
+      bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
+    }
+    cfg.lastPatternMetrics = {
+      patternName: cfg.pattern.replace(/_/g, " "),
+      barsGenerated: points.length,
+      anchorPrice: this.formatDisplayPrice(PrecisionMath.parseToUnits(safeAnchor.toFixed(quoteDecimals), quoteDecimals), pair),
+      buyLevel1: { price: buyLevels[0].priceDisplay, lot: buyLevels[0].lotDisplay },
+      buyLevelFurthest: { price: buyLevels[buyLevels.length - 1].priceDisplay, lot: buyLevels[buyLevels.length - 1].lotDisplay },
+      sellLevel1: { price: sellLevels[0].priceDisplay, lot: sellLevels[0].lotDisplay },
+      sellLevelFurthest: { price: sellLevels[sellLevels.length - 1].priceDisplay, lot: sellLevels[sellLevels.length - 1].lotDisplay }
+    };
+    bot.lastHeartbeat = Date.now();
+    bot.lastExecutionResult = `Berhasil menempatkan ${placedBuys} Buy Limit & ${placedSells} Sell Limit (Anchor: ${cfg.lastAnchorPrice}, Pattern: ${cfg.pattern}).`;
+    addLog(
+      bot,
+      `[HFT Ladder Aktif] ${placedBuys + placedSells} order dipasang simetris (Buy: ${buyLevels[0].priceDisplay} -> ${buyLevels[buyLevels.length - 1].priceDisplay} | Sell: ${sellLevels[0].priceDisplay} -> ${sellLevels[sellLevels.length - 1].priceDisplay}).`,
+      "ORDER"
+    );
+    db.scheduleSave();
+    marketWsService.broadcastBotUpdate(bot);
+  }
+};
+
 // server/services/BotWorkerManager.ts
 var BotWorkerManager = class {
   constructor() {
@@ -10501,6 +10891,30 @@ var BotWorkerManager = class {
       if (!cfg.max_ladder_levels || cfg.max_ladder_levels < 1 || cfg.max_ladder_levels > 3) {
         cfg.max_ladder_levels = 3;
       }
+    } else if (bot.botType === "SMART_HFT_LADDER") {
+      const cfg = bot.smartHftConfig;
+      if (!cfg) {
+        errors.push("Konfigurasi Smart HFT Ladder Bot tidak boleh kosong.");
+        return { isValid: false, errors };
+      }
+      const minBound = parseFloat(cfg.min_price_bound || "0");
+      const maxBound = parseFloat(cfg.max_price_bound || "0");
+      if (minBound <= 0 || maxBound <= 0 || minBound >= maxBound) {
+        errors.push(`Batas harga tidak valid: min_price_bound (${minBound}) harus positif dan < max_price_bound (${maxBound}).`);
+      }
+      const minBuy = parseFloat(cfg.min_buy_lot || "0");
+      const maxBuy = parseFloat(cfg.max_buy_lot || "0");
+      const minSell = parseFloat(cfg.min_sell_lot || "0");
+      const maxSell = parseFloat(cfg.max_sell_lot || "0");
+      if (minBuy <= 0 || maxBuy < minBuy) {
+        errors.push(`Ukuran buy lot tidak valid: min_buy_lot (${minBuy}) harus > 0 dan <= max_buy_lot (${maxBuy}).`);
+      }
+      if (minSell <= 0 || maxSell < minSell) {
+        errors.push(`Ukuran sell lot tidak valid: min_sell_lot (${minSell}) harus > 0 dan <= max_sell_lot (${maxSell}).`);
+      }
+      if (!cfg.total_orders || cfg.total_orders < 2 || cfg.total_orders > 100) {
+        cfg.total_orders = 40;
+      }
     }
     return { isValid: errors.length === 0, errors };
   }
@@ -10555,6 +10969,8 @@ var BotWorkerManager = class {
       this.scheduleDepthLiquidityTick(runtime);
     } else if (bot.botType === "QUANT_HFT_MM") {
       this.scheduleQuantHftBotTick(runtime);
+    } else if (bot.botType === "SMART_HFT_LADDER") {
+      this.scheduleSmartHftLadderTick(runtime);
     }
     db.scheduleSave();
     return true;
@@ -10601,6 +11017,8 @@ var BotWorkerManager = class {
         cancelledOrdersCount += DepthLiquidityBotExecutor.cancelOpenDepthOrders(bot, this.addLog.bind(this));
       } else if (bot.botType === "QUANT_HFT_MM") {
         cancelledOrdersCount += QuantHftBotExecutor.cancelOpenBotOrders(bot, this.addLog.bind(this));
+      } else if (bot.botType === "SMART_HFT_LADDER") {
+        cancelledOrdersCount += SmartHftLadderBotExecutor.cancelOpenBotOrders(bot, this.addLog.bind(this));
       }
       for (const orderId of bot.deployedOrderIds) {
         const order = db.orders.get(orderId);
@@ -11108,6 +11526,37 @@ var BotWorkerManager = class {
         }
       }
       this.scheduleQuantHftBotTick(runtime);
+    }, intervalMs);
+  }
+  /**
+   * Smart HFT Ladder & Pattern Creator Scheduling Loop
+   */
+  scheduleSmartHftLadderTick(runtime) {
+    if (!runtime.isRunning) return;
+    const bot = db.botInstances.get(runtime.botId);
+    if (!bot || bot.status !== "RUNNING") {
+      runtime.isRunning = false;
+      this.workers.delete(runtime.botId);
+      return;
+    }
+    const intervalMs = Math.max(1500, bot.smartHftConfig?.reprice_interval_ms || 4e3);
+    runtime.timer = setTimeout(() => {
+      if (!runtime.isRunning) return;
+      try {
+        SmartHftLadderBotExecutor.executeCycle(bot, this.addLog.bind(this));
+        runtime.consecutiveErrors = 0;
+      } catch (err) {
+        runtime.consecutiveErrors++;
+        this.addLog(bot, `Error pada Smart HFT Ladder cycle: ${err.message}`, "ERROR");
+        if (runtime.consecutiveErrors >= db.riskControls.maxConsecutiveErrors) {
+          bot.status = "RISK_HALTED";
+          bot.errorInfo = `Consecutive error threshold breached (${runtime.consecutiveErrors}).`;
+          this.addLog(bot, bot.errorInfo, "RISK");
+          this.stopWorker(bot.id, false);
+          return;
+        }
+      }
+      this.scheduleSmartHftLadderTick(runtime);
     }, intervalMs);
   }
 };
@@ -12448,6 +12897,197 @@ mmConsoleRouter.post("/quant-hft/create", requireMMOrAdmin, (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
+mmConsoleRouter.get("/smart-hft/patterns", (req, res) => {
+  const patterns = [
+    // 1. Reversal Patterns
+    { id: "HEAD_AND_SHOULDERS", name: "Head and Shoulders", category: "REVERSAL", bias: "BEARISH" },
+    { id: "INVERSE_HEAD_AND_SHOULDERS", name: "Inverse Head and Shoulders", category: "REVERSAL", bias: "BULLISH" },
+    { id: "DOUBLE_TOP", name: "Double Top", category: "REVERSAL", bias: "BEARISH" },
+    { id: "TRIPLE_TOP", name: "Triple Top", category: "REVERSAL", bias: "BEARISH" },
+    { id: "DOUBLE_BOTTOM", name: "Double Bottom", category: "REVERSAL", bias: "BULLISH" },
+    { id: "TRIPLE_BOTTOM", name: "Triple Bottom", category: "REVERSAL", bias: "BULLISH" },
+    // 2. Continuation Patterns
+    { id: "BULLISH_FLAG", name: "Bullish Flag", category: "CONTINUATION", bias: "BULLISH" },
+    { id: "BEARISH_FLAG", name: "Bearish Flag", category: "CONTINUATION", bias: "BEARISH" },
+    { id: "PENNANT", name: "Pennant", category: "CONTINUATION", bias: "CONTINUATION" },
+    { id: "CUP_AND_HANDLE", name: "Cup and Handle", category: "CONTINUATION", bias: "BULLISH" },
+    { id: "RECTANGLE", name: "Rectangle (Consolidation)", category: "CONTINUATION", bias: "NEUTRAL" },
+    // 3. Bilateral / Neutral Patterns
+    { id: "ASCENDING_TRIANGLE", name: "Ascending Triangle", category: "BILATERAL", bias: "BULLISH_BIAS" },
+    { id: "DESCENDING_TRIANGLE", name: "Descending Triangle", category: "BILATERAL", bias: "BEARISH_BIAS" },
+    { id: "SYMMETRICAL_TRIANGLE", name: "Symmetrical Triangle", category: "BILATERAL", bias: "BILATERAL" }
+  ];
+  res.json({ patterns });
+});
+mmConsoleRouter.post("/smart-hft/preview", requireMMOrAdmin, (req, res) => {
+  try {
+    const {
+      pairId,
+      timeframe,
+      pattern,
+      total_orders,
+      min_price_bound,
+      max_price_bound,
+      min_buy_lot,
+      max_buy_lot,
+      min_sell_lot,
+      max_sell_lot
+    } = req.body;
+    const pair = db.tradingPairs.get(pairId || "BTC-IDR");
+    if (!pair) {
+      return res.status(404).json({ error: "Pair tidak ditemukan" });
+    }
+    const quoteDecimals = pair.quoteDecimals !== void 0 ? pair.quoteDecimals : pair.quoteCurrency === "USDT" ? 6 : 2;
+    const currentMarketPrice = Number(BigInt(pair.lastPrice)) / 10 ** quoteDecimals;
+    const tf = timeframe || "15m";
+    const pat = pattern || "HEAD_AND_SHOULDERS";
+    const { points, anchorPrice } = SmartHftLadderBotExecutor.previewPattern(
+      currentMarketPrice,
+      pat,
+      tf,
+      5
+    );
+    const minBoundNum = parseFloat(min_price_bound || (currentMarketPrice * 0.9).toFixed(quoteDecimals));
+    const maxBoundNum = parseFloat(max_price_bound || (currentMarketPrice * 1.1).toFixed(quoteDecimals));
+    const cfg = {
+      account_id: "preview",
+      timeframe: tf,
+      pattern: pat,
+      total_orders: Math.min(100, Math.max(2, Number(total_orders || 40))),
+      min_price_bound: String(minBoundNum),
+      max_price_bound: String(maxBoundNum),
+      min_buy_lot: String(min_buy_lot || "0.01"),
+      max_buy_lot: String(max_buy_lot || "0.50"),
+      min_sell_lot: String(min_sell_lot || "0.01"),
+      max_sell_lot: String(max_sell_lot || "0.50"),
+      reprice_interval_ms: 3e3
+    };
+    const tick = SmartHftLadderBotExecutor.getTickSize(pair);
+    const safeAnchor = Math.max(minBoundNum + tick * 2, Math.min(maxBoundNum - tick * 2, anchorPrice));
+    const { buyLevels, sellLevels } = SmartHftLadderBotExecutor.calculateLadder(pair, safeAnchor, cfg);
+    res.json({
+      success: true,
+      pairId: pair.id,
+      anchorPrice: safeAnchor,
+      anchorPriceDisplay: SmartHftLadderBotExecutor.formatDisplayPrice(PrecisionMath.parseToUnits(safeAnchor.toFixed(quoteDecimals), quoteDecimals), pair),
+      minPriceBound: minBoundNum,
+      maxPriceBound: maxBoundNum,
+      patternPoints: points,
+      buyLevels,
+      sellLevels,
+      verificationReport: {
+        buyLevel1: buyLevels[0],
+        buyLevelFurthest: buyLevels[buyLevels.length - 1],
+        sellLevel1: sellLevels[0],
+        sellLevelFurthest: sellLevels[sellLevels.length - 1],
+        guardsPassed: true
+      }
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+mmConsoleRouter.post("/smart-hft/create", requireMMOrAdmin, (req, res) => {
+  try {
+    const user = req.user;
+    const {
+      name,
+      pairId,
+      environment,
+      timeframe,
+      pattern,
+      total_orders,
+      min_price_bound,
+      max_price_bound,
+      min_buy_lot,
+      max_buy_lot,
+      min_sell_lot,
+      max_sell_lot,
+      reprice_interval_ms
+    } = req.body;
+    if (!name || !pairId) {
+      return res.status(400).json({ error: "Nama bot dan trading pair wajib diisi." });
+    }
+    const pair = db.tradingPairs.get(pairId);
+    if (!pair) {
+      return res.status(404).json({ error: "Trading pair tidak valid." });
+    }
+    const minBound = parseFloat(min_price_bound);
+    const maxBound = parseFloat(max_price_bound);
+    if (isNaN(minBound) || isNaN(maxBound) || minBound <= 0 || maxBound <= 0 || minBound >= maxBound) {
+      return res.status(400).json({ error: "Batas harga absolut tidak valid: min_price_bound harus > 0 dan < max_price_bound." });
+    }
+    const totalOrdersClamped = Math.min(100, Math.max(2, Number(total_orders || 40)));
+    const smartHftConfig = {
+      account_id: user.id,
+      timeframe: timeframe || "15m",
+      pattern: pattern || "HEAD_AND_SHOULDERS",
+      total_orders: totalOrdersClamped,
+      min_price_bound: String(minBound),
+      max_price_bound: String(maxBound),
+      min_buy_lot: String(min_buy_lot || "0.01"),
+      max_buy_lot: String(max_buy_lot || "0.50"),
+      min_sell_lot: String(min_sell_lot || "0.01"),
+      max_sell_lot: String(max_sell_lot || "0.50"),
+      reprice_interval_ms: Number(reprice_interval_ms || 4e3),
+      activeOrderIds: []
+    };
+    const botId = `bot-shft-${Date.now()}-${crypto18.randomBytes(2).toString("hex")}`;
+    const bot = {
+      id: botId,
+      name,
+      botType: "SMART_HFT_LADDER",
+      pairId,
+      environment: environment || "DEMO",
+      ownerUserId: user.id,
+      accountId: user.id,
+      version: 1,
+      status: "READY",
+      lastHeartbeat: Date.now(),
+      smartHftConfig,
+      stats: {
+        ordersSubmitted: 0,
+        ordersAccepted: 0,
+        ordersFilled: 0,
+        executedVolume: "0",
+        totalTrades: 0
+      },
+      deployedOrderIds: [],
+      logs: [
+        {
+          timestamp: Date.now(),
+          message: `Smart HFT Ladder Bot "${name}" dibuat (${totalOrdersClamped} Orders, Pola: ${smartHftConfig.pattern}, Bounds: [${minBound} - ${maxBound}]).`,
+          type: "INFO"
+        }
+      ],
+      createdBy: user.email,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    db.botInstances.set(bot.id, bot);
+    db.scheduleSave();
+    res.json({ success: true, message: `Smart HFT Ladder Bot "${bot.name}" berhasil dibuat.`, bot });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+mmConsoleRouter.get("/smart-hft/python-script", (req, res) => {
+  try {
+    const scriptPath = path4.resolve(process.cwd(), "scripts", "smart_hft_ladder_bot.py");
+    if (!fs4.existsSync(scriptPath)) {
+      return res.status(404).json({ error: "File scripts/smart_hft_ladder_bot.py tidak ditemukan." });
+    }
+    const code = fs4.readFileSync(scriptPath, "utf-8");
+    if (req.query.download === "true") {
+      res.setHeader("Content-Type", "text/x-python");
+      res.setHeader("Content-Disposition", 'attachment; filename="smart_hft_ladder_bot.py"');
+      return res.send(code);
+    }
+    res.json({ code, filename: "smart_hft_ladder_bot.py" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // server/routes/observability.ts
 init_database();
@@ -12543,13 +13183,13 @@ async function startServer() {
     res.type("text/plain");
     res.send("User-agent: *\nDisallow: /api/\nDisallow: /admin\nAllow: /\n");
   });
-  const distPath = path4.resolve(process.cwd(), "dist");
-  const indexPath = path4.resolve(distPath, "index.html");
-  const distExists = fs4.existsSync(indexPath);
+  const distPath = path5.resolve(process.cwd(), "dist");
+  const indexPath = path5.resolve(distPath, "index.html");
+  const distExists = fs5.existsSync(indexPath);
   if (distExists) {
     app.use(express.static(distPath));
     app.get("*", (req, res, next) => {
-      if (fs4.existsSync(indexPath)) {
+      if (fs5.existsSync(indexPath)) {
         res.sendFile(indexPath, (err) => {
           if (err && !res.headersSent) {
             next(err);
@@ -12899,6 +13539,25 @@ export {
  * 3. Pillar C (Risk & Inventory Manager):
  *    - Strict base/quote inventory bounds & inventory mean-reversion skew.
  *    - Data staleness tripwires & emergency book clearing.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
+ * SmartHftLadderBot.ts
+ * SMART HFT LADDER BOT & PATTERN CHART CREATOR ENGINE (DIMONEX Matching Engine Executor)
+ * 
+ * Architecture:
+ * - Modul A: Advanced Pattern Chart Creator Engine
+ *     * Deterministic mathematical modeling of 14 geometric chart patterns
+ *     * 4 Timeframes (5m, 15m, 1h, 4h) with scaled bar counts & Gaussian noise
+ *     * Computes real-time anchor price (current pivot)
+ * - Modul B: Guarded Multi-Order HFT Ladder Engine
+ *     * Symmetrical ladder order placement (20 Buy Limits & 20 Sell Limits, max 100)
+ *     * Absolute Anti-Out-of-Bounds price boundary enforcement [min_price_bound, max_price_bound]
+ *     * Uniform linear price interpolation across safe channel
+ *     * Volume scaling risk guard (min_lot -> max_lot marti-light distribution)
+ *     * Direct atomic integration into DIMONEX Matching Engine
  */
 /**
  * @license

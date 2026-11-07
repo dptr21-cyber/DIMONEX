@@ -7,16 +7,19 @@
  * Endpoints for Order Bots, Volume Bots, Instance Cloning, CSV Import/Export, and Risk Controls.
  */
 
+import fs from 'fs';
+import path from 'path';
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import { requireAuth, requireMM, requireAdmin } from './auth.js';
 import { db } from '../db/database.js';
 import { botWorkerManager } from '../services/BotWorkerManager.js';
-import { BotInstance, OrderBotConfig, VolumeBotConfig, PriceFollowerConfig, DepthLiquidityConfig, QuantHftConfig, Environment } from '../db/types.js';
+import { BotInstance, OrderBotConfig, VolumeBotConfig, PriceFollowerConfig, DepthLiquidityConfig, QuantHftConfig, SmartHftLadderConfig, PatternFormationType, PatternTimeframe, Environment } from '../db/types.js';
 import { priceAggregatorService } from '../services/external/PriceAggregatorService.js';
 import { fxConversionService } from '../services/external/FxConversionService.js';
 import { DepthLiquidityBotExecutor } from '../services/bots/DepthLiquidityBot.js';
 import { PriceFollowerBotExecutor } from '../services/bots/PriceFollowerBot.js';
+import { SmartHftLadderBotExecutor } from '../services/bots/SmartHftLadderBot.js';
 import { PrecisionMath } from '../ledger/PrecisionMath.js';
 
 export const mmConsoleRouter = Router();
@@ -1548,5 +1551,229 @@ mmConsoleRouter.post('/quant-hft/create', requireMMOrAdmin, (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
+
+// ============================================================================
+// 25. SMART HFT LADDER BOT & PATTERN CHART CREATOR ENDPOINTS
+// ============================================================================
+
+// A. Get List of 14 Supported Chart Patterns
+mmConsoleRouter.get('/smart-hft/patterns', (req, res) => {
+  const patterns = [
+    // 1. Reversal Patterns
+    { id: 'HEAD_AND_SHOULDERS', name: 'Head and Shoulders', category: 'REVERSAL', bias: 'BEARISH' },
+    { id: 'INVERSE_HEAD_AND_SHOULDERS', name: 'Inverse Head and Shoulders', category: 'REVERSAL', bias: 'BULLISH' },
+    { id: 'DOUBLE_TOP', name: 'Double Top', category: 'REVERSAL', bias: 'BEARISH' },
+    { id: 'TRIPLE_TOP', name: 'Triple Top', category: 'REVERSAL', bias: 'BEARISH' },
+    { id: 'DOUBLE_BOTTOM', name: 'Double Bottom', category: 'REVERSAL', bias: 'BULLISH' },
+    { id: 'TRIPLE_BOTTOM', name: 'Triple Bottom', category: 'REVERSAL', bias: 'BULLISH' },
+    // 2. Continuation Patterns
+    { id: 'BULLISH_FLAG', name: 'Bullish Flag', category: 'CONTINUATION', bias: 'BULLISH' },
+    { id: 'BEARISH_FLAG', name: 'Bearish Flag', category: 'CONTINUATION', bias: 'BEARISH' },
+    { id: 'PENNANT', name: 'Pennant', category: 'CONTINUATION', bias: 'CONTINUATION' },
+    { id: 'CUP_AND_HANDLE', name: 'Cup and Handle', category: 'CONTINUATION', bias: 'BULLISH' },
+    { id: 'RECTANGLE', name: 'Rectangle (Consolidation)', category: 'CONTINUATION', bias: 'NEUTRAL' },
+    // 3. Bilateral / Neutral Patterns
+    { id: 'ASCENDING_TRIANGLE', name: 'Ascending Triangle', category: 'BILATERAL', bias: 'BULLISH_BIAS' },
+    { id: 'DESCENDING_TRIANGLE', name: 'Descending Triangle', category: 'BILATERAL', bias: 'BEARISH_BIAS' },
+    { id: 'SYMMETRICAL_TRIANGLE', name: 'Symmetrical Triangle', category: 'BILATERAL', bias: 'BILATERAL' },
+  ];
+  res.json({ patterns });
+});
+
+// B. Live Mathematical Pattern & Ladder Order Simulator Preview
+mmConsoleRouter.post('/smart-hft/preview', requireMMOrAdmin, (req, res) => {
+  try {
+    const {
+      pairId,
+      timeframe,
+      pattern,
+      total_orders,
+      min_price_bound,
+      max_price_bound,
+      min_buy_lot,
+      max_buy_lot,
+      min_sell_lot,
+      max_sell_lot
+    } = req.body;
+
+    const pair = db.tradingPairs.get(pairId || 'BTC-IDR');
+    if (!pair) {
+      return res.status(404).json({ error: 'Pair tidak ditemukan' });
+    }
+
+    const quoteDecimals = pair.quoteDecimals !== undefined ? pair.quoteDecimals : (pair.quoteCurrency === 'USDT' ? 6 : 2);
+    const currentMarketPrice = Number(BigInt(pair.lastPrice)) / (10 ** quoteDecimals);
+
+    const tf = (timeframe || '15m') as PatternTimeframe;
+    const pat = (pattern || 'HEAD_AND_SHOULDERS') as PatternFormationType;
+
+    // 1. Modul A: Generate Pattern & Anchor
+    const { points, anchorPrice } = SmartHftLadderBotExecutor.previewPattern(
+      currentMarketPrice,
+      pat,
+      tf,
+      5.0
+    );
+
+    // 2. Modul B: Calculate Guarded Multi-Order Ladder
+    const minBoundNum = parseFloat(min_price_bound || (currentMarketPrice * 0.90).toFixed(quoteDecimals));
+    const maxBoundNum = parseFloat(max_price_bound || (currentMarketPrice * 1.10).toFixed(quoteDecimals));
+
+    const cfg: SmartHftLadderConfig = {
+      account_id: 'preview',
+      timeframe: tf,
+      pattern: pat,
+      total_orders: Math.min(100, Math.max(2, Number(total_orders || 40))),
+      min_price_bound: String(minBoundNum),
+      max_price_bound: String(maxBoundNum),
+      min_buy_lot: String(min_buy_lot || '0.01'),
+      max_buy_lot: String(max_buy_lot || '0.50'),
+      min_sell_lot: String(min_sell_lot || '0.01'),
+      max_sell_lot: String(max_sell_lot || '0.50'),
+      reprice_interval_ms: 3000
+    };
+
+    // Bound anchor safely inside channel
+    const tick = SmartHftLadderBotExecutor.getTickSize(pair);
+    const safeAnchor = Math.max(minBoundNum + tick * 2, Math.min(maxBoundNum - tick * 2, anchorPrice));
+
+    const { buyLevels, sellLevels } = SmartHftLadderBotExecutor.calculateLadder(pair, safeAnchor, cfg);
+
+    res.json({
+      success: true,
+      pairId: pair.id,
+      anchorPrice: safeAnchor,
+      anchorPriceDisplay: SmartHftLadderBotExecutor.formatDisplayPrice(PrecisionMath.parseToUnits(safeAnchor.toFixed(quoteDecimals), quoteDecimals), pair),
+      minPriceBound: minBoundNum,
+      maxPriceBound: maxBoundNum,
+      patternPoints: points,
+      buyLevels,
+      sellLevels,
+      verificationReport: {
+        buyLevel1: buyLevels[0],
+        buyLevelFurthest: buyLevels[buyLevels.length - 1],
+        sellLevel1: sellLevels[0],
+        sellLevelFurthest: sellLevels[sellLevels.length - 1],
+        guardsPassed: true
+      }
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// C. Create Smart HFT Ladder Bot
+mmConsoleRouter.post('/smart-hft/create', requireMMOrAdmin, (req, res) => {
+  try {
+    const user = (req as any).user;
+    const {
+      name,
+      pairId,
+      environment,
+      timeframe,
+      pattern,
+      total_orders,
+      min_price_bound,
+      max_price_bound,
+      min_buy_lot,
+      max_buy_lot,
+      min_sell_lot,
+      max_sell_lot,
+      reprice_interval_ms
+    } = req.body;
+
+    if (!name || !pairId) {
+      return res.status(400).json({ error: 'Nama bot dan trading pair wajib diisi.' });
+    }
+
+    const pair = db.tradingPairs.get(pairId);
+    if (!pair) {
+      return res.status(404).json({ error: 'Trading pair tidak valid.' });
+    }
+
+    const minBound = parseFloat(min_price_bound);
+    const maxBound = parseFloat(max_price_bound);
+    if (isNaN(minBound) || isNaN(maxBound) || minBound <= 0 || maxBound <= 0 || minBound >= maxBound) {
+      return res.status(400).json({ error: 'Batas harga absolut tidak valid: min_price_bound harus > 0 dan < max_price_bound.' });
+    }
+
+    const totalOrdersClamped = Math.min(100, Math.max(2, Number(total_orders || 40)));
+
+    const smartHftConfig: SmartHftLadderConfig = {
+      account_id: user.id,
+      timeframe: (timeframe || '15m') as PatternTimeframe,
+      pattern: (pattern || 'HEAD_AND_SHOULDERS') as PatternFormationType,
+      total_orders: totalOrdersClamped,
+      min_price_bound: String(minBound),
+      max_price_bound: String(maxBound),
+      min_buy_lot: String(min_buy_lot || '0.01'),
+      max_buy_lot: String(max_buy_lot || '0.50'),
+      min_sell_lot: String(min_sell_lot || '0.01'),
+      max_sell_lot: String(max_sell_lot || '0.50'),
+      reprice_interval_ms: Number(reprice_interval_ms || 4000),
+      activeOrderIds: []
+    };
+
+    const botId = `bot-shft-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`;
+    const bot: BotInstance = {
+      id: botId,
+      name,
+      botType: 'SMART_HFT_LADDER',
+      pairId,
+      environment: (environment || 'DEMO') as Environment,
+      ownerUserId: user.id,
+      accountId: user.id,
+      version: 1,
+      status: 'READY',
+      lastHeartbeat: Date.now(),
+      smartHftConfig,
+      stats: {
+        ordersSubmitted: 0,
+        ordersAccepted: 0,
+        ordersFilled: 0,
+        executedVolume: '0',
+        totalTrades: 0
+      },
+      deployedOrderIds: [],
+      logs: [
+        {
+          timestamp: Date.now(),
+          message: `Smart HFT Ladder Bot "${name}" dibuat (${totalOrdersClamped} Orders, Pola: ${smartHftConfig.pattern}, Bounds: [${minBound} - ${maxBound}]).`,
+          type: 'INFO'
+        }
+      ],
+      createdBy: user.email,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+
+    db.botInstances.set(bot.id, bot);
+    db.scheduleSave();
+
+    res.json({ success: true, message: `Smart HFT Ladder Bot "${bot.name}" berhasil dibuat.`, bot });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// D. Download / View Complete Standalone Python Source Code
+mmConsoleRouter.get('/smart-hft/python-script', (req, res) => {
+  try {
+    const scriptPath = path.resolve(process.cwd(), 'scripts', 'smart_hft_ladder_bot.py');
+    if (!fs.existsSync(scriptPath)) {
+      return res.status(404).json({ error: 'File scripts/smart_hft_ladder_bot.py tidak ditemukan.' });
+    }
+    const code = fs.readFileSync(scriptPath, 'utf-8');
+    if (req.query.download === 'true') {
+      res.setHeader('Content-Type', 'text/x-python');
+      res.setHeader('Content-Disposition', 'attachment; filename="smart_hft_ladder_bot.py"');
+      return res.send(code);
+    }
+    res.json({ code, filename: 'smart_hft_ladder_bot.py' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 

@@ -24,7 +24,8 @@ export type BotType =
   | 'BUY_LAYERS' 
   | 'SELL_LAYERS' 
   | 'SMART_TRADE'
-  | 'QUANT_HFT_MM';
+  | 'QUANT_HFT_MM'
+  | 'SMART_HFT_LADDER';
 
 export type JournalTxType = 
   | 'DEPOSIT' 
@@ -174,6 +175,53 @@ export interface QuantHftConfig {
   lastInventorySkew?: number;
 }
 
+export type PatternFormationType = 
+  // 1. Reversal Patterns
+  | 'HEAD_AND_SHOULDERS'
+  | 'INVERSE_HEAD_AND_SHOULDERS'
+  | 'DOUBLE_TOP'
+  | 'TRIPLE_TOP'
+  | 'DOUBLE_BOTTOM'
+  | 'TRIPLE_BOTTOM'
+  // 2. Continuation Patterns
+  | 'BULLISH_FLAG'
+  | 'BEARISH_FLAG'
+  | 'PENNANT'
+  | 'CUP_AND_HANDLE'
+  | 'RECTANGLE'
+  // 3. Bilateral / Neutral Patterns
+  | 'ASCENDING_TRIANGLE'
+  | 'DESCENDING_TRIANGLE'
+  | 'SYMMETRICAL_TRIANGLE';
+
+export type PatternTimeframe = '5m' | '15m' | '1h' | '4h';
+
+export interface SmartHftLadderConfig {
+  account_id: string;
+  timeframe: PatternTimeframe;
+  pattern: PatternFormationType;
+  total_orders: number; // Default 40, max 100
+  min_price_bound: string; // Absolute lower bound (IDR / USDT quote unit)
+  max_price_bound: string; // Absolute upper bound (IDR / USDT quote unit)
+  min_buy_lot: string; // Base asset units (closest level)
+  max_buy_lot: string; // Base asset units (furthest level)
+  min_sell_lot: string;
+  max_sell_lot: string;
+  reprice_interval_ms: number; // e.g. 3000ms
+  gaussian_noise_scale?: number;
+  activeOrderIds?: string[];
+  lastAnchorPrice?: string;
+  lastPatternMetrics?: {
+    patternName: string;
+    barsGenerated: number;
+    anchorPrice: string;
+    buyLevel1: { price: string; lot: string };
+    buyLevelFurthest: { price: string; lot: string };
+    sellLevel1: { price: string; lot: string };
+    sellLevelFurthest: { price: string; lot: string };
+  };
+}
+
 export interface BotInstance {
   id: string;
   name: string;
@@ -194,6 +242,7 @@ export interface BotInstance {
   priceFollowerConfig?: PriceFollowerConfig;
   depthLiquidityConfig?: DepthLiquidityConfig;
   quantHftConfig?: QuantHftConfig;
+  smartHftConfig?: SmartHftLadderConfig;
   gridConfig?: any;
   stats: {
     ordersSubmitted: number;

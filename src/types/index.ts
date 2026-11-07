@@ -20,7 +20,8 @@ export type BotType =
   | 'BUY_LAYERS' 
   | 'SELL_LAYERS' 
   | 'SMART_TRADE'
-  | 'QUANT_HFT_MM';
+  | 'QUANT_HFT_MM'
+  | 'SMART_HFT_LADDER';
 
 export interface UserProfile {
   id: string;
@@ -171,6 +172,52 @@ export interface QuantHftConfig {
   lastInventorySkew?: number;
 }
 
+export type PatternFormationType = 
+  | 'HEAD_AND_SHOULDERS'
+  | 'INVERSE_HEAD_AND_SHOULDERS'
+  | 'DOUBLE_TOP'
+  | 'TRIPLE_TOP'
+  | 'DOUBLE_BOTTOM'
+  | 'TRIPLE_BOTTOM'
+  | 'BULLISH_FLAG'
+  | 'BEARISH_FLAG'
+  | 'PENNANT'
+  | 'CUP_AND_HANDLE'
+  | 'RECTANGLE'
+  | 'ASCENDING_TRIANGLE'
+  | 'DESCENDING_TRIANGLE'
+  | 'SYMMETRICAL_TRIANGLE';
+
+export type PatternTimeframe = '5m' | '15m' | '1h' | '4h';
+
+export interface SmartHftLadderConfig {
+  account_id: string;
+  market_symbol: string;
+  pattern: PatternFormationType;
+  timeframe: PatternTimeframe;
+  min_price_bound: number;
+  max_price_bound: number;
+  min_buy_lot: number;
+  max_buy_lot: number;
+  min_sell_lot: number;
+  max_sell_lot: number;
+  order_count: number;
+  reprice_interval_ms: number;
+  activeOrderIds?: string[];
+  currentAnchorPrice?: number;
+  lastAnchorPrice?: number;
+  lastExecutionTimestamp?: number;
+  lastPatternMetrics?: {
+    patternName: string;
+    barsGenerated: number;
+    anchorPrice: string;
+    buyLevel1: { price: string; lot: string };
+    buyLevelFurthest: { price: string; lot: string };
+    sellLevel1: { price: string; lot: string };
+    sellLevelFurthest: { price: string; lot: string };
+  };
+}
+
 export interface BotInstance {
   id: string;
   name: string;
@@ -191,6 +238,7 @@ export interface BotInstance {
   priceFollowerConfig?: PriceFollowerConfig;
   depthLiquidityConfig?: DepthLiquidityConfig;
   quantHftConfig?: QuantHftConfig;
+  smartHftConfig?: SmartHftLadderConfig;
   gridConfig?: any;
   stats: {
     ordersSubmitted: number;
