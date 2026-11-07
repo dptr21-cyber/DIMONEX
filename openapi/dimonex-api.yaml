@@ -1,0 +1,287 @@
+openapi: 3.1.0
+info:
+  title: DIMONEX Spot Crypto Exchange API
+  version: 1.0.0
+  description: >-
+    Dokumentasi resmi REST dan WebSocket API DIMONEX Spot Crypto Exchange dengan Quote Currency Rupiah (IDR).
+    Semua kalkulasi moneter menggunakan integer fixed-point tanpa float. Autentikasi menggunakan Bearer JWT
+    atau HMAC-SHA256 signature.
+servers:
+  - url: http://localhost:3000
+    description: Dev server
+  - url: https://api.dimonex.id
+    description: Production gateway
+paths:
+  /api/auth/register:
+    post:
+      summary: Registrasi Akun Pengguna Baru
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+      responses:
+        '200':
+          description: Berhasil terdaftar
+  /api/auth/login:
+    post:
+      summary: Masuk Akun dengan Anti-Brute-Force & 2FA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+                totpCode: { type: string, description: "6 digit TOTP jika aktif" }
+      responses:
+        '200':
+          description: Berhasil masuk atau meminta kode 2FA
+  /api/trading/pairs:
+    get:
+      summary: Daftar Trading Pair Spot Aktif (BTC/IDR, ETH/IDR, USDT/IDR)
+      responses:
+        '200':
+          description: Array trading pair dengan 24h ticker data
+  /api/trading/depth/{pairId}:
+    get:
+      summary: Snapshot Order Book Level 2 Depth
+      parameters:
+        - name: pairId
+          in: path
+          required: true
+          schema: { type: string, example: "BTC-IDR" }
+      responses:
+        '200':
+          description: Bids dan Asks teragregasi
+  /api/trading/order:
+    post:
+      summary: Pasang Order Baru (Limit & Market, GTC / IOC)
+      security:
+        - BearerAuth: []
+        - HmacAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pairId, side, orderType, quantity]
+              properties:
+                pairId: { type: string }
+                side: { type: string, enum: [BUY, SELL] }
+                orderType: { type: string, enum: [LIMIT, MARKET] }
+                timeInForce: { type: string, enum: [GTC, IOC] }
+                price: { type: string, description: "Satuan sen IDR (misal 145000000000 untuk Rp 1.45M)" }
+                quantity: { type: string, description: "Satuan terkecil base currency (Satoshis / Wei)" }
+      responses:
+        '200':
+          description: Order diproses dan dieksekusi
+  /api/wallet/balances:
+    get:
+      summary: Saldo Dompet Pengguna (Available vs Locked)
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Saldo lengkap per aset
+  /api/markets:
+    get:
+      summary: Public Market Catalogue (Active Spot Markets Only)
+      description: Mengembalikan daftar seluruh market spot yang berstatus ACTIVE dengan parameter tick size, lot size, dan ticker 24 jam.
+      responses:
+        '200':
+          description: Daftar market aktif
+  /api/markets/{symbol}:
+    get:
+      summary: Detail Spesifikasi Single Market Aktif
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema: { type: string, example: "BTC-IDR" }
+      responses:
+        '200':
+          description: Spesifikasi trading market
+        '404':
+          description: Market tidak ditemukan atau belum aktif
+  /api/admin/listings:
+    get:
+      summary: Daftar Listing Requests Internal (Admin)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [DRAFT, PENDING_REVIEW, APPROVED, REJECTED, SCHEDULED, ACTIVE, SUSPENDED, CANCELLED] }
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20 }
+      responses:
+        '200':
+          description: Daftar listing terpaginasi
+    post:
+      summary: Maker Membuat Draft Initial Listing Baru
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [assetId, tickSize, lotSize, minQuantity, minNotional]
+              properties:
+                assetId: { type: string, format: uuid }
+                quoteAssetId: { type: string, format: uuid }
+                tickSize: { type: string, description: "Tick size dalam sen IDR integer" }
+                lotSize: { type: string, description: "Lot size dalam base unit integer" }
+                minQuantity: { type: string, description: "Minimum kuantitas order base unit" }
+                minNotional: { type: string, description: "Minimum notional sen IDR" }
+                makerFeeBps: { type: integer, default: 10 }
+                takerFeeBps: { type: integer, default: 20 }
+      responses:
+        '201':
+          description: Draft listing berhasil dibuat
+  /api/admin/listings/{id}:
+    get:
+      summary: Detail Listing Request dan Audit Timeline
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Detail listing lengkap
+    patch:
+      summary: Update Parameter Draft/Pending Listing
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Listing berhasil diperbarui
+  /api/admin/listings/{id}/submit:
+    post:
+      summary: Ajukan Draft Listing untuk Review (DRAFT -> PENDING_REVIEW)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Listing diajukan untuk review
+  /api/admin/listings/{id}/approve:
+    post:
+      summary: Checker Menyetujui Listing (Maker-Checker Enforced)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 5 }
+      responses:
+        '200':
+          description: Listing disetujui
+        '403':
+          description: Pelanggaran Maker-Checker (Self-approval ditolak)
+  /api/admin/listings/{id}/reject:
+    post:
+      summary: Checker Menolak Listing
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 5 }
+      responses:
+        '200':
+          description: Listing ditolak
+  /api/admin/listings/{id}/activate:
+    post:
+      summary: Aktivasi Market Idempoten (APPROVED/SCHEDULED -> ACTIVE)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: X-Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: Market berhasil diaktifkan secara idempoten
+  /api/admin/listings/{id}/suspend:
+    post:
+      summary: Hentikan Perdagangan Market Sementara (HALTED)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Market dihentikan sementara
+  /api/admin/listings/audit/verify:
+    get:
+      summary: Verifikasi Integritas Kriptografis Hash Chain Audit Trail
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Hasil verifikasi hash chain
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+    HmacAuth:
+      type: apiKey
+      in: header
+      name: X-DIMONEX-APIKEY
