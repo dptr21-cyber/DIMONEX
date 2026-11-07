@@ -39,6 +39,7 @@ import { MobileHomeView } from './components/mobile/MobileHomeView.js';
 import { TradingPairItem, TradeItem, OrderItem, UserProfile, UserBalance, AppLanguage } from './types/index.js';
 import { formatIDR, formatCrypto, formatQuotePrice, formatPairVolume } from './lib/formatters.js';
 import { safeFetchJson } from './lib/safeFetch.js';
+import { isWebSocketSupported, reportWebSocketSuccess, reportWebSocketFailure } from './utils/wsHelper.js';
 import { TrendingUp, Zap, Wallet, BarChart3, Clock, AlertTriangle, ShieldCheck, ChevronDown, Search, Sparkles } from 'lucide-react';
 
 export type ActiveViewType =
@@ -277,38 +278,51 @@ function AppContent() {
     let isDisposed = false;
 
     const connectWs = () => {
-      if (isDisposed) return;
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws`;
-      socket = new WebSocket(wsUrl);
+      if (isDisposed || !isWebSocketSupported()) return;
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws`;
+        socket = new WebSocket(wsUrl);
 
-      socket.onopen = () => {
-        if (!socket || socket.readyState !== WebSocket.OPEN) return;
-        socket.send(JSON.stringify({ action: 'subscribe', channel: `depth:${selectedPairId}` }));
-        socket.send(JSON.stringify({ action: 'subscribe', channel: `trades:${selectedPairId}` }));
-        socket.send(JSON.stringify({ action: 'subscribe', channel: 'ticker' }));
-      };
+        socket.onopen = () => {
+          reportWebSocketSuccess();
+          if (!socket || socket.readyState !== WebSocket.OPEN) return;
+          socket.send(JSON.stringify({ action: 'subscribe', channel: `depth:${selectedPairId}` }));
+          socket.send(JSON.stringify({ action: 'subscribe', channel: `trades:${selectedPairId}` }));
+          socket.send(JSON.stringify({ action: 'subscribe', channel: 'ticker' }));
+        };
 
-      socket.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.channel === `depth:${selectedPairId}` && msg.data) {
-            setDepth(msg.data);
-          } else if (msg.channel === `trades:${selectedPairId}` && msg.data) {
-            setRecentTrades(prev => [msg.data, ...prev.slice(0, 49)]);
-          } else if (msg.type === 'ticker' && msg.pair) {
-            setPairs(prev => prev.map(p => p.id === msg.pair.id ? { ...p, ...msg.pair } : p));
-          } else if (msg.type === 'snapshot' && msg.channel === 'ticker' && Array.isArray(msg.data)) {
-            setPairs(prev => {
-              const map = new Map(prev.map(p => [p.id, p]));
-              for (const item of msg.data) {
-                map.set(item.id, { ...map.get(item.id), ...item });
-              }
-              return Array.from(map.values());
-            });
-          }
-        } catch {}
-      };
+        socket.onerror = () => {
+          reportWebSocketFailure();
+        };
+
+        socket.onclose = () => {
+          // Handled silently
+        };
+
+        socket.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg.channel === `depth:${selectedPairId}` && msg.data) {
+              setDepth(msg.data);
+            } else if (msg.channel === `trades:${selectedPairId}` && msg.data) {
+              setRecentTrades(prev => [msg.data, ...prev.slice(0, 49)]);
+            } else if (msg.type === 'ticker' && msg.pair) {
+              setPairs(prev => prev.map(p => p.id === msg.pair.id ? { ...p, ...msg.pair } : p));
+            } else if (msg.type === 'snapshot' && msg.channel === 'ticker' && Array.isArray(msg.data)) {
+              setPairs(prev => {
+                const map = new Map(prev.map(p => [p.id, p]));
+                for (const item of msg.data) {
+                  map.set(item.id, { ...map.get(item.id), ...item });
+                }
+                return Array.from(map.values());
+              });
+            }
+          } catch {}
+        };
+      } catch (err) {
+        reportWebSocketFailure();
+      }
     };
 
     connectWs();
@@ -960,7 +974,9 @@ function AppContent() {
         <div className="flex items-center gap-4 text-[11px] font-mono">
           <span>Engine Latency: &lt; 1.2ms</span>
           <span>·</span>
-          <span className="text-[#16C784]">WebSocket 100% Operational</span>
+          <span className="text-[#16C784]">
+            {isWebSocketSupported() ? 'WebSocket 100% Operational' : 'REST Real-time Sync Active'}
+          </span>
         </div>
       </footer>
 

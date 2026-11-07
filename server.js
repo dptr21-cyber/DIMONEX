@@ -788,6 +788,10 @@ var init_database = __esm({
         return result;
       }
       scheduleSave() {
+        if (process.env.VERCEL === "1") {
+          this.saveToDisk();
+          return;
+        }
         if (this.saveTimer) {
           clearTimeout(this.saveTimer);
         }
@@ -2979,7 +2983,39 @@ import { Router } from "express";
 init_database();
 import crypto2 from "crypto";
 var BASE32_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+var SESSION_SECRET = process.env.SESSION_SECRET || "dimonex-stateless-hmac-secret-v1-production-2026";
 var AuthService = class {
+  /**
+   * Issues a cryptographically signed HMAC-SHA256 token.
+   * Self-contained and verifiable across all stateless Vercel Serverless Lambda instances.
+   */
+  static issueToken(user, device = "Web Client", ip = "127.0.0.1") {
+    const now = Date.now();
+    const expiresAt = now + 14 * 24 * 3600 * 1e3;
+    const payload = {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      iat: now,
+      exp: expiresAt
+    };
+    const payloadEncoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    const signature = crypto2.createHmac("sha256", SESSION_SECRET).update(payloadEncoded).digest("base64url");
+    const token = `${payloadEncoded}.${signature}`;
+    db.sessions.set(token, {
+      userId: user.id,
+      token,
+      device,
+      ip,
+      expiresAt
+    });
+    if (process.env.VERCEL === "1") {
+      db.saveToDisk();
+    } else {
+      db.scheduleSave();
+    }
+    return token;
+  }
   /**
    * RFC 6238 TOTP Secret Generator (Base32 encoded)
    */
@@ -3057,16 +3093,7 @@ var AuthService = class {
     db.createOrGetAccount(user.id, "BTC", "0");
     db.createOrGetAccount(user.id, "ETH", "0");
     db.createOrGetAccount(user.id, "USDT", "0");
-    const token = crypto2.randomBytes(32).toString("hex");
-    db.sessions.set(token, {
-      userId: user.id,
-      token,
-      device: "Web Browser / Chrome",
-      ip: "127.0.0.1",
-      expiresAt: Date.now() + 7 * 24 * 3600 * 1e3
-      // 7 days
-    });
-    db.scheduleSave();
+    const token = this.issueToken(user, "Web Browser / Chrome", "127.0.0.1");
     const { passwordHash, passwordSalt, ...safeUser } = user;
     return { user: safeUser, token };
   }
@@ -3111,23 +3138,64 @@ var AuthService = class {
         throw new Error("Kode 2FA TOTP tidak valid atau kedaluwarsa.");
       }
     }
-    const token = crypto2.randomBytes(32).toString("hex");
-    db.sessions.set(token, {
-      userId: targetUser.id,
-      token,
-      device: "Web Client / Dimonex Desktop",
-      ip,
-      expiresAt: now + 7 * 24 * 3600 * 1e3
-    });
-    db.scheduleSave();
+    const token = this.issueToken(targetUser, "Web Client / Dimonex Desktop", ip);
     const { passwordHash, passwordSalt, ...safeUser } = targetUser;
     return { user: safeUser, token };
   }
   /**
-   * Validate bearer token and return user
+   * Validate bearer token and return user.
+   * Supports both Stateless Cryptographic HMAC tokens (survives all serverless container recycles)
+   * and backward-compatible stateful in-memory tokens.
    */
   static authenticateToken(token) {
-    if (!token) return null;
+    if (!token || typeof token !== "string") return null;
+    if (token.includes(".")) {
+      const parts = token.split(".");
+      if (parts.length === 2) {
+        const [payloadEncoded, signature] = parts;
+        try {
+          const expectedSig = crypto2.createHmac("sha256", SESSION_SECRET).update(payloadEncoded).digest("base64url");
+          if (signature.length === expectedSig.length && crypto2.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
+            const payload = JSON.parse(Buffer.from(payloadEncoded, "base64url").toString("utf-8"));
+            if (payload && payload.exp > Date.now()) {
+              let user2 = db.users.get(payload.userId);
+              if (!user2) {
+                db.loadFromDisk();
+                user2 = db.users.get(payload.userId);
+              }
+              if (user2 && user2.status === "active") {
+                const { passwordHash: passwordHash2, passwordSalt: passwordSalt2, ...safeUser2 } = user2;
+                return safeUser2;
+              }
+              if (!user2 && payload.email) {
+                const salt = db.generateSalt();
+                const rehydratedUser = {
+                  id: payload.userId,
+                  email: payload.email,
+                  passwordHash: "",
+                  passwordSalt: salt,
+                  role: payload.role || "user",
+                  status: "active",
+                  isTotpEnabled: false,
+                  failedLoginAttempts: 0,
+                  createdAt: payload.iat || Date.now(),
+                  updatedAt: Date.now()
+                };
+                db.users.set(rehydratedUser.id, rehydratedUser);
+                db.createOrGetAccount(rehydratedUser.id, "IDR", "0");
+                db.createOrGetAccount(rehydratedUser.id, "BTC", "0");
+                db.createOrGetAccount(rehydratedUser.id, "ETH", "0");
+                db.createOrGetAccount(rehydratedUser.id, "USDT", "0");
+                db.saveToDisk();
+                const { passwordHash: passwordHash2, passwordSalt: passwordSalt2, ...safeUser2 } = rehydratedUser;
+                return safeUser2;
+              }
+            }
+          }
+        } catch {
+        }
+      }
+    }
     const session = db.sessions.get(token);
     if (!session || session.expiresAt < Date.now()) {
       return null;

@@ -11,6 +11,10 @@
   },
   "rewrites": [
     {
+      "source": "/ws",
+      "destination": "/api/index.ts"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/index.ts"
     },

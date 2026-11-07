@@ -28,6 +28,7 @@ import {
   Time
 } from 'lightweight-charts';
 import { TradingPairItem, TradeItem, CandleItem } from '../../types/index.js';
+import { isWebSocketSupported, reportWebSocketSuccess, reportWebSocketFailure } from '../../utils/wsHelper.js';
 import { formatIDR } from '../../lib/formatters.js';
 import { Timeframe, ChartHoverInfo } from './chartTypes.js';
 
@@ -331,6 +332,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
 
   // WebSocket Live Trade Execution Handler
   useEffect(() => {
+    if (!isWebSocketSupported()) return;
     let ws: WebSocket | null = null;
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -338,8 +340,13 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
+        reportWebSocketSuccess();
         ws?.send(JSON.stringify({ action: 'subscribe', channel: `trades:${pair.id}` }));
         ws?.send(JSON.stringify({ action: 'subscribe', channel: `kline:${pair.id}` }));
+      };
+
+      ws.onerror = () => {
+        reportWebSocketFailure();
       };
 
       ws.onmessage = (event) => {

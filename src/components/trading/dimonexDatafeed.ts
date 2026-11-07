@@ -30,6 +30,7 @@ import {
   HistoryCallback,
   SubscribeBarsCallback
 } from './chartTypes.js';
+import { isWebSocketSupported, reportWebSocketSuccess, reportWebSocketFailure } from '../../utils/wsHelper.js';
 
 // Configuration constants
 export const SUPPORTED_RESOLUTIONS: ResolutionString[] = ['1', '5', '15', '60', '240', '1D', '1W'];
@@ -101,13 +102,14 @@ export class DimonexDatafeed implements IBasicDataFeed {
   }
 
   private initWebSocket() {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || !isWebSocketSupported()) return;
     try {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${protocol}//${window.location.host}/ws`;
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
+        reportWebSocketSuccess();
         this.wsConnected = true;
         // Re-subscribe any existing subscriptions
         for (const sub of this.subscriptions.values()) {
@@ -130,14 +132,17 @@ export class DimonexDatafeed implements IBasicDataFeed {
 
       this.ws.onclose = () => {
         this.wsConnected = false;
-        setTimeout(() => this.initWebSocket(), 3000);
+        if (isWebSocketSupported()) {
+          setTimeout(() => this.initWebSocket(), 5000);
+        }
       };
 
       this.ws.onerror = () => {
+        reportWebSocketFailure();
         this.wsConnected = false;
       };
     } catch (e) {
-      // Offline or SSR safe
+      reportWebSocketFailure();
     }
   }
 

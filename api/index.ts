@@ -52,6 +52,15 @@ app.use('/api/mm', mmConsoleRouter);
 app.use('/api/bot/mm', mmConsoleRouter);
 app.use('/', observabilityRouter);
 
+// WebSocket fallback handler for serverless environments
+app.all('/ws', (req, res) => {
+  res.status(426).json({
+    status: 426,
+    error: 'Upgrade Required',
+    message: 'Persistent WebSockets are not supported in serverless function environments. Please use REST endpoints.'
+  });
+});
+
 // Fallback JSON 404 for any unhandled /api/* paths
 app.all('/api/*', (req, res) => {
   res.status(404).json({

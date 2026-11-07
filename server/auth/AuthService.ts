@@ -13,7 +13,54 @@ import { User, UserRole } from '../db/types.js';
 // Base32 character set for RFC-3548 / RFC-6238 TOTP
 const BASE32_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
+// Persistent HMAC Secret for stateless serverless sessions across Vercel instances
+const SESSION_SECRET = process.env.SESSION_SECRET || 'dimonex-stateless-hmac-secret-v1-production-2026';
+
+export interface SessionTokenPayload {
+  userId: string;
+  email: string;
+  role: string;
+  iat: number;
+  exp: number;
+}
+
 export class AuthService {
+  /**
+   * Issues a cryptographically signed HMAC-SHA256 token.
+   * Self-contained and verifiable across all stateless Vercel Serverless Lambda instances.
+   */
+  static issueToken(user: User, device = 'Web Client', ip = '127.0.0.1'): string {
+    const now = Date.now();
+    const expiresAt = now + 14 * 24 * 3600 * 1000; // 14 days valid
+    const payload: SessionTokenPayload = {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      iat: now,
+      exp: expiresAt
+    };
+    const payloadEncoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const signature = crypto.createHmac('sha256', SESSION_SECRET).update(payloadEncoded).digest('base64url');
+    const token = `${payloadEncoded}.${signature}`;
+
+    // Store in-memory session record
+    db.sessions.set(token, {
+      userId: user.id,
+      token,
+      device,
+      ip,
+      expiresAt
+    });
+
+    if (process.env.VERCEL === '1') {
+      db.saveToDisk();
+    } else {
+      db.scheduleSave();
+    }
+
+    return token;
+  }
+
   /**
    * RFC 6238 TOTP Secret Generator (Base32 encoded)
    */
@@ -113,16 +160,8 @@ export class AuthService {
     db.createOrGetAccount(user.id, 'ETH', '0');
     db.createOrGetAccount(user.id, 'USDT', '0');
 
-    // Create session token
-    const token = crypto.randomBytes(32).toString('hex');
-    db.sessions.set(token, {
-      userId: user.id,
-      token,
-      device: 'Web Browser / Chrome',
-      ip: '127.0.0.1',
-      expiresAt: Date.now() + 7 * 24 * 3600 * 1000 // 7 days
-    });
-    db.scheduleSave();
+    // Create cryptographically signed session token
+    const token = this.issueToken(user, 'Web Browser / Chrome', '127.0.0.1');
 
     const { passwordHash, passwordSalt, ...safeUser } = user;
     return { user: safeUser, token };
@@ -185,26 +224,79 @@ export class AuthService {
       }
     }
 
-    // Issue Session Token
-    const token = crypto.randomBytes(32).toString('hex');
-    db.sessions.set(token, {
-      userId: targetUser.id,
-      token,
-      device: 'Web Client / Dimonex Desktop',
-      ip,
-      expiresAt: now + 7 * 24 * 3600 * 1000
-    });
-    db.scheduleSave();
+    // Issue Cryptographically Signed Session Token
+    const token = this.issueToken(targetUser, 'Web Client / Dimonex Desktop', ip);
 
     const { passwordHash, passwordSalt, ...safeUser } = targetUser;
     return { user: safeUser, token };
   }
 
   /**
-   * Validate bearer token and return user
+   * Validate bearer token and return user.
+   * Supports both Stateless Cryptographic HMAC tokens (survives all serverless container recycles)
+   * and backward-compatible stateful in-memory tokens.
    */
   static authenticateToken(token: string): Omit<User, 'passwordHash' | 'passwordSalt'> | null {
-    if (!token) return null;
+    if (!token || typeof token !== 'string') return null;
+
+    // 1. Stateless Cryptographic HMAC Token verification
+    if (token.includes('.')) {
+      const parts = token.split('.');
+      if (parts.length === 2) {
+        const [payloadEncoded, signature] = parts;
+        try {
+          const expectedSig = crypto.createHmac('sha256', SESSION_SECRET).update(payloadEncoded).digest('base64url');
+          if (signature.length === expectedSig.length && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
+            const payload: SessionTokenPayload = JSON.parse(Buffer.from(payloadEncoded, 'base64url').toString('utf-8'));
+            if (payload && payload.exp > Date.now()) {
+              let user = db.users.get(payload.userId);
+              if (!user) {
+                // If container is fresh or cold start, reload from disk snapshot
+                db.loadFromDisk();
+                user = db.users.get(payload.userId);
+              }
+
+              // If user exists and is active, return safe user
+              if (user && user.status === 'active') {
+                const { passwordHash, passwordSalt, ...safeUser } = user;
+                return safeUser;
+              }
+
+              // If user was created in another serverless instance and not yet on this instance's disk,
+              // safely rehydrate active user state into in-memory store
+              if (!user && payload.email) {
+                const salt = db.generateSalt();
+                const rehydratedUser: User = {
+                  id: payload.userId,
+                  email: payload.email,
+                  passwordHash: '',
+                  passwordSalt: salt,
+                  role: (payload.role as any) || 'user',
+                  status: 'active',
+                  isTotpEnabled: false,
+                  failedLoginAttempts: 0,
+                  createdAt: payload.iat || Date.now(),
+                  updatedAt: Date.now()
+                };
+                db.users.set(rehydratedUser.id, rehydratedUser);
+                db.createOrGetAccount(rehydratedUser.id, 'IDR', '0');
+                db.createOrGetAccount(rehydratedUser.id, 'BTC', '0');
+                db.createOrGetAccount(rehydratedUser.id, 'ETH', '0');
+                db.createOrGetAccount(rehydratedUser.id, 'USDT', '0');
+                db.saveToDisk();
+
+                const { passwordHash, passwordSalt, ...safeUser } = rehydratedUser;
+                return safeUser;
+              }
+            }
+          }
+        } catch {
+          // Fall through to stateful check
+        }
+      }
+    }
+
+    // 2. Fallback to stateful db.sessions for backward compatibility with older tokens
     const session = db.sessions.get(token);
     if (!session || session.expiresAt < Date.now()) {
       return null;

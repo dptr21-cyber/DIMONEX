@@ -35,6 +35,7 @@ import { useToast } from '../ui/Toast.js';
 import { UserProfile, UserBalance, TradingPairItem } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
 import { BalanceDiagnosticModal } from '../wallet/BalanceDiagnosticModal.js';
+import { isWebSocketSupported, reportWebSocketSuccess, reportWebSocketFailure } from '../../utils/wsHelper.js';
 
 interface Props {
   user: UserProfile | null;
@@ -153,13 +154,17 @@ export const TradingBotsView: React.FC<Props> = ({
     let reconnectTimeout: NodeJS.Timeout | null = null;
 
     const connectWs = () => {
-      if (isDisposed) return;
+      if (isDisposed || !isWebSocketSupported()) {
+        setWsConnected(false);
+        return;
+      }
       try {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws`;
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
+          reportWebSocketSuccess();
           if (!ws || ws.readyState !== WebSocket.OPEN) return;
           setWsConnected(true);
           ws.send(JSON.stringify({
@@ -203,15 +208,17 @@ export const TradingBotsView: React.FC<Props> = ({
 
         ws.onclose = () => {
           setWsConnected(false);
-          if (!isDisposed) {
-            reconnectTimeout = setTimeout(connectWs, 3000);
+          if (!isDisposed && isWebSocketSupported()) {
+            reconnectTimeout = setTimeout(connectWs, 5000);
           }
         };
 
         ws.onerror = () => {
+          reportWebSocketFailure();
           setWsConnected(false);
         };
       } catch (err) {
+        reportWebSocketFailure();
         setWsConnected(false);
       }
     };
@@ -219,8 +226,9 @@ export const TradingBotsView: React.FC<Props> = ({
     connectWs();
     loadBots();
 
-    // Fallback sync safety (every 12 seconds)
-    const fallbackSync = setInterval(loadBots, 12000);
+    // High-frequency REST polling fallback when WebSocket is unsupported (e.g. Vercel Serverless)
+    const pollInterval = isWebSocketSupported() ? 10000 : 3000;
+    const fallbackSync = setInterval(loadBots, pollInterval);
 
     return () => {
       isDisposed = true;

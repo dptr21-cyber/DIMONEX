@@ -702,6 +702,10 @@ class DatabaseStore {
   }
 
   public scheduleSave() {
+    if (process.env.VERCEL === '1') {
+      this.saveToDisk();
+      return;
+    }
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
     }
