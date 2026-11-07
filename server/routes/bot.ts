@@ -49,7 +49,32 @@ export interface ActiveBot {
   updatedAt: number;
 }
 
-const BOTS_FILE = path.join(process.cwd(), 'server', 'data', 'bots_state.json');
+function getBotDataDirectory(): string {
+  if (process.env.VERCEL === '1') {
+    const tmpDir = path.join('/tmp', 'dimonex_data');
+    if (!fs.existsSync(tmpDir)) {
+      try { fs.mkdirSync(tmpDir, { recursive: true }); } catch {}
+    }
+    return tmpDir;
+  }
+  const localDir = path.resolve(process.cwd(), 'server', 'data');
+  try {
+    if (!fs.existsSync(localDir)) {
+      fs.mkdirSync(localDir, { recursive: true });
+    }
+    const testFile = path.join(localDir, '.write_test_bot');
+    fs.writeFileSync(testFile, 'ok');
+    try { fs.unlinkSync(testFile); } catch {}
+    return localDir;
+  } catch {
+    const tmpDir = path.join('/tmp', 'dimonex_data');
+    if (!fs.existsSync(tmpDir)) {
+      try { fs.mkdirSync(tmpDir, { recursive: true }); } catch {}
+    }
+    return tmpDir;
+  }
+}
+
 const activeBots: Map<string, ActiveBot> = new Map();
 const botIntervals: Map<string, NodeJS.Timeout> = new Map();
 
@@ -64,10 +89,53 @@ export function scheduleSaveBots() {
 
 export function saveBotsToDisk() {
   try {
-    const dir = path.dirname(BOTS_FILE);
+    const dir = getBotDataDirectory();
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    // Clean up excessive deployedOrderIds and logs before writing to avoid huge files
+    for (const bot of activeBots.values()) {
+      if (bot.deployedOrderIds && bot.deployedOrderIds.length > 80) {
+        bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
+      }
+      if (bot.logs && bot.logs.length > 80) {
+        bot.logs = bot.logs.slice(0, 80);
+      }
+    }
+
     const botsArray = Array.from(activeBots.values());
-    fs.writeFileSync(BOTS_FILE, JSON.stringify(botsArray), 'utf-8');
+    const jsonStr = JSON.stringify(botsArray, (key, value) =>
+      typeof value === 'bigint' ? value.toString() : value
+    );
+
+    // Save to BOTH bots_state.json AND bot_state.json so neither is ever missing
+    const targetFiles = [
+      path.join(dir, 'bots_state.json'),
+      path.join(dir, 'bot_state.json')
+    ];
+
+    // If writing to /tmp, also attempt to mirror to server/data if writable
+    const bundledDir = path.resolve(process.cwd(), 'server', 'data');
+    if (dir !== bundledDir && fs.existsSync(bundledDir)) {
+      try {
+        targetFiles.push(path.join(bundledDir, 'bots_state.json'));
+        targetFiles.push(path.join(bundledDir, 'bot_state.json'));
+      } catch {}
+    }
+
+    for (const filePath of targetFiles) {
+      try {
+        const tempFile = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 6)}`;
+        fs.writeFileSync(tempFile, jsonStr, 'utf-8');
+        try {
+          fs.renameSync(tempFile, filePath);
+        } catch {
+          fs.copyFileSync(tempFile, filePath);
+          try { fs.unlinkSync(tempFile); } catch {}
+        }
+      } catch (fErr) {
+        // Continue to other file paths
+      }
+    }
   } catch (err) {
     console.error('[DIMONEX Bot Engine] Gagal menyimpan bots ke disk:', err);
   }
@@ -641,6 +709,9 @@ function startVolumeBotRunner(botId: string) {
       });
 
       currentBot.deployedOrderIds.push(result.takerOrder.id);
+      if (currentBot.deployedOrderIds.length > 80) {
+        currentBot.deployedOrderIds.splice(0, currentBot.deployedOrderIds.length - 80);
+      }
       currentBot.filledOrderCount += 1;
 
       const filledThisTick = BigInt(result.takerOrder.filledQuantity || qtyUnits.toString());
@@ -686,18 +757,53 @@ function startVolumeBotRunner(botId: string) {
 
 export function loadBotsFromDisk() {
   try {
-    if (!fs.existsSync(BOTS_FILE)) return;
-    const raw = fs.readFileSync(BOTS_FILE, 'utf-8');
-    const botsArray: ActiveBot[] = JSON.parse(raw);
-    if (Array.isArray(botsArray)) {
-      for (const bot of botsArray) {
-        activeBots.set(bot.id, bot);
-        if (bot.status === 'RUNNING' && bot.strategy === 'VOLUME_BOT') {
-          startVolumeBotRunner(bot.id);
+    const dir = getBotDataDirectory();
+    const bundledDir = path.resolve(process.cwd(), 'server', 'data');
+    
+    const candidatePaths = [
+      path.join(dir, 'bots_state.json'),
+      path.join(dir, 'bot_state.json'),
+      path.join(bundledDir, 'bots_state.json'),
+      path.join(bundledDir, 'bot_state.json')
+    ];
+
+    let loaded = false;
+    for (const p of candidatePaths) {
+      if (fs.existsSync(p)) {
+        try {
+          const raw = fs.readFileSync(p, 'utf-8');
+          if (raw && raw.trim().length > 0) {
+            const botsArray: ActiveBot[] = JSON.parse(raw);
+            if (Array.isArray(botsArray)) {
+              for (const bot of botsArray) {
+                if (bot.deployedOrderIds && bot.deployedOrderIds.length > 80) {
+                  bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
+                }
+                activeBots.set(bot.id, bot);
+                if (bot.status === 'RUNNING' && bot.strategy === 'VOLUME_BOT') {
+                  startVolumeBotRunner(bot.id);
+                }
+              }
+              console.log(`[DIMONEX Bot Engine] Berhasil memuat ${activeBots.size} bot dari disk (${p}).`);
+              loaded = true;
+              // Synchronize and write back immediately to disk so files are instantly pruned and kept in sync
+              saveBotsToDisk();
+              break;
+            }
+          }
+        } catch (readErr) {
+          console.warn(`[DIMONEX Bot Engine] Gagal membaca ${p}:`, readErr);
         }
       }
-      console.log(`[DIMONEX Bot Engine] Berhasil memuat ${activeBots.size} bot dari disk.`);
     }
+
+    // Register exit handlers to ensure bot state is always flushed
+    const onExit = () => {
+      saveBotsToDisk();
+    };
+    process.on('SIGINT', onExit);
+    process.on('SIGTERM', onExit);
+    process.on('beforeExit', onExit);
   } catch (err) {
     console.warn('[DIMONEX Bot Engine] Gagal memuat bots dari disk:', err);
   }

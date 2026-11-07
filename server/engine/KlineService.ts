@@ -16,7 +16,7 @@
 import fs from 'fs';
 import path from 'path';
 import { Trade, TradingPair } from '../db/types.js';
-import { db } from '../db/database.js';
+import { db, getExchangeDataDirectory } from '../db/database.js';
 
 export interface Candle {
   time: number; // Unix timestamp in seconds (aligned to timeframe interval)
@@ -38,8 +38,6 @@ export const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
   '1d': 86400,
   '1D': 86400,
 };
-
-const KLINES_FILE = path.join(process.cwd(), 'server', 'data', 'klines_state.json');
 
 export class KlineService {
   // key: `${pairId}:${timeframe}` -> Candle[]
@@ -65,13 +63,44 @@ export class KlineService {
 
   public saveToDisk(): boolean {
     try {
-      const dir = path.dirname(KLINES_FILE);
+      const dir = getExchangeDataDirectory();
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
       const obj: Record<string, Candle[]> = {};
       for (const [k, v] of this.klineStore.entries()) {
-        obj[k] = v;
+        // Keep maximum 1,000 candles per timeframe series to keep file compact
+        obj[k] = v.length > 1000 ? v.slice(-1000) : v;
       }
-      fs.writeFileSync(KLINES_FILE, JSON.stringify(obj), 'utf-8');
+
+      const jsonStr = JSON.stringify(obj, (key, value) =>
+        typeof value === 'bigint' ? value.toString() : value
+      );
+
+      const targetFiles = [
+        path.join(dir, 'klines_state.json')
+      ];
+
+      const bundledDir = path.resolve(process.cwd(), 'server', 'data');
+      if (dir !== bundledDir && fs.existsSync(bundledDir)) {
+        try {
+          targetFiles.push(path.join(bundledDir, 'klines_state.json'));
+        } catch {}
+      }
+
+      for (const filePath of targetFiles) {
+        try {
+          const tempFile = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 6)}`;
+          fs.writeFileSync(tempFile, jsonStr, 'utf-8');
+          try {
+            fs.renameSync(tempFile, filePath);
+          } catch {
+            fs.copyFileSync(tempFile, filePath);
+            try { fs.unlinkSync(tempFile); } catch {}
+          }
+        } catch {
+          // Continue to next path
+        }
+      }
       return true;
     } catch (e) {
       console.error('[KlineService] Gagal menyimpan klines ke disk:', e);
@@ -81,20 +110,37 @@ export class KlineService {
 
   public loadFromDisk(): boolean {
     try {
-      if (!fs.existsSync(KLINES_FILE)) return false;
-      const raw = fs.readFileSync(KLINES_FILE, 'utf-8');
-      const obj = JSON.parse(raw);
-      if (!obj || typeof obj !== 'object') return false;
-      this.klineStore.clear();
-      let totalCandles = 0;
-      for (const [k, v] of Object.entries(obj)) {
-        if (Array.isArray(v)) {
-          this.klineStore.set(k, v as Candle[]);
-          totalCandles += v.length;
+      const dir = getExchangeDataDirectory();
+      const bundledDir = path.resolve(process.cwd(), 'server', 'data');
+      const candidatePaths = [
+        path.join(dir, 'klines_state.json'),
+        path.join(bundledDir, 'klines_state.json')
+      ];
+
+      for (const p of candidatePaths) {
+        if (fs.existsSync(p)) {
+          try {
+            const raw = fs.readFileSync(p, 'utf-8');
+            if (!raw || raw.trim().length === 0) continue;
+            const obj = JSON.parse(raw);
+            if (!obj || typeof obj !== 'object') continue;
+            this.klineStore.clear();
+            let totalCandles = 0;
+            for (const [k, v] of Object.entries(obj)) {
+              if (Array.isArray(v)) {
+                const candles = v.length > 1000 ? (v as Candle[]).slice(-1000) : (v as Candle[]);
+                this.klineStore.set(k, candles);
+                totalCandles += candles.length;
+              }
+            }
+            console.log(`[KlineService] Memuat ${this.klineStore.size} timeframe candle riil dari disk (${totalCandles} candle total dari ${p})`);
+            return true;
+          } catch (readErr) {
+            console.warn(`[KlineService] Gagal membaca ${p}:`, readErr);
+          }
         }
       }
-      console.log(`[KlineService] Memuat ${this.klineStore.size} timeframe candle riil dari disk (${totalCandles} candle total)`);
-      return true;
+      return false;
     } catch (e) {
       return false;
     }

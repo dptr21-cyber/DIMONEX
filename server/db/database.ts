@@ -40,7 +40,33 @@ export const DEFAULT_RISK_CONTROLS: RiskControlsConfig = {
   isKillSwitchActive: false
 };
 
-const DATA_DIR = path.resolve(process.cwd(), 'server', 'data');
+export function getExchangeDataDirectory(): string {
+  if (process.env.VERCEL === '1') {
+    const tmpDir = path.join('/tmp', 'dimonex_data');
+    if (!fs.existsSync(tmpDir)) {
+      try { fs.mkdirSync(tmpDir, { recursive: true }); } catch {}
+    }
+    return tmpDir;
+  }
+  const localDir = path.resolve(process.cwd(), 'server', 'data');
+  try {
+    if (!fs.existsSync(localDir)) {
+      fs.mkdirSync(localDir, { recursive: true });
+    }
+    const testFile = path.join(localDir, '.write_test_db');
+    fs.writeFileSync(testFile, 'ok');
+    try { fs.unlinkSync(testFile); } catch {}
+    return localDir;
+  } catch {
+    const tmpDir = path.join('/tmp', 'dimonex_data');
+    if (!fs.existsSync(tmpDir)) {
+      try { fs.mkdirSync(tmpDir, { recursive: true }); } catch {}
+    }
+    return tmpDir;
+  }
+}
+
+const DATA_DIR = getExchangeDataDirectory();
 const STATE_FILE = path.join(DATA_DIR, 'exchange_state.json');
 
 export interface PersistedExchangeState {
@@ -1074,8 +1100,53 @@ class DatabaseStore {
     if (this.isSaving) return false;
     this.isSaving = true;
     try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
+      const dir = getExchangeDataDirectory();
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+
+      // Memory & snapshot pruning to prevent multi-megabyte bloat and ensure fast atomic writes:
+      // Keep ALL active orders (NEW, PARTIALLY_FILLED)
+      // For completed/cancelled/rejected orders, keep only the 1,000 most recent
+      if (this.orders.size > 1500) {
+        const openOrders: [string, Order][] = [];
+        const closedOrders: [string, Order][] = [];
+        for (const [id, order] of this.orders.entries()) {
+          if (order.status === 'NEW' || order.status === 'PARTIALLY_FILLED') {
+            openOrders.push([id, order]);
+          } else {
+            closedOrders.push([id, order]);
+          }
+        }
+        if (closedOrders.length > 1000) {
+          closedOrders.sort((a, b) => b[1].createdAt - a[1].createdAt);
+          const keepClosed = closedOrders.slice(0, 1000);
+          this.orders = new Map([...openOrders, ...keepClosed]);
+        }
+      }
+
+      // Keep recent trades (last 2,000)
+      if (this.trades.length > 2500) {
+        this.trades = this.trades.slice(-2000);
+      }
+
+      // Keep recent audit logs (last 1,000)
+      if (this.auditLogs.length > 1500) {
+        this.auditLogs = this.auditLogs.slice(-1000);
+      }
+
+      // Keep recent journal transactions (last 1,000)
+      if (this.journalTransactions.size > 1500) {
+        const jEntries = Array.from(this.journalTransactions.entries());
+        jEntries.sort((a, b) => b[1].createdAt - a[1].createdAt);
+        const keepJ = jEntries.slice(0, 1000);
+        this.journalTransactions = new Map(keepJ);
+        const keepIds = new Set(keepJ.map(e => e[0]));
+        for (const [k, v] of this.journalIdempotencyIndex.entries()) {
+          if (!keepIds.has(v)) {
+            this.journalIdempotencyIndex.delete(k);
+          }
+        }
       }
 
       const state: PersistedExchangeState = {
@@ -1107,9 +1178,35 @@ class DatabaseStore {
         idempotencyRecords: Array.from(this.idempotencyRecords.entries())
       };
 
-      const tempFile = `${STATE_FILE}.tmp.${Date.now()}`;
-      fs.writeFileSync(tempFile, JSON.stringify(state), 'utf-8');
-      fs.renameSync(tempFile, STATE_FILE);
+      const jsonStr = JSON.stringify(state, (key, value) =>
+        typeof value === 'bigint' ? value.toString() : value
+      );
+
+      const targetFiles = [
+        path.join(dir, 'exchange_state.json')
+      ];
+
+      const bundledDir = path.resolve(process.cwd(), 'server', 'data');
+      if (dir !== bundledDir && fs.existsSync(bundledDir)) {
+        try {
+          targetFiles.push(path.join(bundledDir, 'exchange_state.json'));
+        } catch {}
+      }
+
+      for (const filePath of targetFiles) {
+        try {
+          const tempFile = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 6)}`;
+          fs.writeFileSync(tempFile, jsonStr, 'utf-8');
+          try {
+            fs.renameSync(tempFile, filePath);
+          } catch {
+            fs.copyFileSync(tempFile, filePath);
+            try { fs.unlinkSync(tempFile); } catch {}
+          }
+        } catch (fErr) {
+          // Continue to next path if write fails
+        }
+      }
       return true;
     } catch (err) {
       console.error('[DIMONEX Database] Gagal menyimpan snapshot ke disk:', err);
@@ -1121,44 +1218,82 @@ class DatabaseStore {
 
   public loadFromDisk(): boolean {
     try {
-      if (!fs.existsSync(STATE_FILE)) {
-        return false;
-      }
-      const raw = fs.readFileSync(STATE_FILE, 'utf-8');
-      const data: PersistedExchangeState = JSON.parse(raw);
-      if (!data || !Array.isArray(data.users) || !Array.isArray(data.ledgerAccounts)) {
-        return false;
-      }
+      const dir = getExchangeDataDirectory();
+      const bundledDir = path.resolve(process.cwd(), 'server', 'data');
+      const candidatePaths = [
+        path.join(dir, 'exchange_state.json'),
+        path.join(bundledDir, 'exchange_state.json')
+      ];
 
-      this.users = new Map(data.users);
-      this.kyc = new Map(data.kyc || []);
-      this.ledgerAccounts = new Map(data.ledgerAccounts);
-      this.accountIndex = new Map(data.accountIndex || []);
-      this.journalTransactions = new Map(data.journalTransactions || []);
-      this.journalIdempotencyIndex = new Map(data.journalIdempotencyIndex || []);
-      this.ledgerEntries = data.ledgerEntries || [];
-      this.tradingPairs = new Map(data.tradingPairs || []);
-      this.orders = new Map(data.orders || []);
-      this.trades = data.trades || [];
-      this.fiatTransactions = new Map(data.fiatTransactions || []);
-      this.cryptoTransactions = new Map(data.cryptoTransactions || []);
-      this.apiKeys = new Map(data.apiKeys || []);
-      this.auditLogs = data.auditLogs || [];
-      this.sessions = new Map(data.sessions || []);
-      this.botInstances = new Map(data.botInstances || []);
-      if (data.riskControls) {
-        this.riskControls = { ...DEFAULT_RISK_CONTROLS, ...data.riskControls };
-      }
-      if (data.assets) this.assets = new Map(data.assets);
-      if (data.listingRequests) this.listingRequests = new Map(data.listingRequests);
-      if (data.listingApprovals) this.listingApprovals = new Map(data.listingApprovals);
-      if (data.markets) this.markets = new Map(data.markets);
-      if (data.listingAuditEvents) this.listingAuditEvents = data.listingAuditEvents;
-      if (data.outboxEvents) this.outboxEvents = new Map(data.outboxEvents);
-      if (data.idempotencyRecords) this.idempotencyRecords = new Map(data.idempotencyRecords);
+      for (const p of candidatePaths) {
+        if (fs.existsSync(p)) {
+          try {
+            const raw = fs.readFileSync(p, 'utf-8');
+            if (!raw || raw.trim().length === 0) continue;
+            const data: PersistedExchangeState = JSON.parse(raw);
+            if (!data || !Array.isArray(data.users) || !Array.isArray(data.ledgerAccounts)) {
+              continue;
+            }
 
-      console.log(`[DIMONEX Database] Berhasil memuat snapshot disk: ${this.users.size} pengguna, ${this.orders.size} order, ${this.trades.length} transaksi, ${this.sessions.size} sesi login aktif.`);
-      return true;
+            this.users = new Map(data.users);
+            this.kyc = new Map(data.kyc || []);
+            this.ledgerAccounts = new Map(data.ledgerAccounts);
+            this.accountIndex = new Map(data.accountIndex || []);
+            const rawJournals = data.journalTransactions || [];
+            if (rawJournals.length > 1000) {
+              rawJournals.sort((a, b) => b[1].createdAt - a[1].createdAt);
+              rawJournals.length = 1000;
+            }
+            this.journalTransactions = new Map(rawJournals);
+            const keepJournalIds = new Set(rawJournals.map(e => e[0]));
+            const rawIdemp = (data.journalIdempotencyIndex || []).filter(e => keepJournalIds.has(e[1]));
+            this.journalIdempotencyIndex = new Map(rawIdemp);
+            this.ledgerEntries = data.ledgerEntries || [];
+            this.tradingPairs = new Map(data.tradingPairs || []);
+
+            // Normalize and prune orders on boot
+            const rawOrders = data.orders || [];
+            const openOrders: [string, Order][] = [];
+            const closedOrders: [string, Order][] = [];
+            for (const [id, order] of rawOrders) {
+              if (order.status === 'NEW' || order.status === 'PARTIALLY_FILLED') {
+                openOrders.push([id, order]);
+              } else {
+                closedOrders.push([id, order]);
+              }
+            }
+            if (closedOrders.length > 1000) {
+              closedOrders.sort((a, b) => b[1].createdAt - a[1].createdAt);
+              closedOrders.length = 1000;
+            }
+            this.orders = new Map([...openOrders, ...closedOrders]);
+
+            this.trades = (data.trades || []).slice(-2000);
+            this.fiatTransactions = new Map(data.fiatTransactions || []);
+            this.cryptoTransactions = new Map(data.cryptoTransactions || []);
+            this.apiKeys = new Map(data.apiKeys || []);
+            this.auditLogs = (data.auditLogs || []).slice(-1000);
+            this.sessions = new Map(data.sessions || []);
+            this.botInstances = new Map(data.botInstances || []);
+            if (data.riskControls) {
+              this.riskControls = { ...DEFAULT_RISK_CONTROLS, ...data.riskControls };
+            }
+            if (data.assets) this.assets = new Map(data.assets);
+            if (data.listingRequests) this.listingRequests = new Map(data.listingRequests);
+            if (data.listingApprovals) this.listingApprovals = new Map(data.listingApprovals);
+            if (data.markets) this.markets = new Map(data.markets);
+            if (data.listingAuditEvents) this.listingAuditEvents = data.listingAuditEvents;
+            if (data.outboxEvents) this.outboxEvents = new Map(data.outboxEvents);
+            if (data.idempotencyRecords) this.idempotencyRecords = new Map(data.idempotencyRecords);
+
+            console.log(`[DIMONEX Database] Berhasil memuat snapshot disk (${p}): ${this.users.size} pengguna, ${this.orders.size} order, ${this.trades.length} transaksi, ${this.sessions.size} sesi login aktif.`);
+            return true;
+          } catch (readErr) {
+            console.warn(`[DIMONEX Database] Gagal membaca ${p}:`, readErr);
+          }
+        }
+      }
+      return false;
     } catch (err) {
       console.warn('[DIMONEX Database] Snapshot file ditemukan namun tidak valid, memakai seed:', err);
       return false;
