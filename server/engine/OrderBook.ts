@@ -112,7 +112,9 @@ export class OrderBook {
         takerOrder.clientOrderId?.includes('-vol-') ||
         makerOrder.clientOrderId?.includes('-vol-') ||
         takerOrder.clientOrderId?.includes('vol') ||
-        makerOrder.clientOrderId?.includes('vol')
+        makerOrder.clientOrderId?.includes('vol') ||
+        takerOrder.clientOrderId?.includes('shft') ||
+        makerOrder.clientOrderId?.includes('shft')
       );
 
       if (isSelfTrade && !isVolumeBotMatch) {
@@ -313,7 +315,15 @@ export class OrderBook {
     const roleUpper = (userRole || '').toUpperCase();
     const isOwner = targetOrder.userId === userId;
     const isPrivileged = roleUpper === 'ADMIN' || roleUpper === 'SUPERADMIN' || roleUpper === 'MM';
-    const isBotOrder = Boolean(targetOrder.clientOrderId && (targetOrder.clientOrderId.startsWith('bot-') || targetOrder.clientOrderId.includes('-ord-') || targetOrder.clientOrderId.includes('-vol-')));
+    const isBotOrder = Boolean(
+      targetOrder.clientOrderId && (
+        targetOrder.clientOrderId.startsWith('bot-') ||
+        targetOrder.clientOrderId.startsWith('shft-') ||
+        targetOrder.clientOrderId.includes('-ord-') ||
+        targetOrder.clientOrderId.includes('-vol-') ||
+        targetOrder.clientOrderId.includes('shft')
+      )
+    );
 
     if (!isOwner && !isPrivileged && !isBotOrder) {
       throw new Error('Anda tidak memiliki otorisasi untuk membatalkan order ini');

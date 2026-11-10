@@ -1290,6 +1290,7 @@ class DatabaseStore {
             if (data.outboxEvents) this.outboxEvents = new Map(data.outboxEvents);
             if (data.idempotencyRecords) this.idempotencyRecords = new Map(data.idempotencyRecords);
 
+            this.lastLoadedMtime = fs.statSync(p).mtimeMs;
             console.log(`[DIMONEX Database] Berhasil memuat snapshot disk (${p}): ${this.users.size} pengguna, ${this.orders.size} order, ${this.trades.length} transaksi, ${this.sessions.size} sesi login aktif.`);
             return true;
           } catch (readErr) {
@@ -1302,6 +1303,33 @@ class DatabaseStore {
       console.warn('[DIMONEX Database] Snapshot file ditemukan namun tidak valid, memakai seed:', err);
       return false;
     }
+  }
+
+  private lastLoadedMtime = 0;
+
+  /**
+   * Reload from disk if file was written to by another process or earlier request
+   */
+  public reloadIfChanged(): boolean {
+    try {
+      const dir = getExchangeDataDirectory();
+      const bundledDir = path.resolve(process.cwd(), 'server', 'data');
+      const candidatePaths = [
+        path.join(dir, 'exchange_state.json'),
+        path.join(bundledDir, 'exchange_state.json')
+      ];
+
+      for (const p of candidatePaths) {
+        if (fs.existsSync(p)) {
+          const stats = fs.statSync(p);
+          if (stats.mtimeMs > this.lastLoadedMtime) {
+            return this.loadFromDisk();
+          }
+          break;
+        }
+      }
+    } catch {}
+    return false;
   }
 
   /**

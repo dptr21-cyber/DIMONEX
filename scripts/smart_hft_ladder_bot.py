@@ -342,7 +342,9 @@ class GuardedMultiOrderHFTLadderEngine:
         max_sell_lot: float = 0.50,
         total_orders: int = 40,
         tick_size: float = 0.50,
+        bound_percentage: Optional[float] = None,
     ):
+        self.bound_percentage = float(bound_percentage) if bound_percentage is not None else None
         self.min_price_bound = float(min_price_bound)
         self.max_price_bound = float(max_price_bound)
         self.min_buy_lot = float(min_buy_lot)
@@ -394,19 +396,29 @@ class GuardedMultiOrderHFTLadderEngine:
 
         # ----------------------------------------------------------------------
         # 1. BUY LADDER CALCULATION (Levels 1 to N: Closest to Furthest)
-        # Level 1 is closest to current_price; Level N touches min_price_bound.
+        # Guarantee: P_buy,1 > P_buy,2 > ... > P_buy,N (Never identical prices)
         # ----------------------------------------------------------------------
+        min_required_span = n * self.tick_size
         buy_start_price = current_price - self.tick_size
-        buy_end_price = self.min_price_bound
+        effective_min_bound = self.min_price_bound
+        if (buy_start_price - effective_min_bound) < min_required_span:
+            effective_min_bound = max(self.tick_size, buy_start_price - min_required_span)
+
+        buy_price_span = buy_start_price - effective_min_bound
 
         for level in range(1, n + 1):
             t = (level - 1) / max(1, (n - 1))  # 0.0 at level 1, 1.0 at level n
-            # Linear price interpolation
-            raw_price = buy_start_price - t * (buy_start_price - buy_end_price)
-            # Quantize to tick size
+            raw_price = buy_start_price - t * buy_price_span
             quantized_price = round(raw_price / self.tick_size) * self.tick_size
-            # Strict safety clamping
-            safe_price = max(self.min_price_bound, min(buy_start_price, quantized_price))
+            safe_price = quantized_price
+
+            # Strictly ensure distinct monotonic descending prices
+            if buy_orders:
+                prev_price = buy_orders[-1].price
+                if safe_price >= prev_price:
+                    safe_price = round(prev_price - self.tick_size, 4)
+
+            safe_price = max(self.tick_size, safe_price)
 
             # Linear volume scaling (marti-light)
             lot = self.min_buy_lot + t * (self.max_buy_lot - self.min_buy_lot)
@@ -416,7 +428,7 @@ class GuardedMultiOrderHFTLadderEngine:
                 LadderOrder(
                     level=level,
                     side="BUY",
-                    price=round(safe_price, 2),
+                    price=round(safe_price, 4),
                     lot_size=clamped_lot,
                     order_id=f"BUY-LVL-{level:02d}-{int(safe_price)}"
                 )
@@ -424,19 +436,26 @@ class GuardedMultiOrderHFTLadderEngine:
 
         # ----------------------------------------------------------------------
         # 2. SELL LADDER CALCULATION (Levels 1 to N: Closest to Furthest)
-        # Level 1 is closest to current_price; Level N touches max_price_bound.
+        # Guarantee: P_sell,1 < P_sell,2 < ... < P_sell,N (Never identical prices)
         # ----------------------------------------------------------------------
         sell_start_price = current_price + self.tick_size
-        sell_end_price = self.max_price_bound
+        effective_max_bound = self.max_price_bound
+        if (effective_max_bound - sell_start_price) < min_required_span:
+            effective_max_bound = sell_start_price + min_required_span
+
+        sell_price_span = effective_max_bound - sell_start_price
 
         for level in range(1, n + 1):
             t = (level - 1) / max(1, (n - 1))  # 0.0 at level 1, 1.0 at level n
-            # Linear price interpolation
-            raw_price = sell_start_price + t * (sell_end_price - sell_start_price)
-            # Quantize to tick size
+            raw_price = sell_start_price + t * sell_price_span
             quantized_price = round(raw_price / self.tick_size) * self.tick_size
-            # Strict safety clamping
-            safe_price = min(self.max_price_bound, max(sell_start_price, quantized_price))
+            safe_price = quantized_price
+
+            # Strictly ensure distinct monotonic ascending prices
+            if sell_orders:
+                prev_price = sell_orders[-1].price
+                if safe_price <= prev_price:
+                    safe_price = round(prev_price + self.tick_size, 4)
 
             # Linear volume scaling (marti-light)
             lot = self.min_sell_lot + t * (self.max_sell_lot - self.min_sell_lot)
@@ -446,7 +465,7 @@ class GuardedMultiOrderHFTLadderEngine:
                 LadderOrder(
                     level=level,
                     side="SELL",
-                    price=round(safe_price, 2),
+                    price=round(safe_price, 4),
                     lot_size=clamped_lot,
                     order_id=f"SELL-LVL-{level:02d}-{int(safe_price)}"
                 )

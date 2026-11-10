@@ -214,16 +214,36 @@ function AppContent() {
     } catch (e) {}
   }, []);
 
-  const refreshUserOrders = useCallback(async () => {
+  const refreshUserOrders = useCallback(async (optimisticOrder?: OrderItem) => {
     const token = localStorage.getItem('dimonex_auth_token');
     if (!token) return;
+
+    if (optimisticOrder) {
+      setOpenOrders(prev => {
+        if (prev.some(o => o.id === optimisticOrder.id)) return prev;
+        const updated = [optimisticOrder, ...prev];
+        try { localStorage.setItem('dimonex_open_orders_cache', JSON.stringify(updated.slice(0, 50))); } catch {}
+        return updated;
+      });
+    }
+
     setIsLoadingOrders(true);
     try {
       const [openRes, histRes] = await Promise.all([
         safeFetchJson<OrderItem[]>('/api/trading/orders/open', { headers: { 'Authorization': `Bearer ${token}` } }),
         safeFetchJson<OrderItem[]>('/api/trading/orders/history', { headers: { 'Authorization': `Bearer ${token}` } })
       ]);
-      if (openRes.ok && Array.isArray(openRes.data)) setOpenOrders(openRes.data);
+      if (openRes.ok && Array.isArray(openRes.data)) {
+        const serverOrders = openRes.data;
+        // If server returns empty array but we have recently created optimistic orders (<60s old), keep them
+        setOpenOrders(prev => {
+          const serverIds = new Set(serverOrders.map(o => o.id));
+          const recentOptimistic = prev.filter(o => !serverIds.has(o.id) && (Date.now() - o.createdAt < 60000));
+          const merged = [...recentOptimistic, ...serverOrders];
+          try { localStorage.setItem('dimonex_open_orders_cache', JSON.stringify(merged.slice(0, 50))); } catch {}
+          return merged;
+        });
+      }
       if (histRes.ok && Array.isArray(histRes.data)) setOrderHistory(histRes.data);
     } catch (e) {
       console.warn('Failed to refresh orders:', e);
@@ -501,10 +521,14 @@ function AppContent() {
                         <div className="absolute left-0 top-full mt-2 w-72 sm:w-80 rounded-xl bg-[#0E1016] border border-[#292C38] shadow-2xl p-3 z-50 animate-in fade-in zoom-in-95 duration-150">
                           {/* Search Bar */}
                           <div className="relative mb-2.5">
+                            <label htmlFor="pair-search-input" className="sr-only">Cari koin atau pasar</label>
                             <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#686D7A]" />
                             <input
+                              id="pair-search-input"
+                              name="pairSearch"
                               autoFocus
                               placeholder="Cari koin atau pasar..."
+                              aria-label="Cari koin atau pasar"
                               value={pairSearch}
                               onChange={e => setPairSearch(e.target.value)}
                               className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#15171F] border border-[#292C38] rounded-lg text-[#F5F5F7] placeholder-[#686D7A] outline-none focus:border-[#EB3458]"
@@ -653,9 +677,9 @@ function AppContent() {
                     user={user}
                     balances={balances}
                     selectedPriceUnits={selectedPriceForOrder}
-                    onOrderPlaced={() => {
+                    onOrderPlaced={(newOrder) => {
                       refreshBalances();
-                      refreshUserOrders();
+                      refreshUserOrders(newOrder);
                       fetchPairMarketData();
                     }}
                     onOpenAuthModal={() => setIsAuthModalOpen(true)}

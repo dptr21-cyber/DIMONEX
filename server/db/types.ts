@@ -25,7 +25,8 @@ export type BotType =
   | 'SELL_LAYERS' 
   | 'SMART_TRADE'
   | 'QUANT_HFT_MM'
-  | 'SMART_HFT_LADDER';
+  | 'SMART_HFT_LADDER'
+  | 'ADVANCED_MM';
 
 export type JournalTxType = 
   | 'DEPOSIT' 
@@ -201,6 +202,7 @@ export interface SmartHftLadderConfig {
   timeframe: PatternTimeframe;
   pattern: PatternFormationType;
   total_orders: number; // Default 40, max 100
+  bound_percentage?: number; // Optional percentage range from current price (e.g. 1%, 2%, 3%, 5%, 8%)
   min_price_bound: string; // Absolute lower bound (IDR / USDT quote unit)
   max_price_bound: string; // Absolute upper bound (IDR / USDT quote unit)
   min_buy_lot: string; // Base asset units (closest level)
@@ -211,15 +213,69 @@ export interface SmartHftLadderConfig {
   gaussian_noise_scale?: number;
   activeOrderIds?: string[];
   lastAnchorPrice?: string;
+  currentPatternIndex?: number; // Progressive bar step along the 14 geometric chart patterns (0 to totalBars - 1)
+  totalBars?: number;
+  lastRepriceTimestamp?: number;
   lastPatternMetrics?: {
     patternName: string;
     barsGenerated: number;
+    currentBarIndex?: number;
+    totalBars?: number;
     anchorPrice: string;
     buyLevel1: { price: string; lot: string };
     buyLevelFurthest: { price: string; lot: string };
     sellLevel1: { price: string; lot: string };
     sellLevelFurthest: { price: string; lot: string };
   };
+}
+
+export interface AdvancedMarketMakerConfig {
+  account_id: string;
+  pair_id: string;
+  timeframe?: string; // Analysis timeframe, default '15m'
+  
+  // Section B: Liquidity Configuration
+  bid_levels: number; // e.g. 1 to 20
+  ask_levels: number; // e.g. 1 to 20
+  bid_base_quantity: string; // Base start quantity per level e.g. '0.01'
+  ask_base_quantity: string; // Base start quantity per level e.g. '0.01'
+  quantity_distribution: 'LINEAR' | 'GEOMETRIC' | 'EXPONENTIAL' | 'FLAT';
+  spread_min_bps: number; // e.g. 10 bps (0.10%)
+  spread_max_bps: number; // e.g. 150 bps (1.50%)
+  price_offset_bps: number; // e.g. 0
+  order_refresh_interval_ms: number; // e.g. 2500 ms
+  maximum_open_orders: number; // e.g. 40
+  spacing_mode: 'LINEAR' | 'GEOMETRIC' | 'VOLATILITY_ADAPTIVE';
+
+  // Section C: Adaptive Market Configuration
+  adaptive_quoting_enabled: boolean;
+  volatility_monitoring_enabled: boolean;
+  inventory_rebalancing_enabled: boolean;
+  dynamic_spread_enabled: boolean;
+  market_regime_detection_enabled: boolean;
+  risk_protection_enabled: boolean;
+
+  // Section D: Risk Configuration
+  maximum_inventory: string; // Base units limit (e.g. '5.0')
+  maximum_order_value_quote: string; // Quote units limit per order (e.g. '50000000' IDR)
+  maximum_exposure_quote: string; // Quote units limit across all orders (e.g. '500000000' IDR)
+  maximum_daily_loss_quote: string; // Quote loss limit (e.g. '25000000' IDR)
+  maximum_price_deviation_pct: number; // Maximum % deviation from mid/last price (e.g. 5.0%)
+  minimum_available_balance_quote: string; // Minimum quote balance buffer
+  emergency_stop: boolean; // Emergency stop kill-switch toggle
+
+  // Monitoring State & Runtime Metrics
+  activeOrderIds?: string[];
+  lastRepriceTimestamp?: number;
+  lastReferencePrice?: string;
+  lastSpreadBps?: number;
+  lastDetectedRegime?: string;
+  lastVolatilityAtrPct?: number;
+  lastInventoryBase?: string;
+  lastInventoryQuote?: string;
+  totalBidLiquidityQuote?: string;
+  totalAskLiquidityQuote?: string;
+  riskWarnings?: string[];
 }
 
 export interface BotInstance {
@@ -244,6 +300,7 @@ export interface BotInstance {
   quantHftConfig?: QuantHftConfig;
   smartHftConfig?: SmartHftLadderConfig;
   gridConfig?: any;
+  advancedMMConfig?: AdvancedMarketMakerConfig;
   stats: {
     ordersSubmitted: number;
     ordersAccepted: number;

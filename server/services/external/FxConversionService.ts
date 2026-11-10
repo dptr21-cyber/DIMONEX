@@ -330,24 +330,24 @@ export class FxConversionService {
         }
       }
     } catch (e: any) {
-      console.warn('[FxConversionService] CMC live rate fetch failed, trying Indodax:', e.message);
+      // CMC call failed or quota reached, proceed to CoinGecko fallback
     }
 
-    // 4. Fallback: Indodax Public Spot Exchange Ticker
+    // 4. Fallback: CoinGecko Public Spot Exchange FX Rate (USDT/IDR)
     try {
-      const res = await fetch('https://indodax.com/api/ticker/usdtidr', {
+      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=idr', {
         signal: AbortSignal.timeout(6000)
       });
       if (res.ok) {
         const data = await res.json();
-        const price = parseFloat(data?.ticker?.last || data?.ticker?.sell);
+        const price = parseFloat(data?.tether?.idr);
         if (price && !isNaN(price) && price > 0) {
-          const syncRes = this.syncWithLiveRate(price, 'INDODAX', actorEmail, validityHours, 'Disinkronkan dari Indodax Public Live Ticker API');
-          return { success: true, rateRecord: syncRes.rateRecord, source: 'INDODAX', cached: false };
+          const syncRes = this.syncWithLiveRate(price, 'LIVE_API', actorEmail, validityHours, 'Disinkronkan dari CoinGecko Public Live Ticker API');
+          return { success: true, rateRecord: syncRes.rateRecord, source: 'LIVE_API', cached: false };
         }
       }
     } catch (e: any) {
-      console.warn('[FxConversionService] Indodax live rate fetch failed, trying Open Exchange Rates:', e.message);
+      console.warn('[FxConversionService] CoinGecko live rate fetch failed, trying Open Exchange Rates:', e.message);
     }
 
     // 5. Fallback: Open Exchange Rates

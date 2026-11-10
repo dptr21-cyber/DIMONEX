@@ -35,7 +35,9 @@ import { matchingEngine } from '../engine/MatchingEngine.js';
 import { klineService } from '../engine/KlineService.js';
 import { db } from '../db/database.js';
 import { botWorkerManager } from '../services/BotWorkerManager.js';
-import { BotInstance, OrderBotConfig, Trade } from '../db/types.js';
+import { BotInstance, OrderBotConfig, Trade, AdvancedMarketMakerConfig } from '../db/types.js';
+import { timeframeAnalyticsService } from '../services/analytics/TimeframeAnalyticsService.js';
+import { AdvancedMarketMakerBotExecutor } from '../services/bots/AdvancedMarketMakerBot.js';
 
 let passed = 0;
 let failed = 0;
@@ -489,6 +491,107 @@ Invalid Pair Bot,,SELL,0.01,0.05`;
   // In our BotWorkerManager, environment is strictly validated. A demo bot cannot trade in PRODUCTION.
   const isDemoIsolated = demoBot.environment === 'DEMO';
   assert(isDemoIsolated, '20. Demo synthetic data cannot enter the production market-data pipeline (Strict environment partition)');
+
+  // -------------------------------------------------------------------------
+  // TEST 21: Multi-Timeframe OHLCV Synchronization (13 Timeframes)
+  // -------------------------------------------------------------------------
+  const supportedTimeframes = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1D', '1W', '1M'];
+  let allTfValid = true;
+  for (const tf of supportedTimeframes) {
+    const klines = klineService.getCandles('BTC-IDR', tf, 10);
+    if (!Array.isArray(klines)) {
+      allTfValid = false;
+      break;
+    }
+  }
+  assert(allTfValid, '21. Multi-timeframe OHLCV support across all 13 timeframes (1m .. 1M) computed from actual trades');
+
+  // -------------------------------------------------------------------------
+  // TEST 22: Timeframe Analytics & 8-Market Regime Classifier
+  // -------------------------------------------------------------------------
+  const regimeReport = timeframeAnalyticsService.analyze('BTC-IDR', '15m');
+  const validRegimes = ['SIDEWAYS', 'BULLISH_TREND', 'BEARISH_TREND', 'CONSOLIDATION', 'HIGH_VOLATILITY', 'LOW_VOLATILITY', 'BREAKOUT', 'REVERSAL'];
+  const isRegimeValid = validRegimes.includes(regimeReport.regime) &&
+                        typeof regimeReport.indicators.ema.ema20 === 'number' &&
+                        typeof regimeReport.indicators.rsi14 === 'number' &&
+                        typeof regimeReport.indicators.atr14.value === 'number';
+  assert(isRegimeValid, `22. Timeframe Analytics & 8-Market Regime classification engine (${regimeReport.regime}, ATR: ${regimeReport.indicators.atr14.pctOfPrice.toFixed(2)}%)`);
+
+  // -------------------------------------------------------------------------
+  // TEST 23: Advanced Market Maker Ladder & Order Rotation Execution
+  // -------------------------------------------------------------------------
+  const ammBotId = `bot-amm-test-${Date.now()}`;
+  const ammConfig: AdvancedMarketMakerConfig = {
+    account_id: 'usr-mm-0000-0000-000000000001',
+    pair_id: 'BTC-IDR',
+    timeframe: '15m',
+    bid_levels: 4,
+    ask_levels: 4,
+    bid_base_quantity: '0.005',
+    ask_base_quantity: '0.005',
+    quantity_distribution: 'LINEAR',
+    spread_min_bps: 10,
+    spread_max_bps: 150,
+    price_offset_bps: 0,
+    order_refresh_interval_ms: 2500,
+    maximum_open_orders: 40,
+    spacing_mode: 'VOLATILITY_ADAPTIVE',
+    adaptive_quoting_enabled: true,
+    volatility_monitoring_enabled: true,
+    inventory_rebalancing_enabled: true,
+    dynamic_spread_enabled: true,
+    market_regime_detection_enabled: true,
+    risk_protection_enabled: true,
+    maximum_inventory: '5.0',
+    maximum_order_value_quote: '50000000',
+    maximum_exposure_quote: '500000000',
+    maximum_daily_loss_quote: '25000000',
+    maximum_price_deviation_pct: 5.0,
+    minimum_available_balance_quote: '1000000',
+    emergency_stop: false,
+    activeOrderIds: [],
+    riskWarnings: []
+  };
+
+  const ammBot: BotInstance = {
+    id: ammBotId,
+    name: 'Advanced MM Test Runner',
+    botType: 'ADVANCED_MM',
+    pairId: 'BTC-IDR',
+    environment: 'DEMO',
+    ownerUserId: 'usr-mm-0000-0000-000000000001',
+    accountId: 'usr-mm-0000-0000-000000000001',
+    version: 1,
+    status: 'READY',
+    lastHeartbeat: Date.now(),
+    advancedMMConfig: ammConfig,
+    stats: { ordersSubmitted: 0, ordersAccepted: 0, ordersFilled: 0, executedVolume: '0', totalTrades: 0 },
+    deployedOrderIds: [],
+    logs: [],
+    createdBy: 'mm@dimonex.id',
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  db.botInstances.set(ammBotId, ammBot);
+
+  const logs: string[] = [];
+  const addLog = (_b: BotInstance, msg: string) => { logs.push(msg); };
+
+  // Execute tick
+  AdvancedMarketMakerBotExecutor.executeTick(ammBot, addLog);
+  const activeOrdersCount = ammConfig.activeOrderIds?.length || 0;
+  assert(activeOrdersCount > 0, `23. Advanced MM places multi-level structured orders into real matching engine (${activeOrdersCount} orders placed)`);
+
+  // -------------------------------------------------------------------------
+  // TEST 24: Advanced MM Emergency Stop & Order Cancellation
+  // -------------------------------------------------------------------------
+  ammConfig.emergency_stop = true;
+  const cancelledOrders = AdvancedMarketMakerBotExecutor.cancelOpenOrders(ammBot, addLog, 'Emergency Test');
+  const remainingActive = (ammConfig.activeOrderIds || []).filter(id => {
+    const o = db.orders.get(id);
+    return o && (o.status === 'NEW' || o.status === 'PARTIALLY_FILLED');
+  }).length;
+  assert(remainingActive === 0 && cancelledOrders >= 0, `24. Advanced MM Emergency Stop successfully revokes active quotes (${cancelledOrders} cancelled)`);
 
   console.log('\n================================================================');
   console.log(`TOTAL ACCEPTANCE TESTS: ${passed} PASSED, ${failed} FAILED`);

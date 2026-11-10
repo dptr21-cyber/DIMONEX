@@ -313,7 +313,11 @@ export const UserOrdersTable: React.FC<Props> = ({
 
           {/* Quick Search */}
           <div className="relative flex-1 max-w-xs">
+            <label htmlFor="search-order-id" className="sr-only">Cari Order</label>
             <input
+              id="search-order-id"
+              name="searchOrderId"
+              aria-label="Cari Order ID atau Client ID"
               type="text"
               placeholder="Search Order ID / Client ID..."
               value={searchQuery}

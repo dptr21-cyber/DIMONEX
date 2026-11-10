@@ -102,9 +102,12 @@ export const AuthModal: React.FC<Props> = ({ isOpen, onClose, onAuthSuccess }) =
 
         <form onSubmit={handleSubmit} className="space-y-3 text-xs">
           <div>
-            <label className="block text-slate-300 mb-1">Email:</label>
+            <label htmlFor="auth-email" className="block text-slate-300 mb-1">Email:</label>
             <input
+              id="auth-email"
+              name="email"
               type="email"
+              autoComplete="email"
               required
               value={email}
               onChange={e => setEmail(e.target.value)}
@@ -114,9 +117,12 @@ export const AuthModal: React.FC<Props> = ({ isOpen, onClose, onAuthSuccess }) =
           </div>
 
           <div>
-            <label className="block text-slate-300 mb-1">Kata Sandi:</label>
+            <label htmlFor="auth-password" className="block text-slate-300 mb-1">Kata Sandi:</label>
             <input
+              id="auth-password"
+              name="password"
               type="password"
+              autoComplete="current-password"
               required
               value={password}
               onChange={e => setPassword(e.target.value)}
@@ -127,9 +133,12 @@ export const AuthModal: React.FC<Props> = ({ isOpen, onClose, onAuthSuccess }) =
 
           {requiresTotp && (
             <div className="p-3 bg-blue-950/30 border border-blue-800 rounded space-y-1">
-              <label className="block font-semibold text-blue-300">Masukkan 6-Digit Kode 2FA TOTP:</label>
+              <label htmlFor="auth-totp" className="block font-semibold text-blue-300">Masukkan 6-Digit Kode 2FA TOTP:</label>
               <input
+                id="auth-totp"
+                name="totpCode"
                 type="text"
+                autoComplete="one-time-code"
                 required
                 maxLength={6}
                 value={totpCode}

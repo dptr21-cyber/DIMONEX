@@ -6,7 +6,7 @@
  * High-density trading inputs with prefix/suffix affordances and tabular formatting.
  */
 
-import React from 'react';
+import React, { useId } from 'react';
 
 export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   label?: string;
@@ -26,9 +26,13 @@ export const Input: React.FC<InputProps> = ({
   onActionClick,
   className = '',
   id,
+  name,
   ...props
 }) => {
-  const inputId = id || (label ? label.toLowerCase().replace(/\s+/g, '-') : undefined);
+  const generatedId = useId();
+  const cleanGenId = generatedId.replace(/[^a-zA-Z0-9_-]/g, '');
+  const inputId = id || (label ? label.toLowerCase().replace(/[^a-z0-9_-]/g, '-') : `input-${cleanGenId}`);
+  const inputName = name || (label ? label.toLowerCase().replace(/[^a-z0-9_-]/g, '_') : inputId);
 
   return (
     <div className="w-full">
@@ -56,6 +60,8 @@ export const Input: React.FC<InputProps> = ({
         )}
         <input
           id={inputId}
+          name={inputName}
+          aria-label={props['aria-label'] || label || prefixText || suffixText || inputName}
           className={`w-full bg-transparent px-3 py-2 text-xs sm:text-sm text-[#F5F5F7] placeholder-[#686D7A] font-mono tabular-nums outline-none ${className}`}
           {...props}
         />

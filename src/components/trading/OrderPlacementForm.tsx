@@ -19,7 +19,7 @@ interface Props {
   user: UserProfile | null;
   balances: UserBalance[];
   selectedPriceUnits: string | null;
-  onOrderPlaced: () => void;
+  onOrderPlaced: (order?: any) => void;
   onOpenAuthModal: () => void;
 }
 
@@ -170,7 +170,7 @@ export const OrderPlacementForm: React.FC<Props> = ({
       );
       setQuantityInput('');
       setAllocationPct(null);
-      onOrderPlaced();
+      onOrderPlaced(data?.order);
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to place order');
       showToast('error', 'Order Failed', err.message || 'Execution error');

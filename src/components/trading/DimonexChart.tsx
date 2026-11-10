@@ -7,11 +7,13 @@
  * 
  * Guarantees:
  * - Real OHLCV Kline aggregation connected to backend persistent database
- * - Zero resets: previous transactions and past candle history are strictly preserved
- * - Real-time trade streaming updating active candle and volume histogram
+ * - Strict lifecycle guard preventing "Object is disposed" errors on unmount/re-render
+ * - Zero-Intrusion Seamless Fetching: Chart is NEVER blocked by full-screen loading modals or blurs
+ * - Dual Real-time Trade Pipeline: WebSocket streaming + REST sync & recentTrades listener
  * - Sub-panel volume histogram matching Binance / TradingView UX
- * - Dynamic Moving Averages (MA 7 & MA 25) with interactive toggle
+ * - Dynamic Moving Averages (MA 7 & MA 25) with live updates on new ticks
  * - Live Hover/Crosshair Inspector (Open, High, Low, Close, Change, Volume)
+ * - Multi-currency support (IDR, USDT) with precision-safe decimal scaling
  * - Timeframe selector: 1m, 5m, 15m, 1h, 4h, 1d, 1w
  * - Fit Content & Zoom reset tools
  */
@@ -29,7 +31,7 @@ import {
 } from 'lightweight-charts';
 import { TradingPairItem, TradeItem, CandleItem } from '../../types/index.js';
 import { isWebSocketSupported, reportWebSocketSuccess, reportWebSocketFailure } from '../../utils/wsHelper.js';
-import { formatIDR } from '../../lib/formatters.js';
+import { safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
 import { Timeframe, ChartHoverInfo } from './chartTypes.js';
 
 interface DimonexChartProps {
@@ -44,6 +46,24 @@ interface DimonexChartProps {
   refPriceData: any;
   onHoverInfoChange?: (info: ChartHoverInfo | null) => void;
 }
+
+const TF_SECONDS: Record<string, number> = {
+  '1m': 60,
+  '3m': 180,
+  '5m': 300,
+  '15m': 900,
+  '30m': 1800,
+  '1h': 3600,
+  '2h': 7200,
+  '4h': 14400,
+  '6h': 21600,
+  '12h': 43200,
+  '1d': 86400,
+  '1D': 86400,
+  '1w': 604800,
+  '1W': 604800,
+  '1M': 2592000
+};
 
 export const DimonexChart: React.FC<DimonexChartProps> = ({
   pair,
@@ -65,15 +85,30 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
   const ma25SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const refLineRef = useRef<any>(null);
 
-  const [isLoading, setIsLoading] = useState(false);
+  // Strict lifecycle guard to prevent "Object is disposed" error
+  const isDisposedRef = useRef<boolean>(false);
+  const loadRequestIdRef = useRef<number>(0);
+
+  // Non-intrusive fetching indicator (only a slim subtle 2px bar at the top, NEVER blocking the screen)
+  const [isFetching, setIsFetching] = useState(false);
   const [hoverInfo, setHoverInfo] = useState<ChartHoverInfo | null>(null);
 
   const candlesRef = useRef<CandleItem[]>([]);
   const lastBarRef = useRef<CandleItem | null>(null);
   const processedTradesRef = useRef<Set<string>>(new Set());
+  const isFirstLoadRef = useRef(true);
+
+  // Quote currency properties
+  const isUSDT = (pair.quoteCurrency || '').toUpperCase() === 'USDT';
+  const quoteDec = pair.quoteDecimals !== undefined && pair.quoteDecimals !== null
+    ? pair.quoteDecimals
+    : (isUSDT ? 6 : 2);
+  const baseDec = pair.baseDecimals !== undefined && pair.baseDecimals !== null
+    ? pair.baseDecimals
+    : 8;
 
   // Calculate Simple Moving Average for candle array
-  const calculateSMA = (data: CandleItem[], period: number) => {
+  const calculateSMA = useCallback((data: CandleItem[], period: number) => {
     const result: { time: Time; value: number }[] = [];
     for (let i = 0; i < data.length; i++) {
       if (i < period - 1) continue;
@@ -83,70 +118,229 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       }
       result.push({
         time: data[i].time as Time,
-        value: Number((sum / period).toFixed(2))
+        value: Number((sum / period).toFixed(isUSDT ? 4 : 2))
       });
     }
     return result;
-  };
+  }, [isUSDT]);
 
-  // Fetch Authoritative Real OHLCV Historical Candles from Backend
-  const loadCandles = useCallback(async () => {
-    setIsLoading(true);
+  /**
+   * Process a single trade execution and update the live candlestick & volume series safely.
+   */
+  const processSingleTrade = useCallback((trade: TradeItem) => {
+    if (!trade || trade.pairId !== pair.id) return;
+    if (isDisposedRef.current || !chartRef.current || !candleSeriesRef.current) return;
+
+    if (processedTradesRef.current.has(trade.id)) return;
+    processedTradesRef.current.add(trade.id);
+    if (processedTradesRef.current.size > 2000) {
+      const arr = Array.from(processedTradesRef.current);
+      processedTradesRef.current = new Set(arr.slice(-1000));
+    }
+
+    try {
+      const divisor = 10n ** BigInt(quoteDec);
+      const rawPrice = safeBigInt(trade.price);
+      if (rawPrice <= 0n) return;
+      const tradePrice = Number(rawPrice) / Number(divisor);
+      const tradeQty = Number(safeBigInt(trade.quantity)) / (10 ** baseDec);
+      const tradeSec = Math.floor(trade.createdAt / 1000);
+
+      const intervalSec = TF_SECONDS[timeframe] || 900;
+      const currentCandleTime = Math.floor(tradeSec / intervalSec) * intervalSec;
+
+      let last = lastBarRef.current;
+      if (!last || currentCandleTime > last.time) {
+        const newBar: CandleItem = {
+          time: currentCandleTime,
+          open: last ? last.close : tradePrice,
+          high: Math.max(last ? last.close : tradePrice, tradePrice),
+          low: Math.min(last ? last.close : tradePrice, tradePrice),
+          close: tradePrice,
+          volume: tradeQty
+        };
+        lastBarRef.current = newBar;
+        candlesRef.current.push(newBar);
+
+        if (!isDisposedRef.current && candleSeriesRef.current && volumeSeriesRef.current) {
+          candleSeriesRef.current.update({
+            time: newBar.time as Time,
+            open: newBar.open,
+            high: newBar.high,
+            low: newBar.low,
+            close: newBar.close
+          });
+
+          volumeSeriesRef.current.update({
+            time: newBar.time as Time,
+            value: newBar.volume,
+            color: newBar.close >= newBar.open ? 'rgba(22, 199, 132, 0.45)' : 'rgba(234, 57, 67, 0.45)'
+          });
+        }
+      } else if (currentCandleTime === last.time) {
+        last.high = Math.max(last.high, tradePrice);
+        last.low = Math.min(last.low, tradePrice);
+        last.close = tradePrice;
+        last.volume = Number((last.volume + tradeQty).toFixed(6));
+
+        if (!isDisposedRef.current && candleSeriesRef.current && volumeSeriesRef.current) {
+          candleSeriesRef.current.update({
+            time: last.time as Time,
+            open: last.open,
+            high: last.high,
+            low: last.low,
+            close: last.close
+          });
+
+          volumeSeriesRef.current.update({
+            time: last.time as Time,
+            value: last.volume,
+            color: last.close >= last.open ? 'rgba(22, 199, 132, 0.45)' : 'rgba(234, 57, 67, 0.45)'
+          });
+        }
+      }
+
+      // Update Moving Averages on active bar
+      if (!isDisposedRef.current && showMAs) {
+        if (candlesRef.current.length >= 7 && ma7SeriesRef.current) {
+          const ma7Val = candlesRef.current.slice(-7).reduce((acc, c) => acc + c.close, 0) / 7;
+          ma7SeriesRef.current.update({
+            time: (lastBarRef.current?.time || currentCandleTime) as Time,
+            value: Number(ma7Val.toFixed(isUSDT ? 4 : 2))
+          });
+        }
+        if (candlesRef.current.length >= 25 && ma25SeriesRef.current) {
+          const ma25Val = candlesRef.current.slice(-25).reduce((acc, c) => acc + c.close, 0) / 25;
+          ma25SeriesRef.current.update({
+            time: (lastBarRef.current?.time || currentCandleTime) as Time,
+            value: Number(ma25Val.toFixed(isUSDT ? 4 : 2))
+          });
+        }
+      }
+    } catch (err: any) {
+      if (err?.message?.includes('disposed')) return;
+      console.warn('[DimonexChart] Trade execution process error:', err);
+    }
+  }, [pair.id, quoteDec, baseDec, timeframe, showMAs, isUSDT]);
+
+  // Fetch Authoritative OHLCV Historical Candles from Backend (Seamless & non-blocking)
+  const loadCandles = useCallback(async (isInitial = false) => {
+    const reqId = ++loadRequestIdRef.current;
+    if (isInitial) setIsFetching(true);
+
     try {
       const res = await fetch(`/api/trading/candles/${pair.id}?timeframe=${timeframe}&limit=200`);
-      if (!res.ok) throw new Error('Gagal mengambil klines');
-      const data: CandleItem[] = await res.json();
+      if (!res.ok) return;
+      let data: CandleItem[] = await res.json();
 
-      candlesRef.current = data;
+      // Check if cancelled or chart disposed while fetching
+      if (isDisposedRef.current || reqId !== loadRequestIdRef.current) return;
+      if (!chartRef.current || !candleSeriesRef.current || !volumeSeriesRef.current) return;
 
-      if (candleSeriesRef.current && volumeSeriesRef.current) {
-        if (data.length > 0) {
-          const candleData = data.map(c => ({
-            time: c.time as Time,
-            open: c.open,
-            high: c.high,
-            low: c.low,
-            close: c.close
-          }));
-
-          const volumeData = data.map(c => ({
-            time: c.time as Time,
-            value: c.volume,
-            color: c.close >= c.open ? 'rgba(22, 199, 132, 0.45)' : 'rgba(234, 57, 67, 0.45)'
-          }));
-
-          candleSeriesRef.current.setData(candleData);
-          volumeSeriesRef.current.setData(volumeData);
-
-          if (ma7SeriesRef.current) {
-            ma7SeriesRef.current.setData(calculateSMA(data, 7));
-          }
-          if (ma25SeriesRef.current) {
-            ma25SeriesRef.current.setData(calculateSMA(data, 25));
-          }
-
-          lastBarRef.current = data[data.length - 1];
-        } else {
-          candleSeriesRef.current.setData([]);
-          volumeSeriesRef.current.setData([]);
-          if (ma7SeriesRef.current) ma7SeriesRef.current.setData([]);
-          if (ma25SeriesRef.current) ma25SeriesRef.current.setData([]);
-          lastBarRef.current = null;
+      // If pair has no trade candles yet, construct an anchor candle from pair.lastPrice
+      if ((!data || data.length === 0) && pair.lastPrice) {
+        const divisor = 10n ** BigInt(quoteDec);
+        const pNum = Number(safeBigInt(pair.lastPrice)) / Number(divisor);
+        if (pNum > 0) {
+          const nowSec = Math.floor(Date.now() / 1000);
+          const interval = TF_SECONDS[timeframe] || 900;
+          const t = Math.floor(nowSec / interval) * interval;
+          data = [{ time: t, open: pNum, high: pNum, low: pNum, close: pNum, volume: 0 }];
         }
-
-        chartRef.current?.timeScale().fitContent();
       }
-    } catch (err) {
-      console.error('[DimonexChart] Gagal memuat candles:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [pair.id, timeframe]);
 
-  // Initialize Lightweight Charts v5
+      if (Array.isArray(data) && data.length > 0) {
+        candlesRef.current = data;
+        lastBarRef.current = data[data.length - 1];
+
+        const candleData = data.map(c => ({
+          time: c.time as Time,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close
+        }));
+
+        const volumeData = data.map(c => ({
+          time: c.time as Time,
+          value: c.volume,
+          color: c.close >= c.open ? 'rgba(22, 199, 132, 0.45)' : 'rgba(234, 57, 67, 0.45)'
+        }));
+
+        try {
+          if (!isDisposedRef.current && candleSeriesRef.current && volumeSeriesRef.current) {
+            candleSeriesRef.current.setData(candleData);
+            volumeSeriesRef.current.setData(volumeData);
+
+            if (ma7SeriesRef.current) {
+              ma7SeriesRef.current.setData(calculateSMA(data, 7));
+            }
+            if (ma25SeriesRef.current) {
+              ma25SeriesRef.current.setData(calculateSMA(data, 25));
+            }
+          }
+        } catch (e: any) {
+          if (e?.message?.includes('disposed')) return;
+        }
+      }
+
+      if (isInitial || isFirstLoadRef.current) {
+        isFirstLoadRef.current = false;
+        try {
+          if (!isDisposedRef.current && chartRef.current) {
+            chartRef.current.timeScale().fitContent();
+          }
+        } catch (e: any) {
+          if (e?.message?.includes('disposed')) return;
+        }
+      }
+    } catch (err: any) {
+      if (isDisposedRef.current || reqId !== loadRequestIdRef.current) return;
+      console.warn('[DimonexChart] Gagal memuat candles:', err);
+    } finally {
+      if (reqId === loadRequestIdRef.current && !isDisposedRef.current) {
+        if (isInitial) setIsFetching(false);
+      }
+    }
+  }, [pair.id, pair.lastPrice, quoteDec, timeframe, calculateSMA]);
+
+  // Reset processed trades ref on pair switch
+  useEffect(() => {
+    processedTradesRef.current.clear();
+    isFirstLoadRef.current = true;
+  }, [pair.id]);
+
+  // Listen to incoming recentTrades prop (vital live pipeline regardless of WebSocket state)
+  useEffect(() => {
+    if (!recentTrades || recentTrades.length === 0 || isDisposedRef.current) return;
+    const sorted = [...recentTrades].sort((a, b) => a.createdAt - b.createdAt);
+    for (const trade of sorted) {
+      if (trade.pairId === pair.id) {
+        processSingleTrade(trade);
+      }
+    }
+  }, [recentTrades, pair.id, processSingleTrade]);
+
+  // When timeframe changes, load new candles without tearing down chart DOM
+  useEffect(() => {
+    loadCandles(true);
+  }, [timeframe, loadCandles]);
+
+  // Background candle synchronizer (polls every 2.5s to ensure zero stale candles)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!isDisposedRef.current) {
+        loadCandles(false);
+      }
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [loadCandles]);
+
+  // Initialize Lightweight Charts v5 (Tied ONLY to pair.id and chartContainerRef)
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
+    isDisposedRef.current = false;
     chartContainerRef.current.innerHTML = '';
 
     const chart = createChart(chartContainerRef.current, {
@@ -161,41 +355,43 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
         horzLines: { color: 'rgba(255, 255, 255, 0.04)' }
       },
       crosshair: {
-        mode: 1, // Magnet
+        mode: 1,
         vertLine: {
+          color: 'rgba(255, 255, 255, 0.2)',
           width: 1,
-          color: '#D926FF',
           style: 3,
           labelBackgroundColor: '#171923'
         },
         horzLine: {
+          color: 'rgba(255, 255, 255, 0.2)',
           width: 1,
-          color: '#D926FF',
           style: 3,
           labelBackgroundColor: '#171923'
         }
       },
       timeScale: {
-        borderColor: 'rgba(255, 255, 255, 0.09)',
+        borderColor: 'rgba(255, 255, 255, 0.08)',
         timeVisible: true,
-        secondsVisible: false
+        secondsVisible: false,
+        rightOffset: 6,
+        barSpacing: 9,
+        minBarSpacing: 4
       },
       rightPriceScale: {
-        borderColor: 'rgba(255, 255, 255, 0.09)',
+        borderColor: 'rgba(255, 255, 255, 0.08)',
+        autoScale: true,
         scaleMargins: {
           top: 0.1,
-          bottom: 0.25
+          bottom: 0.22
         }
       }
     });
 
-    // 1. Candlestick Series (Bullish #16C784, Bearish #EA3943)
+    // 1. Candlestick Series
     const candleSeries = chart.addSeries(CandlestickSeries, {
       upColor: '#16C784',
       downColor: '#EA3943',
-      borderVisible: true,
-      borderUpColor: '#16C784',
-      borderDownColor: '#EA3943',
+      borderVisible: false,
       wickUpColor: '#16C784',
       wickDownColor: '#EA3943'
     });
@@ -235,13 +431,15 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
 
     // Crosshair move inspector
     chart.subscribeCrosshairMove(param => {
+      if (isDisposedRef.current) return;
       if (
         param.point === undefined ||
         !param.time ||
+        !chartContainerRef.current ||
         param.point.x < 0 ||
-        param.point.x > chartContainerRef.current!.clientWidth ||
+        param.point.x > chartContainerRef.current.clientWidth ||
         param.point.y < 0 ||
-        param.point.y > chartContainerRef.current!.clientHeight
+        param.point.y > chartContainerRef.current.clientHeight
       ) {
         setHoverInfo(null);
         onHoverInfoChange?.(null);
@@ -275,178 +473,142 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
 
     // Resize observer
     const handleResize = () => {
-      if (chartContainerRef.current && chartRef.current) {
-        chartRef.current.applyOptions({
-          width: chartContainerRef.current.clientWidth,
-          height: chartContainerRef.current.clientHeight
-        });
+      if (!isDisposedRef.current && chartContainerRef.current && chartRef.current) {
+        try {
+          chartRef.current.applyOptions({
+            width: chartContainerRef.current.clientWidth,
+            height: chartContainerRef.current.clientHeight
+          });
+        } catch (e: any) {
+          if (e?.message?.includes('disposed')) return;
+        }
       }
     };
     window.addEventListener('resize', handleResize);
 
-    loadCandles();
+    loadCandles(true);
 
     return () => {
+      isDisposedRef.current = true;
+      loadRequestIdRef.current++;
       window.removeEventListener('resize', handleResize);
-      chart.remove();
-      chartRef.current = null;
-    };
-  }, [loadCandles, showMAs, onHoverInfoChange]);
 
-  // Toggle MA visibility
+      if (chartRef.current) {
+        try {
+          chartRef.current.remove();
+        } catch (e: any) {}
+        chartRef.current = null;
+      }
+      candleSeriesRef.current = null;
+      volumeSeriesRef.current = null;
+      ma7SeriesRef.current = null;
+      ma25SeriesRef.current = null;
+      refLineRef.current = null;
+    };
+  }, [pair.id]); // ONLY recreated when switching pairs
+
+  // Toggle MA visibility safely without recreating the chart
   useEffect(() => {
-    if (ma7SeriesRef.current && ma25SeriesRef.current) {
-      ma7SeriesRef.current.applyOptions({ visible: showMAs, lastValueVisible: showMAs });
-      ma25SeriesRef.current.applyOptions({ visible: showMAs, lastValueVisible: showMAs });
+    if (isDisposedRef.current) return;
+    try {
+      if (ma7SeriesRef.current) {
+        ma7SeriesRef.current.applyOptions({ visible: showMAs, lastValueVisible: showMAs });
+      }
+      if (ma25SeriesRef.current) {
+        ma25SeriesRef.current.applyOptions({ visible: showMAs, lastValueVisible: showMAs });
+      }
+    } catch (e: any) {
+      if (e?.message?.includes('disposed')) return;
     }
   }, [showMAs]);
 
-  // Update External Reference Benchmark Price line
+  // Update External Reference Benchmark Price line safely
   useEffect(() => {
-    if (!candleSeriesRef.current) return;
+    if (isDisposedRef.current || !candleSeriesRef.current) return;
 
     if (refLineRef.current) {
       try {
         candleSeriesRef.current.removePriceLine(refLineRef.current);
-      } catch (e) {
-        // ignore
-      }
+      } catch (e) {}
       refLineRef.current = null;
     }
 
     if (showRefBenchmark && refPriceData && refPriceData.effectiveIdrPrice > 0) {
       try {
-        refLineRef.current = candleSeriesRef.current.createPriceLine({
-          price: refPriceData.effectiveIdrPrice,
-          color: '#38bdf8',
-          lineWidth: 1,
-          lineStyle: 2, // Dashed
-          axisLabelVisible: true,
-          title: `EXT REF (${refPriceData.activeProvider?.toUpperCase()})`
-        });
-      } catch (e) {
+        const benchmarkVal = isUSDT ? (refPriceData.effectiveUsdtPrice || 0) : (refPriceData.effectiveIdrPrice || 0);
+        if (benchmarkVal > 0 && !isDisposedRef.current && candleSeriesRef.current) {
+          refLineRef.current = candleSeriesRef.current.createPriceLine({
+            price: benchmarkVal,
+            color: '#38bdf8',
+            lineWidth: 1,
+            lineStyle: 2, // Dashed
+            axisLabelVisible: true,
+            title: `EXT REF (${refPriceData.activeProvider?.toUpperCase()})`
+          });
+        }
+      } catch (e: any) {
+        if (e?.message?.includes('disposed')) return;
         console.error('Failed to create reference price line:', e);
       }
     }
-  }, [showRefBenchmark, refPriceData]);
+  }, [showRefBenchmark, refPriceData, isUSDT]);
 
-  // WebSocket Live Trade Execution Handler
+  // WebSocket Live Trade Execution Handler with Safe Disconnect
   useEffect(() => {
     if (!isWebSocketSupported()) return;
     let ws: WebSocket | null = null;
-    try {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws`;
-      ws = new WebSocket(wsUrl);
+    let isDisposed = false;
 
-      ws.onopen = () => {
-        reportWebSocketSuccess();
-        ws?.send(JSON.stringify({ action: 'subscribe', channel: `trades:${pair.id}` }));
-        ws?.send(JSON.stringify({ action: 'subscribe', channel: `kline:${pair.id}` }));
-      };
+    const connectWs = () => {
+      if (isDisposed || isDisposedRef.current) return;
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws`;
+        ws = new WebSocket(wsUrl);
 
-      ws.onerror = () => {
-        reportWebSocketFailure();
-      };
+        ws.onopen = () => {
+          reportWebSocketSuccess();
+          ws?.send(JSON.stringify({ action: 'subscribe', channel: `trades:${pair.id}` }));
+          ws?.send(JSON.stringify({ action: 'subscribe', channel: `kline:${pair.id}` }));
+        };
 
-      ws.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data);
-          if (payload.type === 'trade' && payload.data) {
-            const trade: TradeItem = payload.data;
-            if (trade.pairId !== pair.id) return;
+        ws.onerror = () => {
+          reportWebSocketFailure();
+        };
 
-            if (processedTradesRef.current.has(trade.id)) return;
-            processedTradesRef.current.add(trade.id);
-            if (processedTradesRef.current.size > 1000) {
-              const arr = Array.from(processedTradesRef.current);
-              processedTradesRef.current = new Set(arr.slice(-500));
+        ws.onmessage = (event) => {
+          if (isDisposed || isDisposedRef.current) return;
+          try {
+            const payload = JSON.parse(event.data);
+            if (payload.type === 'trade' && payload.data) {
+              processSingleTrade(payload.data);
             }
+          } catch (err) {}
+        };
 
-            const tradePriceRupiah = Number(BigInt(trade.price) / 100n);
-            const tradeQty = Number(trade.quantity) / (10 ** pair.baseDecimals);
-            const tradeSec = Math.floor(trade.createdAt / 1000);
-
-            const tfMap: Record<Timeframe, number> = {
-              '1m': 60,
-              '5m': 300,
-              '15m': 900,
-              '1h': 3600,
-              '4h': 14400,
-              '1d': 86400,
-              '1w': 604800
-            };
-            const intervalSec = tfMap[timeframe] || 900;
-            const currentCandleTime = Math.floor(tradeSec / intervalSec) * intervalSec;
-
-            let last = lastBarRef.current;
-            if (!last || currentCandleTime > last.time) {
-              const newBar: CandleItem = {
-                time: currentCandleTime,
-                open: last ? last.close : tradePriceRupiah,
-                high: Math.max(last ? last.close : tradePriceRupiah, tradePriceRupiah),
-                low: Math.min(last ? last.close : tradePriceRupiah, tradePriceRupiah),
-                close: tradePriceRupiah,
-                volume: tradeQty
-              };
-              lastBarRef.current = newBar;
-              candlesRef.current.push(newBar);
-
-              candleSeriesRef.current?.update({
-                time: newBar.time as Time,
-                open: newBar.open,
-                high: newBar.high,
-                low: newBar.low,
-                close: newBar.close
-              });
-
-              volumeSeriesRef.current?.update({
-                time: newBar.time as Time,
-                value: newBar.volume,
-                color: newBar.close >= newBar.open ? 'rgba(22, 199, 132, 0.45)' : 'rgba(234, 57, 67, 0.45)'
-              });
-            } else if (currentCandleTime === last.time) {
-              last.high = Math.max(last.high, tradePriceRupiah);
-              last.low = Math.min(last.low, tradePriceRupiah);
-              last.close = tradePriceRupiah;
-              last.volume = Number((last.volume + tradeQty).toFixed(6));
-
-              candleSeriesRef.current?.update({
-                time: last.time as Time,
-                open: last.open,
-                high: last.high,
-                low: last.low,
-                close: last.close
-              });
-
-              volumeSeriesRef.current?.update({
-                time: last.time as Time,
-                value: last.volume,
-                color: last.close >= last.open ? 'rgba(22, 199, 132, 0.45)' : 'rgba(234, 57, 67, 0.45)'
-              });
-            }
+        ws.onclose = () => {
+          if (!isDisposed && !isDisposedRef.current && isWebSocketSupported()) {
+            setTimeout(connectWs, 3000);
           }
-        } catch (err) {
-          // ignore
-        }
-      };
-    } catch (e) {
-      // ws fallback
-    }
+        };
+      } catch (e) {}
+    };
+
+    connectWs();
 
     return () => {
-      if (ws) {
-        ws.close();
-      }
+      isDisposed = true;
+      if (ws) ws.close();
     };
-  }, [pair.id, pair.baseDecimals, timeframe]);
-
-  const handleFitContent = () => {
-    chartRef.current?.timeScale().fitContent();
-  };
+  }, [pair.id, processSingleTrade]);
 
   return (
     <div className="relative w-full h-full flex flex-col">
+      {/* Discreet 2px Progress Bar during fetch (NEVER blocks the chart or clicks) */}
+      {isFetching && (
+        <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-[#FF087F] to-transparent animate-pulse pointer-events-none z-30" />
+      )}
+
       {/* Subheader: Hover Inspection Bar & Active Indicators */}
       <div className="flex flex-wrap items-center justify-between px-4 py-1.5 bg-[#08090D] border-b border-white/5 text-[11px] font-mono">
         <div className="flex items-center gap-3">
@@ -461,17 +623,33 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
           )}
 
           {hoverInfo ? (
-            <div className="flex items-center gap-3 text-[#F5F5F7]">
+            <div className="flex items-center gap-3 text-[#F5F5F7] flex-wrap">
               <span className="text-[#9298A6]">{hoverInfo.timeStr}</span>
-              <span>O: <strong className="text-white">Rp {hoverInfo.open.toLocaleString('id-ID')}</strong></span>
-              <span>H: <strong className="text-[#16C784]">Rp {hoverInfo.high.toLocaleString('id-ID')}</strong></span>
-              <span>L: <strong className="text-[#EA3943]">Rp {hoverInfo.low.toLocaleString('id-ID')}</strong></span>
-              <span>C: <strong className={hoverInfo.close >= hoverInfo.open ? 'text-[#16C784]' : 'text-[#EA3943]'}>
-                Rp {hoverInfo.close.toLocaleString('id-ID')}
-              </strong></span>
-              <span>Chg: <strong className={hoverInfo.changePercent >= 0 ? 'text-[#16C784]' : 'text-[#EA3943]'}>
-                {hoverInfo.changePercent >= 0 ? '+' : ''}{hoverInfo.changePercent.toFixed(2)}%
-              </strong></span>
+              <span>
+                O: <strong className="text-white">
+                  {hoverInfo.open.toLocaleString(isUSDT ? 'en-US' : 'id-ID', { maximumFractionDigits: isUSDT ? 4 : 2 })}
+                </strong>
+              </span>
+              <span>
+                H: <strong className="text-[#16C784]">
+                  {hoverInfo.high.toLocaleString(isUSDT ? 'en-US' : 'id-ID', { maximumFractionDigits: isUSDT ? 4 : 2 })}
+                </strong>
+              </span>
+              <span>
+                L: <strong className="text-[#EA3943]">
+                  {hoverInfo.low.toLocaleString(isUSDT ? 'en-US' : 'id-ID', { maximumFractionDigits: isUSDT ? 4 : 2 })}
+                </strong>
+              </span>
+              <span>
+                C: <strong className={hoverInfo.close >= hoverInfo.open ? 'text-[#16C784]' : 'text-[#EA3943]'}>
+                  {hoverInfo.close.toLocaleString(isUSDT ? 'en-US' : 'id-ID', { maximumFractionDigits: isUSDT ? 4 : 2 })}
+                </strong>
+              </span>
+              <span>
+                Chg: <strong className={hoverInfo.changePercent >= 0 ? 'text-[#16C784]' : 'text-[#EA3943]'}>
+                  {hoverInfo.changePercent >= 0 ? '+' : ''}{hoverInfo.changePercent.toFixed(2)}%
+                </strong>
+              </span>
               <span>Vol: <strong className="text-[#C5C9D4]">{hoverInfo.volume.toFixed(4)}</strong></span>
             </div>
           ) : (
@@ -482,27 +660,15 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
         </div>
 
         <div className="flex items-center gap-2 text-[#9298A6] text-[10px]">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#16C784] animate-pulse" />
-          <span className="font-mono">DIMONEX Pro Engine (Lightweight Charts v5)</span>
+          <span className={`w-1.5 h-1.5 rounded-full ${isFetching ? 'bg-amber-400 animate-ping' : 'bg-[#16C784] animate-pulse'}`} />
+          <span className="font-mono">{isFetching ? 'Syncing...' : 'DIMONEX Pro Engine (Live)'}</span>
         </div>
       </div>
 
       {/* Main Canvas */}
       <div className="relative flex-1 w-full min-h-[420px]">
-        {isLoading && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#08090D]/80 backdrop-blur-xs">
-            <div className="flex items-center gap-2.5 px-4 py-2 rounded-lg bg-[#171923] border border-white/10 text-xs font-medium text-[#F5F5F7] shadow-lg">
-              <svg className="w-4 h-4 animate-spin text-[#FF087F]" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-              </svg>
-              <span>Memuat data candlestick DIMONEX...</span>
-            </div>
-          </div>
-        )}
-
-        {/* Empty state when no trades executed */}
-        {!isLoading && candlesRef.current.length === 0 && (
+        {/* Empty state only when genuinely no candles and no price */}
+        {!isFetching && candlesRef.current.length === 0 && !pair.lastPrice && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center p-6 text-center bg-[#08090D]/80 backdrop-blur-xs">
             <div className="w-12 h-12 rounded-xl bg-[#171923] border border-white/10 flex items-center justify-center text-[#9298A6] mb-3 shadow-inner">
               <svg className="w-6 h-6 text-[#FF087F]" fill="none" viewBox="0 0 24 24" stroke="currentColor">

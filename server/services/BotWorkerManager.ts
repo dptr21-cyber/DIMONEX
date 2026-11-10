@@ -23,6 +23,7 @@ import { PriceFollowerBotExecutor } from './bots/PriceFollowerBot.js';
 import { DepthLiquidityBotExecutor } from './bots/DepthLiquidityBot.js';
 import { QuantHftBotExecutor } from './bots/QuantHftBot.js';
 import { SmartHftLadderBotExecutor } from './bots/SmartHftLadderBot.js';
+import { AdvancedMarketMakerBotExecutor } from './bots/AdvancedMarketMakerBot.js';
 
 interface WorkerRuntime {
   botId: string;
@@ -281,6 +282,24 @@ export class BotWorkerManager {
       if (!cfg.total_orders || cfg.total_orders < 2 || cfg.total_orders > 100) {
         cfg.total_orders = 40; // Default 40
       }
+    } else if (bot.botType === 'ADVANCED_MM') {
+      const cfg = bot.advancedMMConfig;
+      if (!cfg) {
+        errors.push('Konfigurasi Advanced MM Bot tidak boleh kosong.');
+        return { isValid: false, errors };
+      }
+      if (!cfg.bid_levels || cfg.bid_levels < 1 || cfg.bid_levels > 20) {
+        errors.push('Bid Levels harus antara 1 dan 20.');
+      }
+      if (!cfg.ask_levels || cfg.ask_levels < 1 || cfg.ask_levels > 20) {
+        errors.push('Ask Levels harus antara 1 dan 20.');
+      }
+      if (!cfg.spread_min_bps || cfg.spread_min_bps < 1) {
+        errors.push('Minimum spread harus >= 1 bps.');
+      }
+      if (cfg.spread_max_bps < cfg.spread_min_bps) {
+        errors.push('Spread Maximum harus >= Spread Minimum.');
+      }
     }
 
     return { isValid: errors.length === 0, errors };
@@ -348,6 +367,8 @@ export class BotWorkerManager {
       this.scheduleQuantHftBotTick(runtime);
     } else if (bot.botType === 'SMART_HFT_LADDER') {
       this.scheduleSmartHftLadderTick(runtime);
+    } else if (bot.botType === 'ADVANCED_MM') {
+      this.scheduleAdvancedMMTick(runtime);
     }
 
     db.scheduleSave();
@@ -404,6 +425,8 @@ export class BotWorkerManager {
         cancelledOrdersCount += QuantHftBotExecutor.cancelOpenBotOrders(bot, this.addLog.bind(this));
       } else if (bot.botType === 'SMART_HFT_LADDER') {
         cancelledOrdersCount += SmartHftLadderBotExecutor.cancelOpenBotOrders(bot, this.addLog.bind(this));
+      } else if (bot.botType === 'ADVANCED_MM') {
+        cancelledOrdersCount += AdvancedMarketMakerBotExecutor.cancelOpenOrders(bot, this.addLog.bind(this));
       }
       for (const orderId of bot.deployedOrderIds) {
         const order = db.orders.get(orderId);
@@ -1043,6 +1066,41 @@ export class BotWorkerManager {
         }
       }
       this.scheduleSmartHftLadderTick(runtime);
+    }, intervalMs);
+  }
+
+  /**
+   * Advanced Market Maker Scheduling Loop
+   */
+  private scheduleAdvancedMMTick(runtime: WorkerRuntime) {
+    if (!runtime.isRunning) return;
+
+    const bot = db.botInstances.get(runtime.botId);
+    if (!bot || bot.status !== 'RUNNING') {
+      runtime.isRunning = false;
+      this.workers.delete(runtime.botId);
+      return;
+    }
+
+    const intervalMs = Math.max(1000, bot.advancedMMConfig?.order_refresh_interval_ms || 2500);
+
+    runtime.timer = setTimeout(() => {
+      if (!runtime.isRunning) return;
+      try {
+        AdvancedMarketMakerBotExecutor.executeTick(bot, this.addLog.bind(this));
+        runtime.consecutiveErrors = 0;
+      } catch (err: any) {
+        runtime.consecutiveErrors++;
+        this.addLog(bot, `Error pada Advanced MM tick: ${err.message}`, 'ERROR');
+        if (runtime.consecutiveErrors >= db.riskControls.maxConsecutiveErrors) {
+          bot.status = 'RISK_HALTED';
+          bot.errorInfo = `Consecutive error threshold breached (${runtime.consecutiveErrors}).`;
+          this.addLog(bot, bot.errorInfo, 'RISK');
+          this.stopWorker(bot.id, false);
+          return;
+        }
+      }
+      this.scheduleAdvancedMMTick(runtime);
     }, intervalMs);
   }
 }

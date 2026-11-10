@@ -27,16 +27,35 @@ export interface Candle {
   volume: number; // In Base currency unit
 }
 
-export type Timeframe = '1m' | '5m' | '15m' | '1h' | '4h' | '1d' | '1D';
+export type Timeframe = 
+  | '1m' 
+  | '3m' 
+  | '5m' 
+  | '15m' 
+  | '30m' 
+  | '1h' 
+  | '2h' 
+  | '4h' 
+  | '6h' 
+  | '12h' 
+  | '1D' 
+  | '1W' 
+  | '1M';
 
 export const TIMEFRAME_SECONDS: Record<Timeframe, number> = {
   '1m': 60,
+  '3m': 180,
   '5m': 300,
   '15m': 900,
+  '30m': 1800,
   '1h': 3600,
+  '2h': 7200,
   '4h': 14400,
-  '1d': 86400,
+  '6h': 21600,
+  '12h': 43200,
   '1D': 86400,
+  '1W': 604800,
+  '1M': 2592000,
 };
 
 export class KlineService {
@@ -174,7 +193,11 @@ export class KlineService {
     const pair = db.tradingPairs.get(trade.pairId);
     if (!pair) return;
 
-    const timeframes: Timeframe[] = ['1m', '5m', '15m', '1h', '4h', '1d', '1D'];
+    const timeframes: Timeframe[] = [
+      '1m', '3m', '5m', '15m', '30m', 
+      '1h', '2h', '4h', '6h', '12h', 
+      '1D', '1W', '1M'
+    ];
     const quoteDec = pair.quoteDecimals !== undefined && pair.quoteDecimals !== null ? pair.quoteDecimals : (pair.quoteCurrency === 'USDT' ? 6 : 2);
     const tradePrice = Number(BigInt(trade.price)) / (10 ** quoteDec);
     const tradeQty = Number(trade.quantity) / (10 ** pair.baseDecimals);
@@ -268,8 +291,7 @@ export class KlineService {
    * Returns empty array if no trades have executed yet for this pair.
    */
   public getCandles(pairId: string, tfStr: string = '15m', limit = 150): Candle[] {
-    const normalized = tfStr === '1D' ? '1D' : tfStr.toLowerCase();
-    const tf: Timeframe = (['1m', '5m', '15m', '1h', '4h', '1d', '1D'].includes(tfStr) ? tfStr : ['1m', '5m', '15m', '1h', '4h', '1d'].includes(normalized) ? normalized : '15m') as Timeframe;
+    const tf = this.normalizeResolution(tfStr);
     const key = this.getKey(pairId, tf);
     let candles = this.klineStore.get(key);
 
@@ -288,7 +310,7 @@ export class KlineService {
   }
 
   /**
-   * Maps TradingView standard resolutions ('1', '5', '15', '60', '240', 'D', '1D')
+   * Maps TradingView standard resolutions ('1', '3', '5', '15', '30', '60', '120', '240', '360', '720', 'D', 'W', 'M')
    * to internal Timeframe enum.
    */
   public normalizeResolution(res: string): Timeframe {
@@ -298,27 +320,54 @@ export class KlineService {
       case '1':
       case '1m':
         return '1m';
+      case '3':
+      case '3m':
+        return '3m';
       case '5':
       case '5m':
         return '5m';
       case '15':
       case '15m':
         return '15m';
+      case '30':
+      case '30m':
+        return '30m';
       case '60':
       case '1h':
       case '60m':
         return '1h';
+      case '120':
+      case '2h':
+      case '120m':
+        return '2h';
       case '240':
       case '4h':
       case '240m':
         return '4h';
+      case '360':
+      case '6h':
+      case '360m':
+        return '6h';
+      case '720':
+      case '12h':
+      case '720m':
+        return '12h';
       case 'D':
       case '1D':
       case '1d':
+      case '86400':
+        return '1D';
       case 'W':
       case '1W':
       case '1w':
-        return '1D';
+      case '604800':
+        return '1W';
+      case 'M':
+      case '1M':
+      case '1mth':
+      case '1mo':
+      case '2592000':
+        return '1M';
       default:
         return '15m';
     }

@@ -10,7 +10,10 @@
 import { TradingPairItem, TradeItem } from '../../types/index.js';
 
 export type ChartMode = 'DOMINEX' | 'TRADINGVIEW';
-export type Timeframe = '1m' | '5m' | '15m' | '1h' | '4h' | '1d' | '1w';
+export type Timeframe = 
+  | '1m' | '3m' | '5m' | '15m' | '30m' 
+  | '1h' | '2h' | '4h' | '6h' | '12h' 
+  | '1d' | '1D' | '1w' | '1W' | '1M';
 
 export interface ChartSharedProps {
   pair: TradingPairItem;
@@ -29,7 +32,10 @@ export interface Bar {
   volume?: number;
 }
 
-export type ResolutionString = '1' | '5' | '15' | '60' | '240' | '1D' | 'D' | '1W' | 'W' | string;
+export type ResolutionString = 
+  | '1' | '3' | '5' | '15' | '30' 
+  | '60' | '120' | '240' | '360' | '720' 
+  | '1D' | 'D' | '1W' | 'W' | '1M' | 'M' | string;
 
 export interface PeriodParams {
   from: number; // Unix timestamp in seconds

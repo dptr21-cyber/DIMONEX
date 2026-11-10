@@ -98,15 +98,9 @@ export class DepthLiquidityBotExecutor {
       ? (cfg.price_randomization_ticks !== undefined ? Math.max(1, cfg.price_randomization_ticks) : (bot.pairId === 'USDT-IDR' ? 2 : 2))
       : 0;
 
-    // Check if Custom Bounds Mode is active (explicit or filled min/max bounds)
-    const isCustomBounds = cfg.price_mode === 'CUSTOM_BOUNDS' ||
-      cfg.reference_price_source === 'NONE' ||
-      Boolean(
-        cfg.min_limit_buy_price &&
-        cfg.max_limit_buy_price &&
-        cfg.min_limit_sell_price &&
-        cfg.max_limit_sell_price
-      );
+    // Check if Custom Bounds Mode is active: strictly adhere to price_mode setting
+    // Only fall back to custom bounds if price_mode is explicitly CUSTOM_BOUNDS or reference source is explicitly NONE
+    const isCustomBounds = cfg.price_mode === 'CUSTOM_BOUNDS' || cfg.reference_price_source === 'NONE';
 
     let baseRefPrice = 0;
     let minBuyPrice = 0;
@@ -191,7 +185,7 @@ export class DepthLiquidityBotExecutor {
     const book = matchingEngine.getOrderBook(bot.pairId);
     const botPrefix = `bot-dp-${bot.id.slice(4, 10)}`;
     const currentLiveBotOrders = [...book.bids, ...book.asks].filter(
-      o => o.userId === bot.accountId || (o.clientOrderId && o.clientOrderId.startsWith(botPrefix))
+      o => (o.clientOrderId && o.clientOrderId.startsWith(botPrefix)) || (cfg?.activeOrderIds && cfg.activeOrderIds.includes(o.id))
     );
 
     const hasLiveOrders = currentLiveBotOrders.length > 0;
@@ -223,8 +217,10 @@ export class DepthLiquidityBotExecutor {
     const usedAskPriceUnits = new Set<string>();
 
     const spacingMode = cfg.spacing_mode || (isCustomBounds ? 'LINEAR' : (bot.pairId === 'USDT-IDR' ? 'FIXED_IDR' : 'PERCENT_BPS'));
-    const defaultSpacingForPair = bot.pairId === 'USDT-IDR' ? 60 : bot.pairId === 'ETH-IDR' ? 100000 : 1000000;
-    const spacingStep = Math.max(1, cfg.level_spacing_idr || defaultSpacingForPair);
+    // Dynamic proportional step based on market price (~0.5% per level, min tickSize)
+    const dynamicProportionalStep = Math.max(tickSize, Math.round(((baseRefPrice || 1000) * 0.005) / tickSize) * tickSize);
+    const defaultSpacingForPair = bot.pairId === 'USDT-IDR' ? 60 : bot.pairId === 'ETH-IDR' ? 100000 : dynamicProportionalStep;
+    const spacingStep = Math.max(tickSize, cfg.level_spacing_idr || defaultSpacingForPair);
 
     const bidOffsets = (cfg.bid_level_offsets_bps && cfg.bid_level_offsets_bps.length > 0)
       ? cfg.bid_level_offsets_bps
@@ -234,13 +230,23 @@ export class DepthLiquidityBotExecutor {
       ? cfg.ask_level_offsets_bps
       : [10, 25, 50, 80, 120];
 
+    const minPairOrderFloat = Number(BigInt(pair.minOrderSize || '1000')) / (10 ** baseDecimals);
+    const defaultTokenQty = Math.max(minPairOrderFloat, bot.pairId === 'USDT-IDR' ? 25.0 : bot.pairId.startsWith('BTC') ? 0.01 : 1.0);
+    const defaultQtyStrings = [
+      defaultTokenQty.toFixed(bot.pairId === 'USDT-IDR' ? 2 : 4),
+      (defaultTokenQty * 1.5).toFixed(bot.pairId === 'USDT-IDR' ? 2 : 4),
+      (defaultTokenQty * 2.0).toFixed(bot.pairId === 'USDT-IDR' ? 2 : 4),
+      (defaultTokenQty * 3.0).toFixed(bot.pairId === 'USDT-IDR' ? 2 : 4),
+      (defaultTokenQty * 5.0).toFixed(bot.pairId === 'USDT-IDR' ? 2 : 4)
+    ];
+
     const bidQuantities = (cfg.bid_quantities && cfg.bid_quantities.length > 0)
       ? cfg.bid_quantities
-      : (bot.pairId === 'USDT-IDR' ? ['25.0', '50.0', '75.0', '100.0', '150.0'] : ['0.02', '0.05', '0.10', '0.15', '0.20']);
+      : defaultQtyStrings;
 
     const askQuantities = (cfg.ask_quantities && cfg.ask_quantities.length > 0)
       ? cfg.ask_quantities
-      : (bot.pairId === 'USDT-IDR' ? ['25.0', '50.0', '75.0', '100.0', '150.0'] : ['0.02', '0.05', '0.10', '0.15', '0.20']);
+      : defaultQtyStrings;
 
     const tickQuoteUnits = PrecisionMath.parseToUnits(tickSize.toString(), quoteDecimals);
     let lastBidUnits: bigint | null = null;
@@ -550,9 +556,9 @@ export class DepthLiquidityBotExecutor {
     const book = matchingEngine.getOrderBook(bot.pairId);
     const botPrefix = `bot-dp-${bot.id.slice(4, 10)}`;
 
-    // Reconcile: Get ALL live order IDs on the book belonging to this bot/account
+    // Reconcile: Get live order IDs on the book belonging strictly to THIS bot
     const liveBookOrderIds = [...book.bids, ...book.asks]
-      .filter(o => o.userId === bot.accountId || (o.clientOrderId && o.clientOrderId.startsWith(botPrefix)))
+      .filter(o => (o.clientOrderId && o.clientOrderId.startsWith(botPrefix)) || (cfg?.activeOrderIds && cfg.activeOrderIds.includes(o.id)))
       .map(o => o.id);
 
     const idsToCancel = [...(cfg?.activeOrderIds || []), ...bot.deployedOrderIds, ...liveBookOrderIds];

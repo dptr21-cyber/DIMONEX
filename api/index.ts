@@ -21,7 +21,17 @@ import { botRouter } from '../server/routes/bot.js';
 import { mmConsoleRouter } from '../server/routes/mmConsole.js';
 import { observabilityRouter } from '../server/routes/observability.js';
 
+import { db } from '../server/db/database.js';
+
 const app = express();
+
+// Ensure in-memory state is synchronized with disk across serverless requests
+app.use((req, res, next) => {
+  try {
+    db.reloadIfChanged();
+  } catch {}
+  next();
+});
 
 // CORS Headers for Vercel Serverless environment
 app.use((req, res, next) => {

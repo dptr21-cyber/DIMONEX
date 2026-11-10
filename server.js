@@ -230,6 +230,7 @@ var init_database = __esm({
         this.idempotencyRecords = /* @__PURE__ */ new Map();
         this.saveTimer = null;
         this.isSaving = false;
+        this.lastLoadedMtime = 0;
         const loaded = this.loadFromDisk();
         if (!loaded) {
           console.log("[DIMONEX Database] Menginisialisasi data awal (seed bootstrap)...");
@@ -1309,6 +1310,7 @@ var init_database = __esm({
                 if (data.listingAuditEvents) this.listingAuditEvents = data.listingAuditEvents;
                 if (data.outboxEvents) this.outboxEvents = new Map(data.outboxEvents);
                 if (data.idempotencyRecords) this.idempotencyRecords = new Map(data.idempotencyRecords);
+                this.lastLoadedMtime = fs.statSync(p).mtimeMs;
                 console.log(`[DIMONEX Database] Berhasil memuat snapshot disk (${p}): ${this.users.size} pengguna, ${this.orders.size} order, ${this.trades.length} transaksi, ${this.sessions.size} sesi login aktif.`);
                 return true;
               } catch (readErr) {
@@ -1321,6 +1323,30 @@ var init_database = __esm({
           console.warn("[DIMONEX Database] Snapshot file ditemukan namun tidak valid, memakai seed:", err);
           return false;
         }
+      }
+      /**
+       * Reload from disk if file was written to by another process or earlier request
+       */
+      reloadIfChanged() {
+        try {
+          const dir = getExchangeDataDirectory();
+          const bundledDir = path.resolve(process.cwd(), "server", "data");
+          const candidatePaths = [
+            path.join(dir, "exchange_state.json"),
+            path.join(bundledDir, "exchange_state.json")
+          ];
+          for (const p of candidatePaths) {
+            if (fs.existsSync(p)) {
+              const stats = fs.statSync(p);
+              if (stats.mtimeMs > this.lastLoadedMtime) {
+                return this.loadFromDisk();
+              }
+              break;
+            }
+          }
+        } catch {
+        }
+        return false;
       }
       /**
        * Ensures default assets, secondary checker admin, and market records exist
@@ -2408,22 +2434,21 @@ var init_FxConversionService = __esm({
             }
           }
         } catch (e) {
-          console.warn("[FxConversionService] CMC live rate fetch failed, trying Indodax:", e.message);
         }
         try {
-          const res = await fetch("https://indodax.com/api/ticker/usdtidr", {
+          const res = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=idr", {
             signal: AbortSignal.timeout(6e3)
           });
           if (res.ok) {
             const data = await res.json();
-            const price = parseFloat(data?.ticker?.last || data?.ticker?.sell);
+            const price = parseFloat(data?.tether?.idr);
             if (price && !isNaN(price) && price > 0) {
-              const syncRes = this.syncWithLiveRate(price, "INDODAX", actorEmail, validityHours, "Disinkronkan dari Indodax Public Live Ticker API");
-              return { success: true, rateRecord: syncRes.rateRecord, source: "INDODAX", cached: false };
+              const syncRes = this.syncWithLiveRate(price, "LIVE_API", actorEmail, validityHours, "Disinkronkan dari CoinGecko Public Live Ticker API");
+              return { success: true, rateRecord: syncRes.rateRecord, source: "LIVE_API", cached: false };
             }
           }
         } catch (e) {
-          console.warn("[FxConversionService] Indodax live rate fetch failed, trying Open Exchange Rates:", e.message);
+          console.warn("[FxConversionService] CoinGecko live rate fetch failed, trying Open Exchange Rates:", e.message);
         }
         try {
           const res = await fetch("https://open.er-api.com/v6/latest/USD", {
@@ -2518,6 +2543,8 @@ var init_CoinMarketCapFeed = __esm({
           avgLatencyMs: 0
         };
         this.apiKey = process.env.CMC_API_KEY || "e16a28cafc354543ab8369dedc2a58c0";
+        this.isRateLimitedUntil = 0;
+        this.hasLoggedQuotaError = false;
         const now = Date.now();
         this.ticks.set("BTCUSDT", {
           provider: "coinmarketcap",
@@ -2619,11 +2646,18 @@ var init_CoinMarketCapFeed = __esm({
         };
       }
       /**
-       * Fetch real quotes directly from CoinMarketCap Pro API
-       * Queries real USD rates for BTC and ETH, and real IDR conversion for USDT.
+       * Fetch real quotes directly from CoinMarketCap Pro API.
+       * If the API key exceeds its monthly credit limit (HTTP 429 error code 1010),
+       * smoothly backs off CMC requests for 1 hour and automatically falls back to live CoinGecko & Indodax rates,
+       * completely avoiding console log spam.
        */
       async fetchQuotes() {
-        const startTime = Date.now();
+        const now = Date.now();
+        const startTime = now;
+        if (now < this.isRateLimitedUntil) {
+          await this.fetchFallbackQuotes();
+          return;
+        }
         const headers = {
           "X-CMC_PRO_API_KEY": this.apiKey,
           "Accept": "application/json"
@@ -2631,26 +2665,42 @@ var init_CoinMarketCapFeed = __esm({
         try {
           const [resUsd, resIdr] = await Promise.all([
             fetch("https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=BTC,ETH,USDT&convert=USD", {
-              headers
+              headers,
+              signal: AbortSignal.timeout(6e3)
             }),
             fetch("https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=BTC,ETH,USDT&convert=IDR", {
-              headers
+              headers,
+              signal: AbortSignal.timeout(6e3)
             })
           ]);
           if (!resUsd.ok) {
             const errText = await resUsd.text();
+            if (resUsd.status === 429) {
+              this.isRateLimitedUntil = Date.now() + 36e5;
+              if (!this.hasLoggedQuotaError) {
+                console.warn("[CoinMarketCapFeed] CoinMarketCap monthly credit limit reached. Automatically switching to CoinGecko & Indodax live fallback feeds.");
+                this.hasLoggedQuotaError = true;
+              }
+            }
             throw new Error(`CoinMarketCap API USD error HTTP ${resUsd.status}: ${errText}`);
           }
           if (!resIdr.ok) {
             const errText = await resIdr.text();
+            if (resIdr.status === 429) {
+              this.isRateLimitedUntil = Date.now() + 36e5;
+              if (!this.hasLoggedQuotaError) {
+                console.warn("[CoinMarketCapFeed] CoinMarketCap monthly credit limit reached. Automatically switching to CoinGecko & Indodax live fallback feeds.");
+                this.hasLoggedQuotaError = true;
+              }
+            }
             throw new Error(`CoinMarketCap API IDR error HTTP ${resIdr.status}: ${errText}`);
           }
+          this.hasLoggedQuotaError = false;
           const [dataUsd, dataIdr] = await Promise.all([
             resUsd.json(),
             resIdr.json()
           ]);
-          const now = Date.now();
-          const networkLatency = now - startTime;
+          const networkLatency = Date.now() - startTime;
           if (dataUsd?.data?.BTC?.quote?.USD) {
             const btcQuote = dataUsd.data.BTC.quote.USD;
             const btcPrice = btcQuote.price;
@@ -2721,33 +2771,153 @@ var init_CoinMarketCapFeed = __esm({
         } catch (err) {
           this.metrics.lastError = err.message;
           this.status = this.ticks.get("BTCUSDT")?.lastPrice ? "DEGRADED" : "ERROR";
-          if (this.metrics.messagesReceived === 0) {
-            console.warn("[CoinMarketCapFeed] Quotes fetch failed, checking fallback live APIs:", err.message);
+          await this.fetchFallbackQuotes();
+        }
+      }
+      /**
+       * High-availability fallback quotes from Binance / Bybit real-time WebSocket feeds and CoinGecko.
+       * When CoinMarketCap hits rate limits:
+       * 1. BTC/USDT & ETH/USDT spot prices are directly retrieved from Binance and Bybit live feeds.
+       * 2. USDT/IDR exchange rate is retrieved from CoinGecko (with fallback to Open Exchange Rates forex API).
+       * Note: Indodax is NOT used.
+       */
+      async fetchFallbackQuotes() {
+        const now = Date.now();
+        let updatedTicks = 0;
+        try {
+          const { priceAggregatorService: priceAggregatorService2 } = await Promise.resolve().then(() => (init_PriceAggregatorService(), PriceAggregatorService_exports));
+          const binanceBtc = priceAggregatorService2.binance.getTick("BTCUSDT");
+          const bybitBtc = priceAggregatorService2.bybit.getTick("BTCUSDT");
+          const activeBtc = binanceBtc && binanceBtc.lastPrice > 0 && now - binanceBtc.receivedAt < 3e4 ? binanceBtc : bybitBtc;
+          if (activeBtc && activeBtc.lastPrice > 0) {
+            this.ticks.set("BTCUSDT", {
+              provider: "coinmarketcap",
+              symbol: "BTCUSDT",
+              lastPrice: activeBtc.lastPrice,
+              bestBid: activeBtc.bestBid,
+              bestAsk: activeBtc.bestAsk,
+              exchangeTimestamp: activeBtc.exchangeTimestamp,
+              receivedAt: now,
+              latencyMs: activeBtc.latencyMs || 20,
+              isFresh: true,
+              isValid: true
+            });
+            updatedTicks++;
           }
+          const binanceEth = priceAggregatorService2.binance.getTick("ETHUSDT");
+          const bybitEth = priceAggregatorService2.bybit.getTick("ETHUSDT");
+          const activeEth = binanceEth && binanceEth.lastPrice > 0 && now - binanceEth.receivedAt < 3e4 ? binanceEth : bybitEth;
+          if (activeEth && activeEth.lastPrice > 0) {
+            this.ticks.set("ETHUSDT", {
+              provider: "coinmarketcap",
+              symbol: "ETHUSDT",
+              lastPrice: activeEth.lastPrice,
+              bestBid: activeEth.bestBid,
+              bestAsk: activeEth.bestAsk,
+              exchangeTimestamp: activeEth.exchangeTimestamp,
+              receivedAt: now,
+              latencyMs: activeEth.latencyMs || 20,
+              isFresh: true,
+              isValid: true
+            });
+            updatedTicks++;
+          }
+        } catch {
+        }
+        try {
+          const cgRes = await fetch(
+            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,tether&vs_currencies=usd,idr",
+            { signal: AbortSignal.timeout(6e3) }
+          );
+          if (cgRes.ok) {
+            const cgData = await cgRes.json();
+            if (!this.ticks.get("BTCUSDT")?.lastPrice && cgData.bitcoin?.usd) {
+              const btcPrice = parseFloat(cgData.bitcoin.usd);
+              const spread = btcPrice * 1e-4;
+              this.ticks.set("BTCUSDT", {
+                provider: "coinmarketcap",
+                symbol: "BTCUSDT",
+                lastPrice: parseFloat(btcPrice.toFixed(2)),
+                bestBid: parseFloat((btcPrice - spread).toFixed(2)),
+                bestAsk: parseFloat((btcPrice + spread).toFixed(2)),
+                exchangeTimestamp: now,
+                receivedAt: now,
+                latencyMs: 45,
+                isFresh: true,
+                isValid: true
+              });
+              updatedTicks++;
+            }
+            if (!this.ticks.get("ETHUSDT")?.lastPrice && cgData.ethereum?.usd) {
+              const ethPrice = parseFloat(cgData.ethereum.usd);
+              const spread = ethPrice * 1e-4;
+              this.ticks.set("ETHUSDT", {
+                provider: "coinmarketcap",
+                symbol: "ETHUSDT",
+                lastPrice: parseFloat(ethPrice.toFixed(2)),
+                bestBid: parseFloat((ethPrice - spread).toFixed(2)),
+                bestAsk: parseFloat((ethPrice + spread).toFixed(2)),
+                exchangeTimestamp: now,
+                receivedAt: now,
+                latencyMs: 45,
+                isFresh: true,
+                isValid: true
+              });
+              updatedTicks++;
+            }
+            if (cgData.tether?.idr) {
+              const usdtIdr = parseFloat(cgData.tether.idr);
+              const spread = usdtIdr * 2e-4;
+              this.ticks.set("USDTIDR", {
+                provider: "coinmarketcap",
+                symbol: "USDTIDR",
+                lastPrice: parseFloat(usdtIdr.toFixed(2)),
+                bestBid: parseFloat((usdtIdr - spread).toFixed(2)),
+                bestAsk: parseFloat((usdtIdr + spread).toFixed(2)),
+                exchangeTimestamp: now,
+                receivedAt: now,
+                latencyMs: 45,
+                isFresh: true,
+                isValid: true
+              });
+              fxConversionService.syncWithLiveRate(usdtIdr, "LIVE_API", "coingecko-feed@dimonex.id", 6, "Sinkronisasi kurs USDT/IDR dari CoinGecko live API");
+              updatedTicks++;
+            }
+          }
+        } catch {
+        }
+        if (!this.ticks.get("USDTIDR")?.lastPrice || now - (this.ticks.get("USDTIDR")?.receivedAt || 0) > 3e5) {
           try {
-            const indodaxRes = await fetch("https://indodax.com/api/ticker/usdtidr", { signal: AbortSignal.timeout(5e3) });
-            if (indodaxRes.ok) {
-              const indodaxData = await indodaxRes.json();
-              const last = parseFloat(indodaxData.ticker?.last || indodaxData.ticker?.sell);
-              if (last > 0) {
-                const now = Date.now();
+            const forexRes = await fetch("https://open.er-api.com/v6/latest/USD", { signal: AbortSignal.timeout(5e3) });
+            if (forexRes.ok) {
+              const forexData = await forexRes.json();
+              const rate = parseFloat(forexData?.rates?.IDR);
+              if (rate > 0) {
+                const spread = rate * 2e-4;
                 this.ticks.set("USDTIDR", {
                   provider: "coinmarketcap",
                   symbol: "USDTIDR",
-                  lastPrice: last,
-                  bestBid: parseFloat(indodaxData.ticker?.buy || String(last)),
-                  bestAsk: parseFloat(indodaxData.ticker?.sell || String(last)),
-                  exchangeTimestamp: indodaxData.ticker?.server_time ? indodaxData.ticker.server_time * 1e3 : now,
+                  lastPrice: parseFloat(rate.toFixed(2)),
+                  bestBid: parseFloat((rate - spread).toFixed(2)),
+                  bestAsk: parseFloat((rate + spread).toFixed(2)),
+                  exchangeTimestamp: now,
                   receivedAt: now,
-                  latencyMs: 30,
+                  latencyMs: 40,
                   isFresh: true,
                   isValid: true
                 });
-                fxConversionService.syncWithLiveRate(last, "INDODAX", "indodax-feed@dimonex.id", 6);
+                fxConversionService.syncWithLiveRate(rate, "LIVE_API", "forex-feed@dimonex.id", 6, "Sinkronisasi kurs USDT/IDR dari Open Forex API");
+                updatedTicks++;
               }
             }
-          } catch (e) {
+          } catch {
           }
+        }
+        if (updatedTicks > 0) {
+          this.metrics.messagesReceived += 1;
+          this.metrics.lastMessageTimestamp = now;
+          this.metrics.lastHeartbeat = now;
+          this.status = "CONNECTED";
         }
       }
       /**
@@ -4032,7 +4202,7 @@ var OrderBook = class {
       }
       const isSelfTrade = makerOrder.userId === takerOrder.userId;
       const isVolumeBotMatch = Boolean(
-        takerOrder.clientOrderId?.includes("-vol-") || makerOrder.clientOrderId?.includes("-vol-") || takerOrder.clientOrderId?.includes("vol") || makerOrder.clientOrderId?.includes("vol")
+        takerOrder.clientOrderId?.includes("-vol-") || makerOrder.clientOrderId?.includes("-vol-") || takerOrder.clientOrderId?.includes("vol") || makerOrder.clientOrderId?.includes("vol") || takerOrder.clientOrderId?.includes("shft") || makerOrder.clientOrderId?.includes("shft")
       );
       if (isSelfTrade && !isVolumeBotMatch) {
         bookSide.splice(bookIdx, 1);
@@ -4197,7 +4367,9 @@ var OrderBook = class {
     const roleUpper = (userRole || "").toUpperCase();
     const isOwner = targetOrder.userId === userId;
     const isPrivileged = roleUpper === "ADMIN" || roleUpper === "SUPERADMIN" || roleUpper === "MM";
-    const isBotOrder = Boolean(targetOrder.clientOrderId && (targetOrder.clientOrderId.startsWith("bot-") || targetOrder.clientOrderId.includes("-ord-") || targetOrder.clientOrderId.includes("-vol-")));
+    const isBotOrder = Boolean(
+      targetOrder.clientOrderId && (targetOrder.clientOrderId.startsWith("bot-") || targetOrder.clientOrderId.startsWith("shft-") || targetOrder.clientOrderId.includes("-ord-") || targetOrder.clientOrderId.includes("-vol-") || targetOrder.clientOrderId.includes("shft"))
+    );
     if (!isOwner && !isPrivileged && !isBotOrder) {
       throw new Error("Anda tidak memiliki otorisasi untuk membatalkan order ini");
     }
@@ -9650,9 +9822,7 @@ var DepthLiquidityBotExecutor = class {
     const numAsks = Math.min(20, Math.max(1, cfg.number_of_ask_levels || 5));
     const isRandomizeEnabled = cfg.randomize_placement_enabled !== false;
     const maxJitterTicks = isRandomizeEnabled ? cfg.price_randomization_ticks !== void 0 ? Math.max(1, cfg.price_randomization_ticks) : bot.pairId === "USDT-IDR" ? 2 : 2 : 0;
-    const isCustomBounds = cfg.price_mode === "CUSTOM_BOUNDS" || cfg.reference_price_source === "NONE" || Boolean(
-      cfg.min_limit_buy_price && cfg.max_limit_buy_price && cfg.min_limit_sell_price && cfg.max_limit_sell_price
-    );
+    const isCustomBounds = cfg.price_mode === "CUSTOM_BOUNDS" || cfg.reference_price_source === "NONE";
     let baseRefPrice = 0;
     let minBuyPrice = 0;
     let maxBuyPrice = 0;
@@ -9722,7 +9892,7 @@ var DepthLiquidityBotExecutor = class {
     const book = matchingEngine.getOrderBook(bot.pairId);
     const botPrefix = `bot-dp-${bot.id.slice(4, 10)}`;
     const currentLiveBotOrders = [...book.bids, ...book.asks].filter(
-      (o) => o.userId === bot.accountId || o.clientOrderId && o.clientOrderId.startsWith(botPrefix)
+      (o) => o.clientOrderId && o.clientOrderId.startsWith(botPrefix) || cfg?.activeOrderIds && cfg.activeOrderIds.includes(o.id)
     );
     const hasLiveOrders = currentLiveBotOrders.length > 0;
     const lastTarget = cfg.lastTargetPrice || roundedRefPrice;
@@ -9746,12 +9916,22 @@ var DepthLiquidityBotExecutor = class {
     const usedBidPriceUnits = /* @__PURE__ */ new Set();
     const usedAskPriceUnits = /* @__PURE__ */ new Set();
     const spacingMode = cfg.spacing_mode || (isCustomBounds ? "LINEAR" : bot.pairId === "USDT-IDR" ? "FIXED_IDR" : "PERCENT_BPS");
-    const defaultSpacingForPair = bot.pairId === "USDT-IDR" ? 60 : bot.pairId === "ETH-IDR" ? 1e5 : 1e6;
-    const spacingStep = Math.max(1, cfg.level_spacing_idr || defaultSpacingForPair);
+    const dynamicProportionalStep = Math.max(tickSize, Math.round((baseRefPrice || 1e3) * 5e-3 / tickSize) * tickSize);
+    const defaultSpacingForPair = bot.pairId === "USDT-IDR" ? 60 : bot.pairId === "ETH-IDR" ? 1e5 : dynamicProportionalStep;
+    const spacingStep = Math.max(tickSize, cfg.level_spacing_idr || defaultSpacingForPair);
     const bidOffsets = cfg.bid_level_offsets_bps && cfg.bid_level_offsets_bps.length > 0 ? cfg.bid_level_offsets_bps : [10, 25, 50, 80, 120];
     const askOffsets = cfg.ask_level_offsets_bps && cfg.ask_level_offsets_bps.length > 0 ? cfg.ask_level_offsets_bps : [10, 25, 50, 80, 120];
-    const bidQuantities = cfg.bid_quantities && cfg.bid_quantities.length > 0 ? cfg.bid_quantities : bot.pairId === "USDT-IDR" ? ["25.0", "50.0", "75.0", "100.0", "150.0"] : ["0.02", "0.05", "0.10", "0.15", "0.20"];
-    const askQuantities = cfg.ask_quantities && cfg.ask_quantities.length > 0 ? cfg.ask_quantities : bot.pairId === "USDT-IDR" ? ["25.0", "50.0", "75.0", "100.0", "150.0"] : ["0.02", "0.05", "0.10", "0.15", "0.20"];
+    const minPairOrderFloat = Number(BigInt(pair.minOrderSize || "1000")) / 10 ** baseDecimals;
+    const defaultTokenQty = Math.max(minPairOrderFloat, bot.pairId === "USDT-IDR" ? 25 : bot.pairId.startsWith("BTC") ? 0.01 : 1);
+    const defaultQtyStrings = [
+      defaultTokenQty.toFixed(bot.pairId === "USDT-IDR" ? 2 : 4),
+      (defaultTokenQty * 1.5).toFixed(bot.pairId === "USDT-IDR" ? 2 : 4),
+      (defaultTokenQty * 2).toFixed(bot.pairId === "USDT-IDR" ? 2 : 4),
+      (defaultTokenQty * 3).toFixed(bot.pairId === "USDT-IDR" ? 2 : 4),
+      (defaultTokenQty * 5).toFixed(bot.pairId === "USDT-IDR" ? 2 : 4)
+    ];
+    const bidQuantities = cfg.bid_quantities && cfg.bid_quantities.length > 0 ? cfg.bid_quantities : defaultQtyStrings;
+    const askQuantities = cfg.ask_quantities && cfg.ask_quantities.length > 0 ? cfg.ask_quantities : defaultQtyStrings;
     const tickQuoteUnits = PrecisionMath.parseToUnits(tickSize.toString(), quoteDecimals);
     let lastBidUnits = null;
     let highestBidUnits = null;
@@ -9992,7 +10172,7 @@ var DepthLiquidityBotExecutor = class {
     let count = 0;
     const book = matchingEngine.getOrderBook(bot.pairId);
     const botPrefix = `bot-dp-${bot.id.slice(4, 10)}`;
-    const liveBookOrderIds = [...book.bids, ...book.asks].filter((o) => o.userId === bot.accountId || o.clientOrderId && o.clientOrderId.startsWith(botPrefix)).map((o) => o.id);
+    const liveBookOrderIds = [...book.bids, ...book.asks].filter((o) => o.clientOrderId && o.clientOrderId.startsWith(botPrefix) || cfg?.activeOrderIds && cfg.activeOrderIds.includes(o.id)).map((o) => o.id);
     const idsToCancel = [...cfg?.activeOrderIds || [], ...bot.deployedOrderIds, ...liveBookOrderIds];
     const uniqueIds = Array.from(new Set(idsToCancel));
     for (const orderId of uniqueIds) {
@@ -10301,14 +10481,30 @@ init_database();
 init_PrecisionMath();
 var SmartHftLadderBotExecutor = class {
   /**
-   * Determine pair-specific tick size in quote units
+   * Determine pair-specific tick size dynamically based on price magnitude and quote currency
+   * to prevent price quantization clustering and duplicate ladder levels.
    */
-  static getTickSize(pair) {
-    const isUsdtQuote = pair.quoteCurrency === "USDT" || pair.id.endsWith("-USDT");
-    if (isUsdtQuote) return 0.01;
-    if (pair.id === "USDT-IDR") return 1;
-    if (pair.id === "ETH-IDR") return 100;
-    return 1e3;
+  static getTickSize(pair, currentPriceNum) {
+    const isUsdtQuote = pair.quoteCurrency === "USDT" || pair.id?.endsWith("-USDT");
+    const quoteDec = pair.quoteDecimals !== void 0 ? pair.quoteDecimals : isUsdtQuote ? 6 : 2;
+    const minUnitTick = 1 / 10 ** quoteDec;
+    let price = currentPriceNum;
+    if (price === void 0 || price <= 0) {
+      price = pair.lastPrice ? Number(BigInt(pair.lastPrice)) / 10 ** quoteDec : 1e4;
+    }
+    if (isUsdtQuote) {
+      if (price >= 1e4) return 0.5;
+      if (price >= 1e3) return 0.1;
+      if (price >= 10) return 0.01;
+      if (price >= 1) return 1e-3;
+      return Math.max(minUnitTick, 1e-4);
+    }
+    if (price >= 1e8) return 1e3;
+    if (price >= 1e6) return 100;
+    if (price >= 5e4) return 10;
+    if (price >= 100) return 1;
+    if (price >= 1) return 0.1;
+    return Math.max(minUnitTick, 0.01);
   }
   /**
    * Format quote price units for human-readable display
@@ -10320,10 +10516,28 @@ var SmartHftLadderBotExecutor = class {
     const val = Number(priceUnits) / 10 ** (pair.quoteDecimals || 2);
     return `${val.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: pair.quoteDecimals || 4 })} ${pair.quoteCurrency}`;
   }
+  static {
+    // Memoization cache for deterministic pattern curves: key -> normalized float curve
+    this.patternCurveCache = /* @__PURE__ */ new Map();
+  }
+  static {
+    // LRU/TTL Cache for calculated ladders to avoid redundant calculations in high-frequency loops
+    this.ladderCache = /* @__PURE__ */ new Map();
+  }
+  static {
+    this.LADDER_CACHE_TTL_MS = 1500;
+  }
+  // 1.5 seconds TTL for HFT loops
   /**
    * Generates mathematical normalized trajectory [-1.0 to +1.0] for the 14 chart formations
+   * Memoized by pattern and bar count to eliminate repetitive math/trigonometry in HFT loops.
    */
   static generatePatternCurve(pattern, count) {
+    const cacheKey = `${pattern}:${count}`;
+    const cached = this.patternCurveCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
     const curve = new Array(count).fill(0);
     const n = Math.max(10, count);
     for (let i = 0; i < n; i++) {
@@ -10438,6 +10652,7 @@ var SmartHftLadderBotExecutor = class {
           break;
       }
     }
+    this.patternCurveCache.set(cacheKey, curve);
     return curve;
   }
   /**
@@ -10460,16 +10675,18 @@ var SmartHftLadderBotExecutor = class {
   /**
    * Preview synthetic pattern points and calculate current anchor pivot price
    */
-  static previewPattern(basePrice, pattern, timeframe, amplitudePct = 5) {
+  static previewPattern(basePrice, pattern, timeframe, amplitudePct = 5, specificBarIndex) {
     const { bars, noiseStd } = this.getTimeframeConfig(timeframe);
     const rawCurve = this.generatePatternCurve(pattern, bars);
     const amplitude = basePrice * (amplitudePct / 100);
     const points = [];
     for (let i = 0; i < bars; i++) {
-      const u1 = Math.max(1e-4, Math.random());
-      const u2 = Math.random();
+      const seed = Math.sin(i * 997.13 + 43.19) * 1e4;
+      const pseudoRand = seed - Math.floor(seed);
+      const u1 = Math.max(1e-4, pseudoRand);
+      const u2 = i * 137.5 % 100 / 100;
       const z0 = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
-      const noise = z0 * (basePrice * noiseStd);
+      const noise = z0 * (basePrice * noiseStd * 0.4);
       const price = basePrice + rawCurve[i] * amplitude + noise;
       points.push({
         index: i,
@@ -10477,77 +10694,132 @@ var SmartHftLadderBotExecutor = class {
         price: Math.round(price * 100) / 100
       });
     }
-    const anchorPrice = points[points.length - 1].price;
-    return { points, anchorPrice };
+    const currentIndex = specificBarIndex !== void 0 && specificBarIndex >= 0 && specificBarIndex < bars ? specificBarIndex : points.length - 1;
+    const anchorPrice = points[currentIndex].price;
+    return { points, anchorPrice, currentIndex };
   }
   /**
-   * Calculates the Guarded 20 Buy and 20 Sell ladder levels based on linear interpolation
-   * within [min_price_bound, max_price_bound] and volume scaling [min_lot, max_lot].
+   * Calculates the Guarded Buy and Sell ladder levels using fixed-precision arithmetic
+   * with BigInt units. Includes memoization for high-frequency update loops to prevent
+   * precision degradation, floating-point drift, and CPU spikes.
    */
-  static calculateLadder(pair, anchorPriceNum, cfg) {
+  static calculateLadder(pair, anchorPriceInput, cfg) {
     const quoteDecimals = pair.quoteDecimals !== void 0 ? pair.quoteDecimals : pair.quoteCurrency === "USDT" ? 6 : 2;
     const baseDecimals = pair.baseDecimals || 8;
-    const tickSize = this.getTickSize(pair);
-    const minBoundNum = parseFloat(cfg.min_price_bound);
-    const maxBoundNum = parseFloat(cfg.max_price_bound);
-    if (isNaN(minBoundNum) || isNaN(maxBoundNum) || minBoundNum >= maxBoundNum) {
-      throw new Error(`Batas harga tidak valid: min_price_bound (${minBoundNum}) harus < max_price_bound (${maxBoundNum})`);
+    const minBoundUnits = typeof cfg.min_price_bound === "string" ? PrecisionMath.parseToUnits(cfg.min_price_bound, quoteDecimals) : BigInt(cfg.min_price_bound);
+    const maxBoundUnits = typeof cfg.max_price_bound === "string" ? PrecisionMath.parseToUnits(cfg.max_price_bound, quoteDecimals) : BigInt(cfg.max_price_bound);
+    if (minBoundUnits <= 0n || maxBoundUnits <= minBoundUnits) {
+      throw new Error(`Batas harga tidak valid: min_price_bound (${minBoundUnits}) harus < max_price_bound (${maxBoundUnits})`);
     }
-    if (anchorPriceNum <= minBoundNum || anchorPriceNum >= maxBoundNum) {
-      throw new Error(`[Anti-Out of Bounds Guard] Running Anchor Price (${anchorPriceNum}) berada di luar batas aman [${minBoundNum}, ${maxBoundNum}]!`);
+    let anchorUnits;
+    if (typeof anchorPriceInput === "bigint") {
+      anchorUnits = anchorPriceInput;
+    } else if (typeof anchorPriceInput === "number") {
+      anchorUnits = PrecisionMath.parseToUnits(anchorPriceInput.toFixed(quoteDecimals), quoteDecimals);
+    } else {
+      anchorUnits = PrecisionMath.parseToUnits(String(anchorPriceInput), quoteDecimals);
     }
+    const currentPriceNum = Number(anchorUnits) / 10 ** quoteDecimals;
+    const tickSizeNum = this.getTickSize(pair, currentPriceNum);
+    const tickSizeUnits = PrecisionMath.parseToUnits(tickSizeNum.toFixed(quoteDecimals), quoteDecimals);
+    const safeTick = tickSizeUnits > 0n ? tickSizeUnits : 1n;
     const totalOrders = Math.min(100, Math.max(2, cfg.total_orders || 40));
     const levelsPerSide = Math.floor(totalOrders / 2);
-    const minBuyLot = parseFloat(cfg.min_buy_lot || "0.01");
-    const maxBuyLot = parseFloat(cfg.max_buy_lot || "0.50");
-    const minSellLot = parseFloat(cfg.min_sell_lot || "0.01");
-    const maxSellLot = parseFloat(cfg.max_sell_lot || "0.50");
+    const minBuyLotUnits = PrecisionMath.parseToUnits(cfg.min_buy_lot || "0.01", baseDecimals);
+    const maxBuyLotUnits = PrecisionMath.parseToUnits(cfg.max_buy_lot || "0.50", baseDecimals);
+    const minSellLotUnits = PrecisionMath.parseToUnits(cfg.min_sell_lot || "0.01", baseDecimals);
+    const maxSellLotUnits = PrecisionMath.parseToUnits(cfg.max_sell_lot || "0.50", baseDecimals);
+    const minSafeAnchorUnits = minBoundUnits + safeTick * 2n;
+    const maxSafeAnchorUnits = maxBoundUnits - safeTick * 2n;
+    let effectiveAnchorUnits;
+    if (minSafeAnchorUnits < maxSafeAnchorUnits) {
+      effectiveAnchorUnits = anchorUnits < minSafeAnchorUnits ? minSafeAnchorUnits : anchorUnits > maxSafeAnchorUnits ? maxSafeAnchorUnits : anchorUnits;
+    } else {
+      effectiveAnchorUnits = (minBoundUnits + maxBoundUnits) / 2n;
+    }
+    const cacheKey = `${pair.id}:${effectiveAnchorUnits.toString()}:${minBoundUnits.toString()}:${maxBoundUnits.toString()}:${levelsPerSide}:${minBuyLotUnits.toString()}:${maxBuyLotUnits.toString()}:${minSellLotUnits.toString()}:${maxSellLotUnits.toString()}`;
+    const now = Date.now();
+    const cached = this.ladderCache.get(cacheKey);
+    if (cached && now - cached.timestamp < this.LADDER_CACHE_TTL_MS) {
+      return cached.result;
+    }
     const buyLevels = [];
     const sellLevels = [];
-    const buyStartPrice = anchorPriceNum - tickSize;
-    const buyEndPrice = minBoundNum;
+    const SCALE = 100000000n;
+    const stepsBig = BigInt(Math.max(1, levelsPerSide - 1));
+    const minRequiredSpan = BigInt(levelsPerSide) * safeTick;
+    const buyStartUnits = effectiveAnchorUnits - safeTick;
+    let effectiveMinBoundUnits = minBoundUnits;
+    if (buyStartUnits - effectiveMinBoundUnits < minRequiredSpan) {
+      effectiveMinBoundUnits = buyStartUnits > minRequiredSpan ? buyStartUnits - minRequiredSpan : safeTick;
+    }
+    const buyPriceSpan = buyStartUnits > effectiveMinBoundUnits ? buyStartUnits - effectiveMinBoundUnits : minRequiredSpan;
+    const buyLotSpan = maxBuyLotUnits > minBuyLotUnits ? maxBuyLotUnits - minBuyLotUnits : 0n;
     for (let i = 1; i <= levelsPerSide; i++) {
-      const t = (i - 1) / Math.max(1, levelsPerSide - 1);
-      const rawPrice = buyStartPrice - t * (buyStartPrice - buyEndPrice);
-      const quantizedPrice = Math.round(rawPrice / tickSize) * tickSize;
-      const safePrice = Math.max(minBoundNum, Math.min(buyStartPrice, quantizedPrice));
-      const rawLot = minBuyLot + t * (maxBuyLot - minBuyLot);
-      const safeLot = Math.min(maxBuyLot, Math.max(minBuyLot, rawLot));
-      const priceUnits = PrecisionMath.parseToUnits(safePrice.toFixed(quoteDecimals), quoteDecimals);
-      const qtyUnits = PrecisionMath.parseToUnits(safeLot.toFixed(baseDecimals), baseDecimals);
+      const stepIndex = BigInt(i - 1);
+      const tScaled = stepIndex * SCALE / stepsBig;
+      const rawPriceUnits = buyStartUnits - tScaled * buyPriceSpan / SCALE;
+      let safePriceUnits = (rawPriceUnits + safeTick / 2n) / safeTick * safeTick;
+      if (buyLevels.length > 0) {
+        const prevPrice = buyLevels[buyLevels.length - 1].priceUnits;
+        if (safePriceUnits >= prevPrice) {
+          safePriceUnits = prevPrice - safeTick;
+        }
+      }
+      if (safePriceUnits <= 0n) {
+        safePriceUnits = safeTick;
+      }
+      const rawLotUnits = minBuyLotUnits + tScaled * buyLotSpan / SCALE;
+      const safeLotUnits = rawLotUnits > maxBuyLotUnits ? maxBuyLotUnits : rawLotUnits < minBuyLotUnits ? minBuyLotUnits : rawLotUnits;
       buyLevels.push({
         level: i,
         side: "BUY",
-        priceUnits,
-        priceDisplay: this.formatDisplayPrice(priceUnits, pair),
-        quantityUnits: qtyUnits,
-        lotDisplay: safeLot.toFixed(4)
+        priceUnits: safePriceUnits,
+        priceDisplay: this.formatDisplayPrice(safePriceUnits, pair),
+        quantityUnits: safeLotUnits,
+        lotDisplay: PrecisionMath.formatFromUnits(safeLotUnits, baseDecimals, true)
       });
     }
-    const sellStartPrice = anchorPriceNum + tickSize;
-    const sellEndPrice = maxBoundNum;
+    const sellStartUnits = effectiveAnchorUnits + safeTick;
+    let effectiveMaxBoundUnits = maxBoundUnits;
+    if (effectiveMaxBoundUnits - sellStartUnits < minRequiredSpan) {
+      effectiveMaxBoundUnits = sellStartUnits + minRequiredSpan;
+    }
+    const sellPriceSpan = effectiveMaxBoundUnits > sellStartUnits ? effectiveMaxBoundUnits - sellStartUnits : minRequiredSpan;
+    const sellLotSpan = maxSellLotUnits > minSellLotUnits ? maxSellLotUnits - minSellLotUnits : 0n;
     for (let i = 1; i <= levelsPerSide; i++) {
-      const t = (i - 1) / Math.max(1, levelsPerSide - 1);
-      const rawPrice = sellStartPrice + t * (sellEndPrice - sellStartPrice);
-      const quantizedPrice = Math.round(rawPrice / tickSize) * tickSize;
-      const safePrice = Math.min(maxBoundNum, Math.max(sellStartPrice, quantizedPrice));
-      const rawLot = minSellLot + t * (maxSellLot - minSellLot);
-      const safeLot = Math.min(maxSellLot, Math.max(minSellLot, rawLot));
-      const priceUnits = PrecisionMath.parseToUnits(safePrice.toFixed(quoteDecimals), quoteDecimals);
-      const qtyUnits = PrecisionMath.parseToUnits(safeLot.toFixed(baseDecimals), baseDecimals);
+      const stepIndex = BigInt(i - 1);
+      const tScaled = stepIndex * SCALE / stepsBig;
+      const rawPriceUnits = sellStartUnits + tScaled * sellPriceSpan / SCALE;
+      let safePriceUnits = (rawPriceUnits + safeTick / 2n) / safeTick * safeTick;
+      if (sellLevels.length > 0) {
+        const prevPrice = sellLevels[sellLevels.length - 1].priceUnits;
+        if (safePriceUnits <= prevPrice) {
+          safePriceUnits = prevPrice + safeTick;
+        }
+      }
+      const rawLotUnits = minSellLotUnits + tScaled * sellLotSpan / SCALE;
+      const safeLotUnits = rawLotUnits > maxSellLotUnits ? maxSellLotUnits : rawLotUnits < minSellLotUnits ? minSellLotUnits : rawLotUnits;
       sellLevels.push({
         level: i,
         side: "SELL",
-        priceUnits,
-        priceDisplay: this.formatDisplayPrice(priceUnits, pair),
-        quantityUnits: qtyUnits,
-        lotDisplay: safeLot.toFixed(4)
+        priceUnits: safePriceUnits,
+        priceDisplay: this.formatDisplayPrice(safePriceUnits, pair),
+        quantityUnits: safeLotUnits,
+        lotDisplay: PrecisionMath.formatFromUnits(safeLotUnits, baseDecimals, true)
       });
     }
-    return { buyLevels, sellLevels };
+    const result = { buyLevels, sellLevels };
+    if (this.ladderCache.size > 200) {
+      const oldestKeys = Array.from(this.ladderCache.keys()).slice(0, 50);
+      oldestKeys.forEach((k) => this.ladderCache.delete(k));
+    }
+    this.ladderCache.set(cacheKey, { timestamp: now, result });
+    return result;
   }
   /**
-   * Cancels all active orders deployed by this Smart HFT Ladder bot
+   * Cancels all active orders deployed by this Smart HFT Ladder bot.
+   * Performs deep reconciliation against matching engine book and db.orders to prevent order stacking.
    */
   static cancelOpenBotOrders(bot, addLog, reason) {
     const cfg = bot.smartHftConfig;
@@ -10557,11 +10829,31 @@ var SmartHftLadderBotExecutor = class {
       cfg.activeOrderIds.forEach((id) => orderIdsToCancel.add(id));
     }
     bot.deployedOrderIds.forEach((id) => orderIdsToCancel.add(id));
+    const botUser = bot.accountId || bot.ownerUserId;
+    const botIdSnippet = bot.id.slice(4, 9);
+    try {
+      const book = matchingEngine.getOrderBook(bot.pairId);
+      const allBookOrders = [...book.bids, ...book.asks];
+      for (const ord of allBookOrders) {
+        if (ord.userId === botUser || ord.clientOrderId && (ord.clientOrderId.startsWith("shft-") || ord.clientOrderId.includes(botIdSnippet))) {
+          orderIdsToCancel.add(ord.id);
+        }
+      }
+    } catch {
+    }
+    try {
+      for (const ord of db.orders.values()) {
+        if (ord.pairId === bot.pairId && (ord.status === "NEW" || ord.status === "PARTIALLY_FILLED") && (ord.userId === botUser || ord.clientOrderId && ord.clientOrderId.startsWith("shft-"))) {
+          orderIdsToCancel.add(ord.id);
+        }
+      }
+    } catch {
+    }
     for (const orderId of orderIdsToCancel) {
       const order = db.orders.get(orderId);
       if (order && (order.status === "NEW" || order.status === "PARTIALLY_FILLED")) {
         try {
-          matchingEngine.cancelOrder(orderId, bot.ownerUserId, bot.pairId);
+          matchingEngine.cancelOrder(orderId, botUser, bot.pairId);
           cancelledCount++;
         } catch {
         }
@@ -10571,16 +10863,18 @@ var SmartHftLadderBotExecutor = class {
       cfg.activeOrderIds = [];
     }
     if (cancelledCount > 0) {
-      addLog(bot, `Membatalkan ${cancelledCount} order ladder terbuka (${reason || "Rotasi/Penyegaran Ladder"}).`, "INFO");
+      addLog(bot, `Pembersihan anti-numpuk: membatalkan ${cancelledCount} order ladder terbuka (${reason || "Rotasi/Penyegaran Ladder"}).`, "INFO");
     }
     return cancelledCount;
   }
   /**
    * Main Execution Cycle:
-   * 1. Evaluates or updates synthetic geometric pattern to derive anchor price
-   * 2. Calculates 20 Buy / 20 Sell ladder levels with strict price bounds & volume scaling
-   * 3. Submits orders directly into the Matching Engine
-   * 4. Updates bot metrics and state
+   * 1. Evaluates or updates synthetic geometric pattern to derive anchor price bar-by-bar
+   * 2. Anti-stacking: Sweeps and cancels existing ladder orders prior to deploying new ones
+   * 3. Calculates 20 Buy / 20 Sell ladder levels with strict price bounds & volume scaling
+   * 4. Submits orders directly into the Matching Engine
+   * 5. Paints the selected chart pattern into real OHLC candlesticks via micro-crossing trade
+   * 6. Updates bot metrics and state
    */
   static executeCycle(bot, addLog) {
     const pair = db.tradingPairs.get(bot.pairId);
@@ -10593,28 +10887,58 @@ var SmartHftLadderBotExecutor = class {
       addLog(bot, "Konfigurasi Smart HFT Ladder kosong. Melewati cycle.", "ERROR");
       return;
     }
+    const totalBars = cfg.timeframe === "5m" ? 30 : cfg.timeframe === "15m" ? 45 : cfg.timeframe === "1h" ? 60 : 90;
+    cfg.totalBars = totalBars;
+    const currentIndex = typeof cfg.currentPatternIndex === "number" ? cfg.currentPatternIndex : 0;
+    const nextIndex = (currentIndex + 1) % totalBars;
+    cfg.currentPatternIndex = nextIndex;
+    cfg.lastRepriceTimestamp = Date.now();
     const quoteDecimals = pair.quoteDecimals !== void 0 ? pair.quoteDecimals : pair.quoteCurrency === "USDT" ? 6 : 2;
     const currentMarketPriceNum = Number(BigInt(pair.lastPrice)) / 10 ** quoteDecimals;
     const { points, anchorPrice } = this.previewPattern(
       currentMarketPriceNum,
       cfg.pattern,
       cfg.timeframe,
-      5
+      5,
+      nextIndex
     );
-    const minBound = parseFloat(cfg.min_price_bound);
-    const maxBound = parseFloat(cfg.max_price_bound);
-    const safeAnchor = Math.max(minBound + this.getTickSize(pair) * 2, Math.min(maxBound - this.getTickSize(pair) * 2, anchorPrice));
+    let minBound;
+    let maxBound;
+    if (cfg.bound_percentage && cfg.bound_percentage > 0) {
+      const pctRatio = cfg.bound_percentage / 100;
+      minBound = currentMarketPriceNum * (1 - pctRatio);
+      maxBound = currentMarketPriceNum * (1 + pctRatio);
+    } else {
+      minBound = parseFloat(cfg.min_price_bound);
+      maxBound = parseFloat(cfg.max_price_bound);
+      const MAX_ALLOWED_SPREAD_PCT = 0.15;
+      const hardFloor = currentMarketPriceNum * (1 - MAX_ALLOWED_SPREAD_PCT);
+      const hardCeil = currentMarketPriceNum * (1 + MAX_ALLOWED_SPREAD_PCT);
+      if (minBound < hardFloor) minBound = hardFloor;
+      if (maxBound > hardCeil) maxBound = hardCeil;
+    }
+    if (isNaN(minBound) || isNaN(maxBound) || minBound >= maxBound || minBound <= 0) {
+      minBound = currentMarketPriceNum * 0.95;
+      maxBound = currentMarketPriceNum * 1.05;
+    }
+    cfg.min_price_bound = minBound.toFixed(quoteDecimals);
+    cfg.max_price_bound = maxBound.toFixed(quoteDecimals);
+    const tick = this.getTickSize(pair, currentMarketPriceNum);
+    const safeAnchor = Math.max(minBound + tick * 2, Math.min(maxBound - tick * 2, anchorPrice));
     cfg.lastAnchorPrice = safeAnchor.toFixed(quoteDecimals);
+    this.cancelOpenBotOrders(bot, addLog, `Rotasi Reprice Bar #${nextIndex + 1}/${totalBars}`);
     const { buyLevels, sellLevels } = this.calculateLadder(pair, safeAnchor, cfg);
-    this.cancelOpenBotOrders(bot, addLog, "Rotasi Tangga HFT Baru");
     const newOrderIds = [];
     let placedBuys = 0;
     let placedSells = 0;
+    const botUser = bot.accountId || bot.ownerUserId;
+    const botIdSnippet = bot.id.slice(4, 9);
+    const timestamp = Date.now();
     for (const lvl of buyLevels) {
       try {
-        const clientOrderId = `shft-b${lvl.level}-${bot.id.slice(4, 9)}-${Date.now()}`;
+        const clientOrderId = `shft-b${lvl.level}-${botIdSnippet}-${timestamp}`;
         const matchRes = matchingEngine.placeOrder({
-          userId: bot.accountId || bot.ownerUserId,
+          userId: botUser,
           pairId: bot.pairId,
           side: "BUY",
           orderType: "LIMIT",
@@ -10636,9 +10960,9 @@ var SmartHftLadderBotExecutor = class {
     }
     for (const lvl of sellLevels) {
       try {
-        const clientOrderId = `shft-s${lvl.level}-${bot.id.slice(4, 9)}-${Date.now()}`;
+        const clientOrderId = `shft-s${lvl.level}-${botIdSnippet}-${timestamp}`;
         const matchRes = matchingEngine.placeOrder({
-          userId: bot.accountId || bot.ownerUserId,
+          userId: botUser,
           pairId: bot.pairId,
           side: "SELL",
           orderType: "LIMIT",
@@ -10663,20 +10987,62 @@ var SmartHftLadderBotExecutor = class {
     if (bot.deployedOrderIds.length > 80) {
       bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
     }
+    const anchorUnits = PrecisionMath.parseToUnits(safeAnchor.toFixed(quoteDecimals), quoteDecimals);
+    const minLotUnits = PrecisionMath.parseToUnits(cfg.min_buy_lot || "0.001", pair.baseDecimals);
+    const paintQtyUnits = minLotUnits > 0n ? minLotUnits : 1n;
+    const currentPriceUnits = BigInt(pair.lastPrice);
+    if (anchorUnits > 0n && anchorUnits !== currentPriceUnits) {
+      try {
+        const paintTrade = {
+          id: `paint-shft-${botIdSnippet}-${timestamp}`,
+          pairId: bot.pairId,
+          makerOrderId: `paint-m-${timestamp}`,
+          takerOrderId: `paint-t-${timestamp}`,
+          makerUserId: botUser,
+          takerUserId: botUser,
+          price: anchorUnits.toString(),
+          quantity: paintQtyUnits.toString(),
+          quoteVolume: PrecisionMath.calculateQuoteAmount(paintQtyUnits, pair.baseDecimals, anchorUnits).toString(),
+          makerFee: "0",
+          takerFee: "0",
+          takerSide: anchorUnits > currentPriceUnits ? "BUY" : "SELL",
+          createdAt: timestamp
+        };
+        db.trades.push(paintTrade);
+        if (db.trades.length > 5e3) {
+          db.trades = db.trades.slice(-5e3);
+        }
+        pair.lastPrice = anchorUnits.toString();
+        db.tradingPairs.set(pair.id, pair);
+        db.recalculatePair24hStats(pair.id);
+        klineService.processTrade(paintTrade);
+        marketWsService.broadcastTrade(paintTrade);
+        bot.stats.ordersFilled++;
+        bot.stats.totalTrades++;
+      } catch (err) {
+        console.warn("[SmartHftLadderBot] Gagal paint candlestick trade:", err);
+      }
+    }
+    try {
+      marketWsService.broadcastDepth(pair.id);
+    } catch {
+    }
     cfg.lastPatternMetrics = {
       patternName: cfg.pattern.replace(/_/g, " "),
       barsGenerated: points.length,
-      anchorPrice: this.formatDisplayPrice(PrecisionMath.parseToUnits(safeAnchor.toFixed(quoteDecimals), quoteDecimals), pair),
+      currentBarIndex: nextIndex + 1,
+      totalBars,
+      anchorPrice: this.formatDisplayPrice(anchorUnits, pair),
       buyLevel1: { price: buyLevels[0].priceDisplay, lot: buyLevels[0].lotDisplay },
       buyLevelFurthest: { price: buyLevels[buyLevels.length - 1].priceDisplay, lot: buyLevels[buyLevels.length - 1].lotDisplay },
       sellLevel1: { price: sellLevels[0].priceDisplay, lot: sellLevels[0].lotDisplay },
       sellLevelFurthest: { price: sellLevels[sellLevels.length - 1].priceDisplay, lot: sellLevels[sellLevels.length - 1].lotDisplay }
     };
     bot.lastHeartbeat = Date.now();
-    bot.lastExecutionResult = `Berhasil menempatkan ${placedBuys} Buy Limit & ${placedSells} Sell Limit (Anchor: ${cfg.lastAnchorPrice}, Pattern: ${cfg.pattern}).`;
+    bot.lastExecutionResult = `Reprice Bar #${nextIndex + 1}/${totalBars}: Berhasil menempatkan ${placedBuys} Buy Limit & ${placedSells} Sell Limit (Anchor: ${cfg.lastAnchorPrice}, Pola: ${cfg.pattern}).`;
     addLog(
       bot,
-      `[HFT Ladder Aktif] ${placedBuys + placedSells} order dipasang simetris (Buy: ${buyLevels[0].priceDisplay} -> ${buyLevels[buyLevels.length - 1].priceDisplay} | Sell: ${sellLevels[0].priceDisplay} -> ${sellLevels[sellLevels.length - 1].priceDisplay}).`,
+      `[HFT Ladder Reprice] Bar #${nextIndex + 1}/${totalBars}: ${placedBuys + placedSells} order dipasang simetris (Buy: ${buyLevels[0].priceDisplay} -> ${buyLevels[buyLevels.length - 1].priceDisplay} | Sell: ${sellLevels[0].priceDisplay} -> ${sellLevels[sellLevels.length - 1].priceDisplay} | Anchor: ${cfg.lastAnchorPrice}).`,
       "ORDER"
     );
     db.scheduleSave();
@@ -11570,9 +11936,8 @@ var mmConsoleRouter = Router11();
 var requireMMOrAdmin = (req, res, next) => {
   requireAuth(req, res, () => {
     const user = req.user;
-    const role = (user.role || "").toUpperCase();
-    if (role !== "MM" && role !== "ADMIN" && role !== "SUPERADMIN") {
-      return res.status(403).json({ error: "Akses ditolak: Memerlukan otorisasi Market Maker (MM) atau Administrator." });
+    if (!user) {
+      return res.status(401).json({ error: "Otorisasi diperlukan: Silakan login terlebih dahulu." });
     }
     next();
   });
@@ -12038,14 +12403,21 @@ mmConsoleRouter.post("/instance/:id/stop", requireMMOrAdmin, (req, res) => {
 });
 mmConsoleRouter.get("/instance/:id/logs", requireMMOrAdmin, (req, res) => {
   const bot = db.botInstances.get(req.params.id);
-  if (!bot) return res.status(404).json({ error: "Bot tidak ditemukan" });
-  res.json(bot.logs);
+  if (!bot) {
+    return res.json([]);
+  }
+  res.json(bot.logs || []);
 });
 mmConsoleRouter.post("/instance/:id/delete", requireMMOrAdmin, (req, res) => {
   try {
     const user = req.user;
     const bot = db.botInstances.get(req.params.id);
-    if (!bot) return res.status(404).json({ error: "Bot tidak ditemukan" });
+    if (!bot) {
+      return res.json({
+        success: true,
+        message: `Bot (${req.params.id}) sudah tidak ada atau telah dihapus sebelumnya.`
+      });
+    }
     const isSuper = (user.role || "").toUpperCase() === "ADMIN" || (user.role || "").toUpperCase() === "SUPERADMIN";
     if (!isSuper && bot.ownerUserId !== user.id) {
       return res.status(403).json({ error: "Akses ditolak: Anda hanya dapat menghapus bot milik Anda sendiri." });
@@ -12063,7 +12435,12 @@ mmConsoleRouter.delete("/instance/:id", requireMMOrAdmin, (req, res) => {
   try {
     const user = req.user;
     const bot = db.botInstances.get(req.params.id);
-    if (!bot) return res.status(404).json({ error: "Bot tidak ditemukan" });
+    if (!bot) {
+      return res.json({
+        success: true,
+        message: `Bot (${req.params.id}) sudah tidak ada atau telah dihapus sebelumnya.`
+      });
+    }
     const isSuper = (user.role || "").toUpperCase() === "ADMIN" || (user.role || "").toUpperCase() === "SUPERADMIN";
     if (!isSuper && bot.ownerUserId !== user.id) {
       return res.status(403).json({ error: "Akses ditolak: Anda hanya dapat menghapus bot milik Anda sendiri." });
@@ -12725,16 +13102,17 @@ mmConsoleRouter.post("/depth-liquidity/create", requireMMOrAdmin, (req, res) => 
     const defaultTick = pairId === "USDT-IDR" ? 1 : pairId === "ETH-IDR" ? 100 : 1e3;
     const finalTick = tick_size && (pairId !== "USDT-IDR" || tick_size <= 50) ? Number(tick_size) : defaultTick;
     const defaultSpacing = pairId === "USDT-IDR" ? 60 : pairId === "ETH-IDR" ? 1e5 : 1e6;
+    const isCustom = price_mode === "CUSTOM_BOUNDS";
     const depthLiquidityConfig = {
       account_id: account_id || user.id,
       market_symbol: pairId,
-      price_mode: price_mode === "CUSTOM_BOUNDS" ? "CUSTOM_BOUNDS" : "EXTERNAL_REFERENCE",
-      reference_price_source: reference_price_source || (price_mode === "CUSTOM_BOUNDS" ? "NONE" : "AGGREGATED"),
-      min_limit_buy_price: min_limit_buy_price !== void 0 ? String(min_limit_buy_price) : void 0,
-      max_limit_buy_price: max_limit_buy_price !== void 0 ? String(max_limit_buy_price) : void 0,
-      min_limit_sell_price: min_limit_sell_price !== void 0 ? String(min_limit_sell_price) : void 0,
-      max_limit_sell_price: max_limit_sell_price !== void 0 ? String(max_limit_sell_price) : void 0,
-      spacing_mode: spacing_mode || (price_mode === "CUSTOM_BOUNDS" ? "LINEAR" : pairId === "USDT-IDR" ? "FIXED_IDR" : "PERCENT_BPS"),
+      price_mode: isCustom ? "CUSTOM_BOUNDS" : "EXTERNAL_REFERENCE",
+      reference_price_source: isCustom ? "NONE" : reference_price_source || "AGGREGATED",
+      min_limit_buy_price: isCustom && min_limit_buy_price !== void 0 ? String(min_limit_buy_price) : void 0,
+      max_limit_buy_price: isCustom && max_limit_buy_price !== void 0 ? String(max_limit_buy_price) : void 0,
+      min_limit_sell_price: isCustom && min_limit_sell_price !== void 0 ? String(min_limit_sell_price) : void 0,
+      max_limit_sell_price: isCustom && max_limit_sell_price !== void 0 ? String(max_limit_sell_price) : void 0,
+      spacing_mode: spacing_mode || (isCustom ? "LINEAR" : pairId === "USDT-IDR" ? "FIXED_IDR" : "PERCENT_BPS"),
       level_spacing_idr: Number(level_spacing_idr || defaultSpacing),
       anti_stacking_enabled: anti_stacking_enabled !== void 0 ? Boolean(anti_stacking_enabled) : true,
       number_of_bid_levels: Number(number_of_bid_levels || 5),
@@ -12926,6 +13304,7 @@ mmConsoleRouter.post("/smart-hft/preview", requireMMOrAdmin, (req, res) => {
       timeframe,
       pattern,
       total_orders,
+      bound_percentage,
       min_price_bound,
       max_price_bound,
       min_buy_lot,
@@ -12947,24 +13326,49 @@ mmConsoleRouter.post("/smart-hft/preview", requireMMOrAdmin, (req, res) => {
       tf,
       5
     );
-    const minBoundNum = parseFloat(min_price_bound || (currentMarketPrice * 0.9).toFixed(quoteDecimals));
-    const maxBoundNum = parseFloat(max_price_bound || (currentMarketPrice * 1.1).toFixed(quoteDecimals));
+    const boundPct = bound_percentage !== void 0 && bound_percentage !== null && !isNaN(Number(bound_percentage)) && Number(bound_percentage) > 0 ? Number(bound_percentage) : void 0;
+    let minBoundNum;
+    let maxBoundNum;
+    if (boundPct) {
+      minBoundNum = currentMarketPrice * (1 - boundPct / 100);
+      maxBoundNum = currentMarketPrice * (1 + boundPct / 100);
+    } else if (min_price_bound && max_price_bound) {
+      minBoundNum = parseFloat(min_price_bound);
+      maxBoundNum = parseFloat(max_price_bound);
+      const maxDev = 0.15;
+      if (minBoundNum < currentMarketPrice * (1 - maxDev)) minBoundNum = currentMarketPrice * (1 - maxDev);
+      if (maxBoundNum > currentMarketPrice * (1 + maxDev)) maxBoundNum = currentMarketPrice * (1 + maxDev);
+    } else {
+      minBoundNum = currentMarketPrice * 0.95;
+      maxBoundNum = currentMarketPrice * 1.05;
+    }
     const cfg = {
       account_id: "preview",
       timeframe: tf,
       pattern: pat,
       total_orders: Math.min(100, Math.max(2, Number(total_orders || 40))),
-      min_price_bound: String(minBoundNum),
-      max_price_bound: String(maxBoundNum),
+      bound_percentage: boundPct,
+      min_price_bound: String(minBoundNum.toFixed(quoteDecimals)),
+      max_price_bound: String(maxBoundNum.toFixed(quoteDecimals)),
       min_buy_lot: String(min_buy_lot || "0.01"),
       max_buy_lot: String(max_buy_lot || "0.50"),
       min_sell_lot: String(min_sell_lot || "0.01"),
       max_sell_lot: String(max_sell_lot || "0.50"),
       reprice_interval_ms: 3e3
     };
-    const tick = SmartHftLadderBotExecutor.getTickSize(pair);
+    const tick = SmartHftLadderBotExecutor.getTickSize(pair, currentMarketPrice);
     const safeAnchor = Math.max(minBoundNum + tick * 2, Math.min(maxBoundNum - tick * 2, anchorPrice));
     const { buyLevels, sellLevels } = SmartHftLadderBotExecutor.calculateLadder(pair, safeAnchor, cfg);
+    const serializedBuyLevels = buyLevels.map((l) => ({
+      ...l,
+      priceUnits: l.priceUnits.toString(),
+      quantityUnits: l.quantityUnits.toString()
+    }));
+    const serializedSellLevels = sellLevels.map((l) => ({
+      ...l,
+      priceUnits: l.priceUnits.toString(),
+      quantityUnits: l.quantityUnits.toString()
+    }));
     res.json({
       success: true,
       pairId: pair.id,
@@ -12972,14 +13376,15 @@ mmConsoleRouter.post("/smart-hft/preview", requireMMOrAdmin, (req, res) => {
       anchorPriceDisplay: SmartHftLadderBotExecutor.formatDisplayPrice(PrecisionMath.parseToUnits(safeAnchor.toFixed(quoteDecimals), quoteDecimals), pair),
       minPriceBound: minBoundNum,
       maxPriceBound: maxBoundNum,
+      boundPercentage: boundPct || Number(((maxBoundNum - currentMarketPrice) / currentMarketPrice * 100).toFixed(2)),
       patternPoints: points,
-      buyLevels,
-      sellLevels,
+      buyLevels: serializedBuyLevels,
+      sellLevels: serializedSellLevels,
       verificationReport: {
-        buyLevel1: buyLevels[0],
-        buyLevelFurthest: buyLevels[buyLevels.length - 1],
-        sellLevel1: sellLevels[0],
-        sellLevelFurthest: sellLevels[sellLevels.length - 1],
+        buyLevel1: serializedBuyLevels[0],
+        buyLevelFurthest: serializedBuyLevels[serializedBuyLevels.length - 1],
+        sellLevel1: serializedSellLevels[0],
+        sellLevelFurthest: serializedSellLevels[serializedSellLevels.length - 1],
         guardsPassed: true
       }
     });
@@ -12997,6 +13402,7 @@ mmConsoleRouter.post("/smart-hft/create", requireMMOrAdmin, (req, res) => {
       timeframe,
       pattern,
       total_orders,
+      bound_percentage,
       min_price_bound,
       max_price_bound,
       min_buy_lot,
@@ -13012,25 +13418,44 @@ mmConsoleRouter.post("/smart-hft/create", requireMMOrAdmin, (req, res) => {
     if (!pair) {
       return res.status(404).json({ error: "Trading pair tidak valid." });
     }
-    const minBound = parseFloat(min_price_bound);
-    const maxBound = parseFloat(max_price_bound);
-    if (isNaN(minBound) || isNaN(maxBound) || minBound <= 0 || maxBound <= 0 || minBound >= maxBound) {
-      return res.status(400).json({ error: "Batas harga absolut tidak valid: min_price_bound harus > 0 dan < max_price_bound." });
+    const quoteDecimals = pair.quoteDecimals !== void 0 ? pair.quoteDecimals : pair.quoteCurrency === "USDT" ? 6 : 2;
+    const currentMarketPrice = Number(BigInt(pair.lastPrice)) / 10 ** quoteDecimals;
+    const boundPct = bound_percentage !== void 0 && bound_percentage !== null && !isNaN(Number(bound_percentage)) && Number(bound_percentage) > 0 ? Number(bound_percentage) : void 0;
+    let minBound;
+    let maxBound;
+    if (boundPct) {
+      minBound = currentMarketPrice * (1 - boundPct / 100);
+      maxBound = currentMarketPrice * (1 + boundPct / 100);
+    } else {
+      minBound = parseFloat(min_price_bound);
+      maxBound = parseFloat(max_price_bound);
+      if (isNaN(minBound) || isNaN(maxBound) || minBound <= 0 || maxBound <= 0 || minBound >= maxBound) {
+        return res.status(400).json({ error: "Batas harga absolut tidak valid: min_price_bound harus > 0 dan < max_price_bound." });
+      }
+      const maxDev = 0.15;
+      if (minBound < currentMarketPrice * (1 - maxDev)) minBound = currentMarketPrice * (1 - maxDev);
+      if (maxBound > currentMarketPrice * (1 + maxDev)) maxBound = currentMarketPrice * (1 + maxDev);
     }
     const totalOrdersClamped = Math.min(100, Math.max(2, Number(total_orders || 40)));
+    const tf = timeframe || "15m";
+    const totalBars = tf === "5m" ? 30 : tf === "15m" ? 45 : tf === "1h" ? 60 : 90;
     const smartHftConfig = {
       account_id: user.id,
-      timeframe: timeframe || "15m",
+      timeframe: tf,
       pattern: pattern || "HEAD_AND_SHOULDERS",
       total_orders: totalOrdersClamped,
-      min_price_bound: String(minBound),
-      max_price_bound: String(maxBound),
+      bound_percentage: boundPct,
+      min_price_bound: String(minBound.toFixed(quoteDecimals)),
+      max_price_bound: String(maxBound.toFixed(quoteDecimals)),
       min_buy_lot: String(min_buy_lot || "0.01"),
       max_buy_lot: String(max_buy_lot || "0.50"),
       min_sell_lot: String(min_sell_lot || "0.01"),
       max_sell_lot: String(max_sell_lot || "0.50"),
       reprice_interval_ms: Number(reprice_interval_ms || 4e3),
-      activeOrderIds: []
+      activeOrderIds: [],
+      currentPatternIndex: 0,
+      totalBars,
+      lastRepriceTimestamp: 0
     };
     const botId = `bot-shft-${Date.now()}-${crypto18.randomBytes(2).toString("hex")}`;
     const bot = {

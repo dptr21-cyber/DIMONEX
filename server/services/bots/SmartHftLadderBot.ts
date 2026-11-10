@@ -20,9 +20,10 @@
 
 import { db } from '../../db/database.js';
 import { matchingEngine } from '../../engine/MatchingEngine.js';
+import { klineService } from '../../engine/KlineService.js';
 import { PrecisionMath } from '../../ledger/PrecisionMath.js';
 import { marketWsService } from '../../websocket/MarketDataWs.js';
-import { BotInstance, SmartHftLadderConfig, PatternFormationType, PatternTimeframe } from '../../db/types.js';
+import { BotInstance, SmartHftLadderConfig, PatternFormationType, PatternTimeframe, Trade } from '../../db/types.js';
 
 export interface LadderLevel {
   level: number;
@@ -41,14 +42,34 @@ export interface SyntheticPatternPoint {
 
 export class SmartHftLadderBotExecutor {
   /**
-   * Determine pair-specific tick size in quote units
+   * Determine pair-specific tick size dynamically based on price magnitude and quote currency
+   * to prevent price quantization clustering and duplicate ladder levels.
    */
-  public static getTickSize(pair: any): number {
-    const isUsdtQuote = pair.quoteCurrency === 'USDT' || pair.id.endsWith('-USDT');
-    if (isUsdtQuote) return 0.01;
-    if (pair.id === 'USDT-IDR') return 1;
-    if (pair.id === 'ETH-IDR') return 100;
-    return 1000;
+  public static getTickSize(pair: any, currentPriceNum?: number): number {
+    const isUsdtQuote = pair.quoteCurrency === 'USDT' || pair.id?.endsWith('-USDT');
+    const quoteDec = pair.quoteDecimals !== undefined ? pair.quoteDecimals : (isUsdtQuote ? 6 : 2);
+    const minUnitTick = 1 / (10 ** quoteDec);
+
+    let price = currentPriceNum;
+    if (price === undefined || price <= 0) {
+      price = pair.lastPrice ? Number(BigInt(pair.lastPrice)) / (10 ** quoteDec) : 10000;
+    }
+
+    if (isUsdtQuote) {
+      if (price >= 10000) return 0.50;
+      if (price >= 1000) return 0.10;
+      if (price >= 10) return 0.01;
+      if (price >= 1) return 0.001;
+      return Math.max(minUnitTick, 0.0001);
+    }
+
+    // IDR quote currency
+    if (price >= 100000000) return 1000; // e.g. BTC-IDR
+    if (price >= 1000000) return 100;    // e.g. ETH-IDR
+    if (price >= 50000) return 10;       // e.g. SOL-IDR, ADA-IDR
+    if (price >= 100) return 1;          // e.g. USDT-IDR, DOGE-IDR
+    if (price >= 1) return 0.1;
+    return Math.max(minUnitTick, 0.01);
   }
 
   /**
@@ -62,10 +83,24 @@ export class SmartHftLadderBotExecutor {
     return `${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: pair.quoteDecimals || 4 })} ${pair.quoteCurrency}`;
   }
 
+  // Memoization cache for deterministic pattern curves: key -> normalized float curve
+  private static patternCurveCache = new Map<string, number[]>();
+
+  // LRU/TTL Cache for calculated ladders to avoid redundant calculations in high-frequency loops
+  private static ladderCache = new Map<string, { timestamp: number; result: { buyLevels: LadderLevel[]; sellLevels: LadderLevel[] } }>();
+  private static readonly LADDER_CACHE_TTL_MS = 1500; // 1.5 seconds TTL for HFT loops
+
   /**
    * Generates mathematical normalized trajectory [-1.0 to +1.0] for the 14 chart formations
+   * Memoized by pattern and bar count to eliminate repetitive math/trigonometry in HFT loops.
    */
   public static generatePatternCurve(pattern: PatternFormationType, count: number): number[] {
+    const cacheKey = `${pattern}:${count}`;
+    const cached = this.patternCurveCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const curve: number[] = new Array(count).fill(0);
     const n = Math.max(10, count);
 
@@ -183,6 +218,7 @@ export class SmartHftLadderBotExecutor {
       }
     }
 
+    this.patternCurveCache.set(cacheKey, curve);
     return curve;
   }
 
@@ -206,19 +242,22 @@ export class SmartHftLadderBotExecutor {
     basePrice: number,
     pattern: PatternFormationType,
     timeframe: PatternTimeframe,
-    amplitudePct = 5.0
-  ): { points: SyntheticPatternPoint[]; anchorPrice: number } {
+    amplitudePct = 5.0,
+    specificBarIndex?: number
+  ): { points: SyntheticPatternPoint[]; anchorPrice: number; currentIndex: number } {
     const { bars, noiseStd } = this.getTimeframeConfig(timeframe);
     const rawCurve = this.generatePatternCurve(pattern, bars);
     const amplitude = basePrice * (amplitudePct / 100.0);
 
     const points: SyntheticPatternPoint[] = [];
     for (let i = 0; i < bars; i++) {
-      // Gaussian noise simulation
-      const u1 = Math.max(0.0001, Math.random());
-      const u2 = Math.random();
+      // Deterministic pseudo-random noise derived from seed index to keep chart curve stable
+      const seed = Math.sin(i * 997.13 + 43.19) * 10000;
+      const pseudoRand = seed - Math.floor(seed);
+      const u1 = Math.max(0.0001, pseudoRand);
+      const u2 = ((i * 137.5) % 100) / 100;
       const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
-      const noise = z0 * (basePrice * noiseStd);
+      const noise = z0 * (basePrice * noiseStd * 0.4);
       const price = basePrice + rawCurve[i] * amplitude + noise;
 
       points.push({
@@ -228,103 +267,205 @@ export class SmartHftLadderBotExecutor {
       });
     }
 
-    const anchorPrice = points[points.length - 1].price;
-    return { points, anchorPrice };
+    const currentIndex = (specificBarIndex !== undefined && specificBarIndex >= 0 && specificBarIndex < bars)
+      ? specificBarIndex
+      : (points.length - 1);
+
+    const anchorPrice = points[currentIndex].price;
+    return { points, anchorPrice, currentIndex };
   }
 
   /**
-   * Calculates the Guarded 20 Buy and 20 Sell ladder levels based on linear interpolation
-   * within [min_price_bound, max_price_bound] and volume scaling [min_lot, max_lot].
+   * Calculates the Guarded Buy and Sell ladder levels using fixed-precision arithmetic
+   * with BigInt units. Includes memoization for high-frequency update loops to prevent
+   * precision degradation, floating-point drift, and CPU spikes.
    */
   public static calculateLadder(
     pair: any,
-    anchorPriceNum: number,
+    anchorPriceInput: number | bigint | string,
     cfg: SmartHftLadderConfig
   ): { buyLevels: LadderLevel[]; sellLevels: LadderLevel[] } {
     const quoteDecimals = pair.quoteDecimals !== undefined ? pair.quoteDecimals : (pair.quoteCurrency === 'USDT' ? 6 : 2);
     const baseDecimals = pair.baseDecimals || 8;
-    const tickSize = this.getTickSize(pair);
 
-    const minBoundNum = parseFloat(cfg.min_price_bound);
-    const maxBoundNum = parseFloat(cfg.max_price_bound);
+    // Convert boundaries to exact BigInt units
+    const minBoundUnits = typeof cfg.min_price_bound === 'string'
+      ? PrecisionMath.parseToUnits(cfg.min_price_bound, quoteDecimals)
+      : BigInt(cfg.min_price_bound);
 
-    if (isNaN(minBoundNum) || isNaN(maxBoundNum) || minBoundNum >= maxBoundNum) {
-      throw new Error(`Batas harga tidak valid: min_price_bound (${minBoundNum}) harus < max_price_bound (${maxBoundNum})`);
+    const maxBoundUnits = typeof cfg.max_price_bound === 'string'
+      ? PrecisionMath.parseToUnits(cfg.max_price_bound, quoteDecimals)
+      : BigInt(cfg.max_price_bound);
+
+    if (minBoundUnits <= 0n || maxBoundUnits <= minBoundUnits) {
+      throw new Error(`Batas harga tidak valid: min_price_bound (${minBoundUnits}) harus < max_price_bound (${maxBoundUnits})`);
     }
 
-    // Anti-Out of Bounds Guard on Anchor
-    if (anchorPriceNum <= minBoundNum || anchorPriceNum >= maxBoundNum) {
-      throw new Error(`[Anti-Out of Bounds Guard] Running Anchor Price (${anchorPriceNum}) berada di luar batas aman [${minBoundNum}, ${maxBoundNum}]!`);
+    // Parse Anchor Price to BigInt units
+    let anchorUnits: bigint;
+    if (typeof anchorPriceInput === 'bigint') {
+      anchorUnits = anchorPriceInput;
+    } else if (typeof anchorPriceInput === 'number') {
+      anchorUnits = PrecisionMath.parseToUnits(anchorPriceInput.toFixed(quoteDecimals), quoteDecimals);
+    } else {
+      anchorUnits = PrecisionMath.parseToUnits(String(anchorPriceInput), quoteDecimals);
     }
 
+    const currentPriceNum = Number(anchorUnits) / (10 ** quoteDecimals);
+
+    // Determine tickSize in BigInt units dynamically based on price
+    const tickSizeNum = this.getTickSize(pair, currentPriceNum);
+    const tickSizeUnits = PrecisionMath.parseToUnits(tickSizeNum.toFixed(quoteDecimals), quoteDecimals);
+    const safeTick = tickSizeUnits > 0n ? tickSizeUnits : 1n;
+
+    // Total orders & levels per side
     const totalOrders = Math.min(100, Math.max(2, cfg.total_orders || 40));
     const levelsPerSide = Math.floor(totalOrders / 2);
 
-    const minBuyLot = parseFloat(cfg.min_buy_lot || '0.01');
-    const maxBuyLot = parseFloat(cfg.max_buy_lot || '0.50');
-    const minSellLot = parseFloat(cfg.min_sell_lot || '0.01');
-    const maxSellLot = parseFloat(cfg.max_sell_lot || '0.50');
+    // Quantize lots into exact BigInt base units
+    const minBuyLotUnits = PrecisionMath.parseToUnits(cfg.min_buy_lot || '0.01', baseDecimals);
+    const maxBuyLotUnits = PrecisionMath.parseToUnits(cfg.max_buy_lot || '0.50', baseDecimals);
+    const minSellLotUnits = PrecisionMath.parseToUnits(cfg.min_sell_lot || '0.01', baseDecimals);
+    const maxSellLotUnits = PrecisionMath.parseToUnits(cfg.max_sell_lot || '0.50', baseDecimals);
+
+    // Guard Anchor Price within safe channel [minBound + 2*tick, maxBound - 2*tick]
+    const minSafeAnchorUnits = minBoundUnits + safeTick * 2n;
+    const maxSafeAnchorUnits = maxBoundUnits - safeTick * 2n;
+
+    let effectiveAnchorUnits: bigint;
+    if (minSafeAnchorUnits < maxSafeAnchorUnits) {
+      effectiveAnchorUnits = anchorUnits < minSafeAnchorUnits
+        ? minSafeAnchorUnits
+        : (anchorUnits > maxSafeAnchorUnits ? maxSafeAnchorUnits : anchorUnits);
+    } else {
+      effectiveAnchorUnits = (minBoundUnits + maxBoundUnits) / 2n;
+    }
+
+    // Check Memoization Cache
+    const cacheKey = `${pair.id}:${effectiveAnchorUnits.toString()}:${minBoundUnits.toString()}:${maxBoundUnits.toString()}:${levelsPerSide}:${minBuyLotUnits.toString()}:${maxBuyLotUnits.toString()}:${minSellLotUnits.toString()}:${maxSellLotUnits.toString()}`;
+    const now = Date.now();
+    const cached = this.ladderCache.get(cacheKey);
+    if (cached && (now - cached.timestamp < this.LADDER_CACHE_TTL_MS)) {
+      return cached.result;
+    }
 
     const buyLevels: LadderLevel[] = [];
     const sellLevels: LadderLevel[] = [];
 
-    // 1. BUY LADDER: Level 1 (closest) -> Level N (furthest touching min_price_bound)
-    const buyStartPrice = anchorPriceNum - tickSize;
-    const buyEndPrice = minBoundNum;
+    // FIXED-PRECISION SCALING FACTOR (10^8) for sub-integer linear interpolation
+    const SCALE = 100000000n;
+    const stepsBig = BigInt(Math.max(1, levelsPerSide - 1));
+
+    // Ensure sufficient channel width so all levels have strictly distinct prices
+    const minRequiredSpan = BigInt(levelsPerSide) * safeTick;
+
+    // 1. BUY LADDER: Level 1 (closest below anchor) -> Level N (touching min_price_bound)
+    // Guarantee: P_buy,1 > P_buy,2 > ... > P_buy,N (Never identical prices)
+    const buyStartUnits = effectiveAnchorUnits - safeTick;
+    let effectiveMinBoundUnits = minBoundUnits;
+    if (buyStartUnits - effectiveMinBoundUnits < minRequiredSpan) {
+      effectiveMinBoundUnits = buyStartUnits > minRequiredSpan ? (buyStartUnits - minRequiredSpan) : safeTick;
+    }
+    const buyPriceSpan = buyStartUnits > effectiveMinBoundUnits ? (buyStartUnits - effectiveMinBoundUnits) : minRequiredSpan;
+    const buyLotSpan = maxBuyLotUnits > minBuyLotUnits ? (maxBuyLotUnits - minBuyLotUnits) : 0n;
 
     for (let i = 1; i <= levelsPerSide; i++) {
-      const t = (i - 1) / Math.max(1, levelsPerSide - 1);
-      const rawPrice = buyStartPrice - t * (buyStartPrice - buyEndPrice);
-      const quantizedPrice = Math.round(rawPrice / tickSize) * tickSize;
-      const safePrice = Math.max(minBoundNum, Math.min(buyStartPrice, quantizedPrice));
+      const stepIndex = BigInt(i - 1);
+      const tScaled = (stepIndex * SCALE) / stepsBig;
 
-      const rawLot = minBuyLot + t * (maxBuyLot - minBuyLot);
-      const safeLot = Math.min(maxBuyLot, Math.max(minBuyLot, rawLot));
+      // Price interpolation using BigInt: price = start - (t * span)
+      const rawPriceUnits = buyStartUnits - (tScaled * buyPriceSpan) / SCALE;
+      // Quantize to nearest tick size
+      let safePriceUnits = ((rawPriceUnits + safeTick / 2n) / safeTick) * safeTick;
 
-      const priceUnits = PrecisionMath.parseToUnits(safePrice.toFixed(quoteDecimals), quoteDecimals);
-      const qtyUnits = PrecisionMath.parseToUnits(safeLot.toFixed(baseDecimals), baseDecimals);
+      // STRICT ANTI-STACKING GUARANTEE:
+      // Each subsequent buy level MUST be strictly lower than the preceding level by at least 1 tick
+      if (buyLevels.length > 0) {
+        const prevPrice = buyLevels[buyLevels.length - 1].priceUnits;
+        if (safePriceUnits >= prevPrice) {
+          safePriceUnits = prevPrice - safeTick;
+        }
+      }
+
+      // Ensure price never drops to <= 0
+      if (safePriceUnits <= 0n) {
+        safePriceUnits = safeTick;
+      }
+
+      // Quantity/Lot interpolation using BigInt
+      const rawLotUnits = minBuyLotUnits + (tScaled * buyLotSpan) / SCALE;
+      const safeLotUnits = rawLotUnits > maxBuyLotUnits
+        ? maxBuyLotUnits
+        : (rawLotUnits < minBuyLotUnits ? minBuyLotUnits : rawLotUnits);
 
       buyLevels.push({
         level: i,
         side: 'BUY',
-        priceUnits,
-        priceDisplay: this.formatDisplayPrice(priceUnits, pair),
-        quantityUnits: qtyUnits,
-        lotDisplay: safeLot.toFixed(4)
+        priceUnits: safePriceUnits,
+        priceDisplay: this.formatDisplayPrice(safePriceUnits, pair),
+        quantityUnits: safeLotUnits,
+        lotDisplay: PrecisionMath.formatFromUnits(safeLotUnits, baseDecimals, true)
       });
     }
 
-    // 2. SELL LADDER: Level 1 (closest) -> Level N (furthest touching max_price_bound)
-    const sellStartPrice = anchorPriceNum + tickSize;
-    const sellEndPrice = maxBoundNum;
+    // 2. SELL LADDER: Level 1 (closest above anchor) -> Level N (touching max_price_bound)
+    // Guarantee: P_sell,1 < P_sell,2 < ... < P_sell,N (Never identical prices)
+    const sellStartUnits = effectiveAnchorUnits + safeTick;
+    let effectiveMaxBoundUnits = maxBoundUnits;
+    if (effectiveMaxBoundUnits - sellStartUnits < minRequiredSpan) {
+      effectiveMaxBoundUnits = sellStartUnits + minRequiredSpan;
+    }
+    const sellPriceSpan = effectiveMaxBoundUnits > sellStartUnits ? (effectiveMaxBoundUnits - sellStartUnits) : minRequiredSpan;
+    const sellLotSpan = maxSellLotUnits > minSellLotUnits ? (maxSellLotUnits - minSellLotUnits) : 0n;
 
     for (let i = 1; i <= levelsPerSide; i++) {
-      const t = (i - 1) / Math.max(1, levelsPerSide - 1);
-      const rawPrice = sellStartPrice + t * (sellEndPrice - sellStartPrice);
-      const quantizedPrice = Math.round(rawPrice / tickSize) * tickSize;
-      const safePrice = Math.min(maxBoundNum, Math.max(sellStartPrice, quantizedPrice));
+      const stepIndex = BigInt(i - 1);
+      const tScaled = (stepIndex * SCALE) / stepsBig;
 
-      const rawLot = minSellLot + t * (maxSellLot - minSellLot);
-      const safeLot = Math.min(maxSellLot, Math.max(minSellLot, rawLot));
+      // Price interpolation using BigInt: price = start + (t * span)
+      const rawPriceUnits = sellStartUnits + (tScaled * sellPriceSpan) / SCALE;
+      let safePriceUnits = ((rawPriceUnits + safeTick / 2n) / safeTick) * safeTick;
 
-      const priceUnits = PrecisionMath.parseToUnits(safePrice.toFixed(quoteDecimals), quoteDecimals);
-      const qtyUnits = PrecisionMath.parseToUnits(safeLot.toFixed(baseDecimals), baseDecimals);
+      // STRICT ANTI-STACKING GUARANTEE:
+      // Each subsequent sell level MUST be strictly higher than the preceding level by at least 1 tick
+      if (sellLevels.length > 0) {
+        const prevPrice = sellLevels[sellLevels.length - 1].priceUnits;
+        if (safePriceUnits <= prevPrice) {
+          safePriceUnits = prevPrice + safeTick;
+        }
+      }
+
+      // Quantity/Lot interpolation using BigInt
+      const rawLotUnits = minSellLotUnits + (tScaled * sellLotSpan) / SCALE;
+      const safeLotUnits = rawLotUnits > maxSellLotUnits
+        ? maxSellLotUnits
+        : (rawLotUnits < minSellLotUnits ? minSellLotUnits : rawLotUnits);
 
       sellLevels.push({
         level: i,
         side: 'SELL',
-        priceUnits,
-        priceDisplay: this.formatDisplayPrice(priceUnits, pair),
-        quantityUnits: qtyUnits,
-        lotDisplay: safeLot.toFixed(4)
+        priceUnits: safePriceUnits,
+        priceDisplay: this.formatDisplayPrice(safePriceUnits, pair),
+        quantityUnits: safeLotUnits,
+        lotDisplay: PrecisionMath.formatFromUnits(safeLotUnits, baseDecimals, true)
       });
     }
 
-    return { buyLevels, sellLevels };
+    const result = { buyLevels, sellLevels };
+
+    // Maintain cache size under 200 items to avoid memory leak in long-running processes
+    if (this.ladderCache.size > 200) {
+      const oldestKeys = Array.from(this.ladderCache.keys()).slice(0, 50);
+      oldestKeys.forEach(k => this.ladderCache.delete(k));
+    }
+    this.ladderCache.set(cacheKey, { timestamp: now, result });
+
+    return result;
   }
 
   /**
-   * Cancels all active orders deployed by this Smart HFT Ladder bot
+   * Cancels all active orders deployed by this Smart HFT Ladder bot.
+   * Performs deep reconciliation against matching engine book and db.orders to prevent order stacking.
    */
   public static cancelOpenBotOrders(
     bot: BotInstance,
@@ -340,11 +481,42 @@ export class SmartHftLadderBotExecutor {
     }
     bot.deployedOrderIds.forEach(id => orderIdsToCancel.add(id));
 
+    const botUser = bot.accountId || bot.ownerUserId;
+    const botIdSnippet = bot.id.slice(4, 9);
+
+    // Deep reconciliation against Matching Engine OrderBook:
+    // Purges any orphaned, unpersisted, or stale ladder rungs from this pair
+    try {
+      const book = matchingEngine.getOrderBook(bot.pairId);
+      const allBookOrders = [...book.bids, ...book.asks];
+      for (const ord of allBookOrders) {
+        if (
+          ord.userId === botUser ||
+          (ord.clientOrderId && (ord.clientOrderId.startsWith('shft-') || ord.clientOrderId.includes(botIdSnippet)))
+        ) {
+          orderIdsToCancel.add(ord.id);
+        }
+      }
+    } catch {}
+
+    // Deep reconciliation against db.orders
+    try {
+      for (const ord of db.orders.values()) {
+        if (
+          ord.pairId === bot.pairId &&
+          (ord.status === 'NEW' || ord.status === 'PARTIALLY_FILLED') &&
+          (ord.userId === botUser || (ord.clientOrderId && ord.clientOrderId.startsWith('shft-')))
+        ) {
+          orderIdsToCancel.add(ord.id);
+        }
+      }
+    } catch {}
+
     for (const orderId of orderIdsToCancel) {
       const order = db.orders.get(orderId);
       if (order && (order.status === 'NEW' || order.status === 'PARTIALLY_FILLED')) {
         try {
-          matchingEngine.cancelOrder(orderId, bot.ownerUserId, bot.pairId);
+          matchingEngine.cancelOrder(orderId, botUser, bot.pairId);
           cancelledCount++;
         } catch {}
       }
@@ -355,7 +527,7 @@ export class SmartHftLadderBotExecutor {
     }
 
     if (cancelledCount > 0) {
-      addLog(bot, `Membatalkan ${cancelledCount} order ladder terbuka (${reason || 'Rotasi/Penyegaran Ladder'}).`, 'INFO');
+      addLog(bot, `Pembersihan anti-numpuk: membatalkan ${cancelledCount} order ladder terbuka (${reason || 'Rotasi/Penyegaran Ladder'}).`, 'INFO');
     }
 
     return cancelledCount;
@@ -363,10 +535,12 @@ export class SmartHftLadderBotExecutor {
 
   /**
    * Main Execution Cycle:
-   * 1. Evaluates or updates synthetic geometric pattern to derive anchor price
-   * 2. Calculates 20 Buy / 20 Sell ladder levels with strict price bounds & volume scaling
-   * 3. Submits orders directly into the Matching Engine
-   * 4. Updates bot metrics and state
+   * 1. Evaluates or updates synthetic geometric pattern to derive anchor price bar-by-bar
+   * 2. Anti-stacking: Sweeps and cancels existing ladder orders prior to deploying new ones
+   * 3. Calculates 20 Buy / 20 Sell ladder levels with strict price bounds & volume scaling
+   * 4. Submits orders directly into the Matching Engine
+   * 5. Paints the selected chart pattern into real OHLC candlesticks via micro-crossing trade
+   * 6. Updates bot metrics and state
    */
   public static executeCycle(
     bot: BotInstance,
@@ -384,42 +558,83 @@ export class SmartHftLadderBotExecutor {
       return;
     }
 
-    // 1. Derive Anchor Price from Market Last Price or Synthetic Pattern Simulator
+    // 1. Advance pattern progression bar-by-bar
+    const totalBars = cfg.timeframe === '5m' ? 30 : cfg.timeframe === '15m' ? 45 : cfg.timeframe === '1h' ? 60 : 90;
+    cfg.totalBars = totalBars;
+
+    const currentIndex = typeof cfg.currentPatternIndex === 'number' ? cfg.currentPatternIndex : 0;
+    const nextIndex = (currentIndex + 1) % totalBars;
+    cfg.currentPatternIndex = nextIndex;
+    cfg.lastRepriceTimestamp = Date.now();
+
+    // 2. Derive Anchor Price from Market Last Price and Synthetic Pattern Simulator at nextIndex
     const quoteDecimals = pair.quoteDecimals !== undefined ? pair.quoteDecimals : (pair.quoteCurrency === 'USDT' ? 6 : 2);
     const currentMarketPriceNum = Number(BigInt(pair.lastPrice)) / (10 ** quoteDecimals);
 
-    // Generate pattern point
+    // Generate pattern point at nextIndex
     const { points, anchorPrice } = this.previewPattern(
       currentMarketPriceNum,
       cfg.pattern,
       cfg.timeframe,
-      5.0
+      5.0,
+      nextIndex
     );
 
-    const minBound = parseFloat(cfg.min_price_bound);
-    const maxBound = parseFloat(cfg.max_price_bound);
+    // Guarded Min/Max Price Bounds (Percentage-aware & Anti-Divergence)
+    let minBound: number;
+    let maxBound: number;
 
-    // Check if anchor is bounded
-    const safeAnchor = Math.max(minBound + this.getTickSize(pair) * 2, Math.min(maxBound - this.getTickSize(pair) * 2, anchorPrice));
+    if (cfg.bound_percentage && cfg.bound_percentage > 0) {
+      const pctRatio = cfg.bound_percentage / 100;
+      minBound = currentMarketPriceNum * (1 - pctRatio);
+      maxBound = currentMarketPriceNum * (1 + pctRatio);
+    } else {
+      minBound = parseFloat(cfg.min_price_bound);
+      maxBound = parseFloat(cfg.max_price_bound);
+
+      // Guard: clamp bounds if they are unreasonably far (> 15% deviation from current price)
+      const MAX_ALLOWED_SPREAD_PCT = 0.15; // 15% maximum safe channel
+      const hardFloor = currentMarketPriceNum * (1 - MAX_ALLOWED_SPREAD_PCT);
+      const hardCeil = currentMarketPriceNum * (1 + MAX_ALLOWED_SPREAD_PCT);
+
+      if (minBound < hardFloor) minBound = hardFloor;
+      if (maxBound > hardCeil) maxBound = hardCeil;
+    }
+
+    if (isNaN(minBound) || isNaN(maxBound) || minBound >= maxBound || minBound <= 0) {
+      minBound = currentMarketPriceNum * 0.95;
+      maxBound = currentMarketPriceNum * 1.05;
+    }
+
+    // Synchronize bounded strings
+    cfg.min_price_bound = minBound.toFixed(quoteDecimals);
+    cfg.max_price_bound = maxBound.toFixed(quoteDecimals);
+
+    // Check if anchor is bounded safely inside channel
+    const tick = this.getTickSize(pair, currentMarketPriceNum);
+    const safeAnchor = Math.max(minBound + tick * 2, Math.min(maxBound - tick * 2, anchorPrice));
     cfg.lastAnchorPrice = safeAnchor.toFixed(quoteDecimals);
 
-    // 2. Calculate Ladder Levels
+    // 3. Clear older ladder orders (rotasi ladder anti-stacking)
+    this.cancelOpenBotOrders(bot, addLog, `Rotasi Reprice Bar #${nextIndex + 1}/${totalBars}`);
+
+    // 4. Calculate Ladder Levels around safeAnchor
     const { buyLevels, sellLevels } = this.calculateLadder(pair, safeAnchor, cfg);
 
-    // 3. Clear older ladder orders (rotasi ladder anti-stacking)
-    this.cancelOpenBotOrders(bot, addLog, 'Rotasi Tangga HFT Baru');
-
-    // 4. Place 20 Buy Limit Orders & 20 Sell Limit Orders
+    // 5. Place 20 Buy Limit Orders & 20 Sell Limit Orders
     const newOrderIds: string[] = [];
     let placedBuys = 0;
     let placedSells = 0;
+    const botUser = bot.accountId || bot.ownerUserId;
+    const botIdSnippet = bot.id.slice(4, 9);
+    const timestamp = Date.now();
 
     // Deploy BUY Orders
     for (const lvl of buyLevels) {
       try {
-        const clientOrderId = `shft-b${lvl.level}-${bot.id.slice(4, 9)}-${Date.now()}`;
+        const clientOrderId = `shft-b${lvl.level}-${botIdSnippet}-${timestamp}`;
         const matchRes = matchingEngine.placeOrder({
-          userId: bot.accountId || bot.ownerUserId,
+          userId: botUser,
           pairId: bot.pairId,
           side: 'BUY',
           orderType: 'LIMIT',
@@ -443,9 +658,9 @@ export class SmartHftLadderBotExecutor {
     // Deploy SELL Orders
     for (const lvl of sellLevels) {
       try {
-        const clientOrderId = `shft-s${lvl.level}-${bot.id.slice(4, 9)}-${Date.now()}`;
+        const clientOrderId = `shft-s${lvl.level}-${botIdSnippet}-${timestamp}`;
         const matchRes = matchingEngine.placeOrder({
-          userId: bot.accountId || bot.ownerUserId,
+          userId: botUser,
           pairId: bot.pairId,
           side: 'SELL',
           orderType: 'LIMIT',
@@ -472,11 +687,58 @@ export class SmartHftLadderBotExecutor {
       bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
     }
 
-    // 5. Update Metrics Record
+    // 6. Chart Painter Trade: Execute micro-crossing trade at anchorUnits to form the chart pattern
+    const anchorUnits = PrecisionMath.parseToUnits(safeAnchor.toFixed(quoteDecimals), quoteDecimals);
+    const minLotUnits = PrecisionMath.parseToUnits(cfg.min_buy_lot || '0.001', pair.baseDecimals);
+    const paintQtyUnits = minLotUnits > 0n ? minLotUnits : 1n;
+    const currentPriceUnits = BigInt(pair.lastPrice);
+
+    if (anchorUnits > 0n && anchorUnits !== currentPriceUnits) {
+      try {
+        const paintTrade: Trade = {
+          id: `paint-shft-${botIdSnippet}-${timestamp}`,
+          pairId: bot.pairId,
+          makerOrderId: `paint-m-${timestamp}`,
+          takerOrderId: `paint-t-${timestamp}`,
+          makerUserId: botUser,
+          takerUserId: botUser,
+          price: anchorUnits.toString(),
+          quantity: paintQtyUnits.toString(),
+          quoteVolume: PrecisionMath.calculateQuoteAmount(paintQtyUnits, pair.baseDecimals, anchorUnits).toString(),
+          makerFee: '0',
+          takerFee: '0',
+          takerSide: anchorUnits > currentPriceUnits ? 'BUY' : 'SELL',
+          createdAt: timestamp
+        };
+
+        db.trades.push(paintTrade);
+        if (db.trades.length > 5000) {
+          db.trades = db.trades.slice(-5000);
+        }
+        pair.lastPrice = anchorUnits.toString();
+        db.tradingPairs.set(pair.id, pair);
+        db.recalculatePair24hStats(pair.id);
+        klineService.processTrade(paintTrade);
+        marketWsService.broadcastTrade(paintTrade);
+        bot.stats.ordersFilled++;
+        bot.stats.totalTrades++;
+      } catch (err: any) {
+        console.warn('[SmartHftLadderBot] Gagal paint candlestick trade:', err);
+      }
+    }
+
+    // Broadcast depth update so orderbook in UI updates instantly without stacking
+    try {
+      marketWsService.broadcastDepth(pair.id);
+    } catch {}
+
+    // 7. Update Metrics Record
     cfg.lastPatternMetrics = {
       patternName: cfg.pattern.replace(/_/g, ' '),
       barsGenerated: points.length,
-      anchorPrice: this.formatDisplayPrice(PrecisionMath.parseToUnits(safeAnchor.toFixed(quoteDecimals), quoteDecimals), pair),
+      currentBarIndex: nextIndex + 1,
+      totalBars,
+      anchorPrice: this.formatDisplayPrice(anchorUnits, pair),
       buyLevel1: { price: buyLevels[0].priceDisplay, lot: buyLevels[0].lotDisplay },
       buyLevelFurthest: { price: buyLevels[buyLevels.length - 1].priceDisplay, lot: buyLevels[buyLevels.length - 1].lotDisplay },
       sellLevel1: { price: sellLevels[0].priceDisplay, lot: sellLevels[0].lotDisplay },
@@ -484,11 +746,11 @@ export class SmartHftLadderBotExecutor {
     };
 
     bot.lastHeartbeat = Date.now();
-    bot.lastExecutionResult = `Berhasil menempatkan ${placedBuys} Buy Limit & ${placedSells} Sell Limit (Anchor: ${cfg.lastAnchorPrice}, Pattern: ${cfg.pattern}).`;
+    bot.lastExecutionResult = `Reprice Bar #${nextIndex + 1}/${totalBars}: Berhasil menempatkan ${placedBuys} Buy Limit & ${placedSells} Sell Limit (Anchor: ${cfg.lastAnchorPrice}, Pola: ${cfg.pattern}).`;
 
     addLog(
       bot,
-      `[HFT Ladder Aktif] ${placedBuys + placedSells} order dipasang simetris (Buy: ${buyLevels[0].priceDisplay} -> ${buyLevels[buyLevels.length - 1].priceDisplay} | Sell: ${sellLevels[0].priceDisplay} -> ${sellLevels[sellLevels.length - 1].priceDisplay}).`,
+      `[HFT Ladder Reprice] Bar #${nextIndex + 1}/${totalBars}: ${placedBuys + placedSells} order dipasang simetris (Buy: ${buyLevels[0].priceDisplay} -> ${buyLevels[buyLevels.length - 1].priceDisplay} | Sell: ${sellLevels[0].priceDisplay} -> ${sellLevels[sellLevels.length - 1].priceDisplay} | Anchor: ${cfg.lastAnchorPrice}).`,
       'ORDER'
     );
 

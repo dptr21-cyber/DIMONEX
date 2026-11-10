@@ -44,7 +44,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({ pair, recentTrades }
   // Timeframe State (persisted to localStorage)
   const [timeframe, setTimeframeState] = useState<Timeframe>(() => {
     const saved = localStorage.getItem('dominex_chart_timeframe');
-    if (saved && ['1m', '5m', '15m', '1h', '4h', '1d', '1w'].includes(saved)) {
+    if (saved && ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d', '1D', '1w', '1W', '1M'].includes(saved)) {
       return saved as Timeframe;
     }
     return '15m';
@@ -203,12 +203,12 @@ export const TradingChart: React.FC<TradingChartProps> = ({ pair, recentTrades }
             </button>
           </div>
 
-          {/* Timeframe Selector */}
-          <div className="flex items-center bg-[#08090D] p-0.5 rounded-lg border border-white/10">
-            {(['1m', '5m', '15m', '1h', '4h', '1d', '1w'] as const).map(tf => (
+          {/* Timeframe Selector (All 13 Timeframes Supported) */}
+          <div className="flex items-center bg-[#08090D] p-0.5 rounded-lg border border-white/10 relative">
+            {(['1m', '5m', '15m', '1h', '4h', '1D', '1W'] as const).map(tf => (
               <button
                 key={tf}
-                onClick={() => setTimeframe(tf)}
+                onClick={() => setTimeframe(tf as Timeframe)}
                 className={`px-2 py-1 text-xs font-mono font-bold rounded-md transition-all ${
                   timeframe === tf
                     ? 'bg-[#FF087F] text-white shadow-sm'
@@ -218,6 +218,33 @@ export const TradingChart: React.FC<TradingChartProps> = ({ pair, recentTrades }
                 {tf}
               </button>
             ))}
+
+            {/* Extended Timeframes Dropdown (3m, 30m, 2h, 6h, 12h, 1M) */}
+            <div className="relative group">
+              <button
+                className={`px-2 py-1 text-xs font-mono font-bold rounded-md transition-all flex items-center gap-1 ${
+                  ['3m', '30m', '2h', '6h', '12h', '1M'].includes(timeframe)
+                    ? 'bg-[#FF087F] text-white shadow-sm'
+                    : 'text-[#9298A6] hover:text-[#F5F5F7]'
+                }`}
+              >
+                <span>{['3m', '30m', '2h', '6h', '12h', '1M'].includes(timeframe) ? timeframe : '▾'}</span>
+              </button>
+
+              <div className="absolute right-0 top-full mt-1 hidden group-hover:flex flex-col bg-[#0F111A] border border-white/10 rounded-lg shadow-xl p-1 z-50 min-w-[70px]">
+                {(['3m', '30m', '2h', '6h', '12h', '1M'] as const).map(extTf => (
+                  <button
+                    key={extTf}
+                    onClick={() => setTimeframe(extTf as Timeframe)}
+                    className={`px-3 py-1.5 text-xs font-mono font-bold text-left rounded hover:bg-white/10 transition-colors ${
+                      timeframe === extTf ? 'text-[#FF087F] font-extrabold bg-[#FF087F]/10' : 'text-slate-300'
+                    }`}
+                  >
+                    {extTf}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
           {/* DIMONEX Pro Specific Tools */}

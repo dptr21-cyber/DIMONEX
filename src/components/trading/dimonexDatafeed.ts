@@ -33,31 +33,47 @@ import {
 import { isWebSocketSupported, reportWebSocketSuccess, reportWebSocketFailure } from '../../utils/wsHelper.js';
 
 // Configuration constants
-export const SUPPORTED_RESOLUTIONS: ResolutionString[] = ['1', '5', '15', '60', '240', '1D', '1W'];
+export const SUPPORTED_RESOLUTIONS: ResolutionString[] = [
+  '1', '3', '5', '15', '30', '60', '120', '240', '360', '720', '1D', '1W', '1M'
+];
 
 export const RESOLUTION_TO_SECONDS: Record<string, number> = {
   '1': 60,
+  '3': 180,
   '5': 300,
   '15': 900,
+  '30': 1800,
   '60': 3600,
+  '120': 7200,
   '240': 14400,
+  '360': 21600,
+  '720': 43200,
   '1D': 86400,
   'D': 86400,
   '1W': 604800,
-  'W': 604800
+  'W': 604800,
+  '1M': 2592000,
+  'M': 2592000
 };
 
 export function resolutionToTimeframe(res: string): Timeframe {
   switch (res) {
     case '1': return '1m';
+    case '3': return '3m';
     case '5': return '5m';
     case '15': return '15m';
+    case '30': return '30m';
     case '60': return '1h';
+    case '120': return '2h';
     case '240': return '4h';
+    case '360': return '6h';
+    case '720': return '12h';
     case '1D':
-    case 'D': return '1d';
+    case 'D': return '1D';
     case '1W':
-    case 'W': return '1w';
+    case 'W': return '1W';
+    case '1M':
+    case 'M': return '1M';
     default: return '15m';
   }
 }
@@ -65,12 +81,20 @@ export function resolutionToTimeframe(res: string): Timeframe {
 export function timeframeToResolution(tf: Timeframe): ResolutionString {
   switch (tf) {
     case '1m': return '1';
+    case '3m': return '3';
     case '5m': return '5';
     case '15m': return '15';
+    case '30m': return '30';
     case '1h': return '60';
+    case '2h': return '120';
     case '4h': return '240';
-    case '1d': return '1D';
-    case '1w': return '1W';
+    case '6h': return '360';
+    case '12h': return '720';
+    case '1d':
+    case '1D': return '1D';
+    case '1w':
+    case '1W': return '1W';
+    case '1M': return '1M';
     default: return '15';
   }
 }

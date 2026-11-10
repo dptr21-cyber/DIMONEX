@@ -45,6 +45,7 @@ export const SmartHftLadderSection: React.FC<Props> = ({
   const [simTimeframe, setSimTimeframe] = useState<PatternTimeframe>('15m');
   const [simPattern, setSimPattern] = useState<PatternFormationType>('HEAD_AND_SHOULDERS');
   const [simTotalOrders, setSimTotalOrders] = useState<number>(40);
+  const [simBoundPct, setSimBoundPct] = useState<number>(3); // Default ±3% agar tidak terlalu jauh
   const [simMinBound, setSimMinBound] = useState<string>('');
   const [simMaxBound, setSimMaxBound] = useState<string>('');
   const [simMinBuyLot, setSimMinBuyLot] = useState<string>('0.02');
@@ -80,12 +81,35 @@ export const SmartHftLadderSection: React.FC<Props> = ({
     return Number(BigInt(currentPair.lastPrice || '5000000000')) / (10 ** qDec);
   }, [currentPair]);
 
-  // Set default bounds when pair changes
+  // Apply bound percentage helper
+  const applyBoundPercentage = (pct: number) => {
+    setSimBoundPct(pct);
+    if (currentPriceNum > 0) {
+      const qDec = currentPair.quoteDecimals !== undefined ? currentPair.quoteDecimals : 2;
+      const lower = currentPriceNum * (1 - pct / 100);
+      const upper = currentPriceNum * (1 + pct / 100);
+      setSimMinBound(lower.toFixed(qDec));
+      setSimMaxBound(upper.toFixed(qDec));
+    }
+  };
+
+  // Implied spread percentage from current boundaries
+  const impliedSpreadPct = useMemo(() => {
+    if (!currentPriceNum || currentPriceNum <= 0 || !simMaxBound || !simMinBound) return simBoundPct;
+    const maxB = parseFloat(simMaxBound);
+    const minB = parseFloat(simMinBound);
+    if (isNaN(maxB) || isNaN(minB) || maxB <= minB) return simBoundPct;
+    const upSpread = Math.abs((maxB - currentPriceNum) / currentPriceNum) * 100;
+    const downSpread = Math.abs((currentPriceNum - minB) / currentPriceNum) * 100;
+    return Number(((upSpread + downSpread) / 2).toFixed(2));
+  }, [currentPriceNum, simMinBound, simMaxBound, simBoundPct]);
+
+  // Set default bounds when pair changes (tight ±3% so it is never too far from current market price)
   useEffect(() => {
     if (currentPriceNum > 0) {
       const qDec = currentPair.quoteDecimals !== undefined ? currentPair.quoteDecimals : 2;
-      setSimMinBound((currentPriceNum * 0.92).toFixed(qDec));
-      setSimMaxBound((currentPriceNum * 1.08).toFixed(qDec));
+      setSimMinBound((currentPriceNum * (1 - simBoundPct / 100)).toFixed(qDec));
+      setSimMaxBound((currentPriceNum * (1 + simBoundPct / 100)).toFixed(qDec));
     }
   }, [simPairId, currentPriceNum, currentPair]);
 
@@ -105,6 +129,7 @@ export const SmartHftLadderSection: React.FC<Props> = ({
           timeframe: simTimeframe,
           pattern: simPattern,
           total_orders: simTotalOrders,
+          bound_percentage: simBoundPct,
           min_price_bound: simMinBound,
           max_price_bound: simMaxBound,
           min_buy_lot: simMinBuyLot,
@@ -301,6 +326,7 @@ export const SmartHftLadderSection: React.FC<Props> = ({
           timeframe: simTimeframe,
           pattern: simPattern,
           total_orders: simTotalOrders,
+          bound_percentage: simBoundPct,
           min_price_bound: simMinBound,
           max_price_bound: simMaxBound,
           min_buy_lot: simMinBuyLot,
@@ -513,30 +539,92 @@ export const SmartHftLadderSection: React.FC<Props> = ({
           </div>
         </div>
 
+        {/* Percentage Preset Bar & Divergence Guard Indicator */}
+        <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 bg-slate-900/90 rounded-xl border border-slate-800 text-xs font-sans">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] text-slate-300 font-medium">Rentang Harga (Spread %):</span>
+            <div className="flex items-center gap-1">
+              {[1, 2, 3, 5, 8, 10].map(pct => (
+                <button
+                  key={pct}
+                  type="button"
+                  onClick={() => applyBoundPercentage(pct)}
+                  className={`px-2.5 py-0.5 rounded text-[11px] font-mono font-bold transition-all ${
+                    Math.abs(impliedSpreadPct - pct) < 0.35
+                      ? 'bg-cyan-500 text-slate-950 shadow-sm shadow-cyan-500/50 ring-1 ring-cyan-300'
+                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700'
+                  }`}
+                >
+                  ±{pct}%
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-slate-400">Status Rentang:</span>
+            {impliedSpreadPct > 15 ? (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold">
+                ⚠️ Terlalu Jauh (±{impliedSpreadPct}%)
+                <button
+                  type="button"
+                  onClick={() => applyBoundPercentage(3)}
+                  className="underline hover:text-white ml-1 font-semibold text-cyan-300"
+                >
+                  Rapatkan ke ±3%
+                </button>
+              </span>
+            ) : impliedSpreadPct > 8 ? (
+              <span className="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30 text-[10px] font-semibold">
+                ℹ️ Moderat (±{impliedSpreadPct}%)
+              </span>
+            ) : (
+              <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold">
+                ✓ Optimal & Aktif (±{impliedSpreadPct}%)
+              </span>
+            )}
+          </div>
+        </div>
+
         {/* Input Parameters Bar */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 p-3 bg-[#0f172a] rounded-xl text-xs font-mono">
           <div>
-            <label className="text-[10px] text-slate-400 block mb-1">Min Price Bound</label>
+            <div className="flex items-center justify-between block mb-1">
+              <label htmlFor="sim-min-bound-input" className="text-[10px] text-slate-400">Min Bound</label>
+              <span className="text-[9px] text-emerald-400 font-sans">-{impliedSpreadPct}%</span>
+            </div>
             <input
+              id="sim-min-bound-input"
+              name="simMinBound"
+              aria-label="Min Price Bound"
               type="text"
               value={simMinBound}
               onChange={e => setSimMinBound(e.target.value)}
-              className="w-full bg-[#1e293b] text-emerald-400 px-2 py-1 rounded border border-emerald-500/30"
+              className="w-full bg-[#1e293b] text-emerald-400 px-2 py-1 rounded border border-emerald-500/30 font-mono"
             />
           </div>
           <div>
-            <label className="text-[10px] text-slate-400 block mb-1">Max Price Bound</label>
+            <div className="flex items-center justify-between block mb-1">
+              <label htmlFor="sim-max-bound-input" className="text-[10px] text-slate-400">Max Bound</label>
+              <span className="text-[9px] text-red-400 font-sans">+{impliedSpreadPct}%</span>
+            </div>
             <input
+              id="sim-max-bound-input"
+              name="simMaxBound"
+              aria-label="Max Price Bound"
               type="text"
               value={simMaxBound}
               onChange={e => setSimMaxBound(e.target.value)}
-              className="w-full bg-[#1e293b] text-red-400 px-2 py-1 rounded border border-red-500/30"
+              className="w-full bg-[#1e293b] text-red-400 px-2 py-1 rounded border border-red-500/30 font-mono"
             />
           </div>
           <div>
-            <label className="text-[10px] text-slate-400 block mb-1">Buy Lot (Min → Max)</label>
+            <label htmlFor="sim-min-buy-lot-input" className="text-[10px] text-slate-400 block mb-1">Buy Lot (Min → Max)</label>
             <div className="flex items-center gap-1">
               <input
+                id="sim-min-buy-lot-input"
+                name="simMinBuyLot"
+                aria-label="Min Buy Lot"
                 type="text"
                 value={simMinBuyLot}
                 onChange={e => setSimMinBuyLot(e.target.value)}
@@ -544,6 +632,9 @@ export const SmartHftLadderSection: React.FC<Props> = ({
               />
               <span className="text-slate-500">→</span>
               <input
+                id="sim-max-buy-lot-input"
+                name="simMaxBuyLot"
+                aria-label="Max Buy Lot"
                 type="text"
                 value={simMaxBuyLot}
                 onChange={e => setSimMaxBuyLot(e.target.value)}
@@ -552,9 +643,12 @@ export const SmartHftLadderSection: React.FC<Props> = ({
             </div>
           </div>
           <div>
-            <label className="text-[10px] text-slate-400 block mb-1">Sell Lot (Min → Max)</label>
+            <label htmlFor="sim-min-sell-lot-input" className="text-[10px] text-slate-400 block mb-1">Sell Lot (Min → Max)</label>
             <div className="flex items-center gap-1">
               <input
+                id="sim-min-sell-lot-input"
+                name="simMinSellLot"
+                aria-label="Min Sell Lot"
                 type="text"
                 value={simMinSellLot}
                 onChange={e => setSimMinSellLot(e.target.value)}
@@ -562,6 +656,9 @@ export const SmartHftLadderSection: React.FC<Props> = ({
               />
               <span className="text-slate-500">→</span>
               <input
+                id="sim-max-sell-lot-input"
+                name="simMaxSellLot"
+                aria-label="Max Sell Lot"
                 type="text"
                 value={simMaxSellLot}
                 onChange={e => setSimMaxSellLot(e.target.value)}
@@ -570,8 +667,11 @@ export const SmartHftLadderSection: React.FC<Props> = ({
             </div>
           </div>
           <div>
-            <label className="text-[10px] text-slate-400 block mb-1">Total Orders</label>
+            <label htmlFor="sim-total-orders-input" className="text-[10px] text-slate-400 block mb-1">Total Orders</label>
             <input
+              id="sim-total-orders-input"
+              name="simTotalOrders"
+              aria-label="Total Orders"
               type="number"
               min={2}
               max={100}
@@ -735,7 +835,7 @@ export const SmartHftLadderSection: React.FC<Props> = ({
                         </span>
                       </td>
                       <td className="p-3 text-emerald-400">
-                        {cfg?.order_count || 40} ({Math.floor((cfg?.order_count || 40) / 2)} Buy / {Math.floor((cfg?.order_count || 40) / 2)} Sell)
+                        {cfg?.total_orders || 40} ({Math.floor((cfg?.total_orders || 40) / 2)} Buy / {Math.floor((cfg?.total_orders || 40) / 2)} Sell)
                       </td>
                       <td className="p-3 text-[11px]">
                         [{cfg?.min_price_bound} - {cfg?.max_price_bound}]
@@ -801,8 +901,10 @@ export const SmartHftLadderSection: React.FC<Props> = ({
 
             <form onSubmit={handleCreateBot} className="mt-4 space-y-4 text-xs font-sans">
               <div>
-                <label className="text-slate-300 block mb-1">Nama Bot</label>
+                <label htmlFor="modal-bot-name" className="text-slate-300 block mb-1">Nama Bot</label>
                 <input
+                  id="modal-bot-name"
+                  name="botName"
                   type="text"
                   required
                   value={botName}
@@ -813,8 +915,10 @@ export const SmartHftLadderSection: React.FC<Props> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-300 block mb-1">Trading Pair</label>
+                  <label htmlFor="modal-sim-pair-id" className="text-slate-300 block mb-1">Trading Pair</label>
                   <select
+                    id="modal-sim-pair-id"
+                    name="simPairId"
                     value={simPairId}
                     onChange={e => setSimPairId(e.target.value)}
                     className="w-full bg-[#1e293b] text-white px-3 py-2 rounded-lg border border-slate-700 font-mono"
@@ -825,8 +929,10 @@ export const SmartHftLadderSection: React.FC<Props> = ({
                   </select>
                 </div>
                 <div>
-                  <label className="text-slate-300 block mb-1">Environment</label>
+                  <label htmlFor="modal-bot-environment" className="text-slate-300 block mb-1">Environment</label>
                   <select
+                    id="modal-bot-environment"
+                    name="botEnvironment"
                     value={botEnvironment}
                     onChange={e => setBotEnvironment(e.target.value as any)}
                     className="w-full bg-[#1e293b] text-white px-3 py-2 rounded-lg border border-slate-700"
@@ -840,8 +946,10 @@ export const SmartHftLadderSection: React.FC<Props> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-300 block mb-1">Pola Grafik (Modul A)</label>
+                  <label htmlFor="modal-sim-pattern" className="text-slate-300 block mb-1">Pola Grafik (Modul A)</label>
                   <select
+                    id="modal-sim-pattern"
+                    name="simPattern"
                     value={simPattern}
                     onChange={e => setSimPattern(e.target.value as PatternFormationType)}
                     className="w-full bg-[#1e293b] text-cyan-300 px-3 py-2 rounded-lg border border-cyan-500/40 font-semibold"
@@ -869,24 +977,66 @@ export const SmartHftLadderSection: React.FC<Props> = ({
                   </select>
                 </div>
                 <div>
-                  <label className="text-slate-300 block mb-1">Timeframe (Skala TF)</label>
+                  <label htmlFor="modal-sim-timeframe" className="text-slate-300 block mb-1">Timeframe (Skala TF)</label>
                   <select
+                    id="modal-sim-timeframe"
+                    name="simTimeframe"
                     value={simTimeframe}
                     onChange={e => setSimTimeframe(e.target.value as PatternTimeframe)}
                     className="w-full bg-[#1e293b] text-white px-3 py-2 rounded-lg border border-slate-700 font-mono"
                   >
-                    <option value="5m">5 Menit (60 Bars)</option>
-                    <option value="15m">15 Menit (100 Bars)</option>
-                    <option value="1h">1 Jam (150 Bars)</option>
-                    <option value="4h">4 Jam (240 Bars)</option>
+                    <option value="5m">5 Menit (30 Bars)</option>
+                    <option value="15m">15 Menit (45 Bars)</option>
+                    <option value="1h">1 Jam (60 Bars)</option>
+                    <option value="4h">4 Jam (90 Bars)</option>
                   </select>
                 </div>
               </div>
 
+              {/* Percentage Spread Selector for Modal */}
+              <div className="p-3 bg-slate-900/90 rounded-xl border border-slate-800">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-slate-300 font-medium">Rentang Batas Harga (Spread %):</span>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                    impliedSpreadPct > 15
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                      : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                  }`}>
+                    {impliedSpreadPct > 15 ? `⚠️ Terlalu Jauh (±${impliedSpreadPct}%)` : `✓ Rentang: ±${impliedSpreadPct}%`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {[1, 2, 3, 5, 8, 10].map(pct => (
+                    <button
+                      key={pct}
+                      type="button"
+                      onClick={() => applyBoundPercentage(pct)}
+                      className={`flex-1 py-1 rounded text-xs font-mono font-bold transition-all ${
+                        Math.abs(impliedSpreadPct - pct) < 0.35
+                          ? 'bg-cyan-500 text-slate-950 shadow-sm shadow-cyan-500/50 ring-1 ring-cyan-300'
+                          : 'bg-[#1e293b] text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700'
+                      }`}
+                    >
+                      ±{pct}%
+                    </button>
+                  ))}
+                </div>
+                {impliedSpreadPct > 15 && (
+                  <p className="mt-2 text-[10px] text-amber-300/90">
+                    ⚠️ Rentang harga terlalu jauh dari pasar. Disarankan menggunakan ±2% s/d ±5% agar ladder limit order aktif tereksekusi.
+                  </p>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-300 block mb-1">Min Price Bound (Absolut Bawah)</label>
+                  <div className="flex items-center justify-between block mb-1">
+                    <label htmlFor="modal-sim-min-bound" className="text-slate-300">Min Price Bound</label>
+                    <span className="text-[10px] text-emerald-400 font-mono">-{impliedSpreadPct}%</span>
+                  </div>
                   <input
+                    id="modal-sim-min-bound"
+                    name="modalSimMinBound"
                     type="text"
                     required
                     value={simMinBound}
@@ -895,8 +1045,13 @@ export const SmartHftLadderSection: React.FC<Props> = ({
                   />
                 </div>
                 <div>
-                  <label className="text-slate-300 block mb-1">Max Price Bound (Absolut Atas)</label>
+                  <div className="flex items-center justify-between block mb-1">
+                    <label htmlFor="modal-sim-max-bound" className="text-slate-300">Max Price Bound</label>
+                    <span className="text-[10px] text-red-400 font-mono">+{impliedSpreadPct}%</span>
+                  </div>
                   <input
+                    id="modal-sim-max-bound"
+                    name="modalSimMaxBound"
                     type="text"
                     required
                     value={simMaxBound}
@@ -908,9 +1063,12 @@ export const SmartHftLadderSection: React.FC<Props> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-300 block mb-1">Buy Lot (Level 1 → Level Terjauh)</label>
+                  <label htmlFor="modal-sim-min-buy-lot" className="text-slate-300 block mb-1">Buy Lot (Level 1 → Level Terjauh)</label>
                   <div className="flex gap-2">
                     <input
+                      id="modal-sim-min-buy-lot"
+                      name="modalSimMinBuyLot"
+                      aria-label="Modal Min Buy Lot"
                       type="text"
                       required
                       value={simMinBuyLot}
@@ -919,6 +1077,9 @@ export const SmartHftLadderSection: React.FC<Props> = ({
                       className="w-1/2 bg-[#1e293b] text-white px-2 py-1.5 rounded border border-slate-700 font-mono text-center"
                     />
                     <input
+                      id="modal-sim-max-buy-lot"
+                      name="modalSimMaxBuyLot"
+                      aria-label="Modal Max Buy Lot"
                       type="text"
                       required
                       value={simMaxBuyLot}
@@ -929,9 +1090,12 @@ export const SmartHftLadderSection: React.FC<Props> = ({
                   </div>
                 </div>
                 <div>
-                  <label className="text-slate-300 block mb-1">Sell Lot (Level 1 → Level Terjauh)</label>
+                  <label htmlFor="modal-sim-min-sell-lot" className="text-slate-300 block mb-1">Sell Lot (Level 1 → Level Terjauh)</label>
                   <div className="flex gap-2">
                     <input
+                      id="modal-sim-min-sell-lot"
+                      name="modalSimMinSellLot"
+                      aria-label="Modal Min Sell Lot"
                       type="text"
                       required
                       value={simMinSellLot}
@@ -940,6 +1104,9 @@ export const SmartHftLadderSection: React.FC<Props> = ({
                       className="w-1/2 bg-[#1e293b] text-white px-2 py-1.5 rounded border border-slate-700 font-mono text-center"
                     />
                     <input
+                      id="modal-sim-max-sell-lot"
+                      name="modalSimMaxSellLot"
+                      aria-label="Modal Max Sell Lot"
                       type="text"
                       required
                       value={simMaxSellLot}
@@ -953,8 +1120,10 @@ export const SmartHftLadderSection: React.FC<Props> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-300 block mb-1">Total Order Ladder (Max 100)</label>
+                  <label htmlFor="modal-sim-total-orders" className="text-slate-300 block mb-1">Total Order Ladder (Max 100)</label>
                   <input
+                    id="modal-sim-total-orders"
+                    name="modalSimTotalOrders"
                     type="number"
                     min={2}
                     max={100}
@@ -965,8 +1134,10 @@ export const SmartHftLadderSection: React.FC<Props> = ({
                   />
                 </div>
                 <div>
-                  <label className="text-slate-300 block mb-1">Interval Rotasi Tangga (ms)</label>
+                  <label htmlFor="modal-reprice-interval" className="text-slate-300 block mb-1">Interval Rotasi Tangga (ms)</label>
                   <input
+                    id="modal-reprice-interval"
+                    name="modalRepriceInterval"
                     type="number"
                     step={500}
                     value={repriceIntervalMs}

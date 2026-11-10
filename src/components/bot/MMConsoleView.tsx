@@ -20,6 +20,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { UserProfile, TradingPairItem, BotInstance, OrderItem, TradeItem, Environment, BotStatus, BotType } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
 import { SmartHftLadderSection } from './SmartHftLadderSection.js';
+import { AdvancedMarketMakerSection } from './AdvancedMarketMakerSection.js';
 
 interface Props {
   user: UserProfile | null;
@@ -30,6 +31,7 @@ interface Props {
 
 type MMTab = 
   | 'OVERVIEW' 
+  | 'ADVANCED_MM'
   | 'SMART_HFT_LADDER'
   | 'QUANT_HFT_MM'
   | 'DEPTH_LIQUIDITY'
@@ -119,14 +121,14 @@ export const MMConsoleView: React.FC<Props> = ({
   const [pfDryRun, setPfDryRun] = useState(false);
 
   // Depth Liquidity Form State
-  const [dlName, setDlName] = useState('Depth Liquidity USDT-IDR Ladder');
-  const [dlPairId, setDlPairId] = useState('USDT-IDR');
-  const [dlPriceMode, setDlPriceMode] = useState<'EXTERNAL_REFERENCE' | 'CUSTOM_BOUNDS'>('CUSTOM_BOUNDS');
-  const [dlMinBuyPrice, setDlMinBuyPrice] = useState('16200');
-  const [dlMaxBuyPrice, setDlMaxBuyPrice] = useState('16400');
-  const [dlMinSellPrice, setDlMinSellPrice] = useState('16500');
-  const [dlMaxSellPrice, setDlMaxSellPrice] = useState('16700');
-  const [dlSource, setDlSource] = useState<'AGGREGATED' | 'BINANCE' | 'BYBIT' | 'COINMARKETCAP' | 'NONE'>('NONE');
+  const [dlName, setDlName] = useState('Depth Liquidity BTC-IDR Ladder');
+  const [dlPairId, setDlPairId] = useState('BTC-IDR');
+  const [dlPriceMode, setDlPriceMode] = useState<'EXTERNAL_REFERENCE' | 'CUSTOM_BOUNDS'>('EXTERNAL_REFERENCE');
+  const [dlMinBuyPrice, setDlMinBuyPrice] = useState('1400000000');
+  const [dlMaxBuyPrice, setDlMaxBuyPrice] = useState('1440000000');
+  const [dlMinSellPrice, setDlMinSellPrice] = useState('1460000000');
+  const [dlMaxSellPrice, setDlMaxSellPrice] = useState('1500000000');
+  const [dlSource, setDlSource] = useState<'AGGREGATED' | 'BINANCE' | 'BYBIT' | 'COINMARKETCAP' | 'NONE'>('AGGREGATED');
   const [dlSpacingMode, setDlSpacingMode] = useState<'LINEAR' | 'GEOMETRIC' | 'CONCENTRATED' | 'FIXED_IDR' | 'PERCENT_BPS'>('LINEAR');
   const [dlAntiStacking, setDlAntiStacking] = useState(true);
   const [dlLevelSpacingIdr, setDlLevelSpacingIdr] = useState('60');
@@ -338,8 +340,26 @@ export const MMConsoleView: React.FC<Props> = ({
       if (ovRes.ok && ovRes.headers.get('content-type')?.includes('application/json')) setOverview(await ovRes.json());
       if (instRes.ok && instRes.headers.get('content-type')?.includes('application/json')) {
         const list = await instRes.json();
-        setInstances(list);
-        if (!selectedBotId && list.length > 0) setSelectedBotId(list[0].id);
+        if (Array.isArray(list)) {
+          // Authoritative sync: server list is the single source of truth
+          setInstances(list);
+          try {
+            if (list.length > 0) {
+              localStorage.setItem(`dimonex_mm_instances_${currentEnv}`, JSON.stringify(list));
+            } else {
+              localStorage.removeItem(`dimonex_mm_instances_${currentEnv}`);
+            }
+          } catch {}
+
+          if (list.length > 0) {
+            // If currently selected bot is no longer in the list, switch to first available bot
+            if (!selectedBotId || !list.some(b => b.id === selectedBotId)) {
+              setSelectedBotId(list[0].id);
+            }
+          } else {
+            setSelectedBotId(null);
+          }
+        }
       }
       if (ordRes.ok && ordRes.headers.get('content-type')?.includes('application/json')) setBotOrders(await ordRes.json());
       if (trdRes.ok && trdRes.headers.get('content-type')?.includes('application/json')) setBotTrades(await trdRes.json());
@@ -427,6 +447,13 @@ export const MMConsoleView: React.FC<Props> = ({
       }
 
       setFeedbackMsg({ type: 'success', text: data.message || 'Operasi berhasil dieksekusi.' });
+      if (data?.bot) {
+        setInstances(prev => {
+          const next = [data.bot, ...prev.filter(b => b.id !== data.bot.id)];
+          try { localStorage.setItem(`dimonex_mm_instances_${currentEnv}`, JSON.stringify(next)); } catch {}
+          return next;
+        });
+      }
       loadData();
       return data;
     } catch (err: any) {
@@ -452,11 +479,23 @@ export const MMConsoleView: React.FC<Props> = ({
 
   const handleConfirmDeleteBot = async () => {
     if (!botToDelete) return;
+    const deletedId = botToDelete.id;
     try {
-      await handleAction(`/api/mm/instance/${botToDelete.id}/delete`, 'POST');
+      await handleAction(`/api/mm/instance/${deletedId}/delete`, 'POST');
       setIsDeleteModalOpen(false);
       setBotToDelete(null);
-      if (selectedBotId === botToDelete.id) {
+      setInstances(prev => {
+        const next = prev.filter(b => b.id !== deletedId);
+        try {
+          if (next.length > 0) {
+            localStorage.setItem(`dimonex_mm_instances_${currentEnv}`, JSON.stringify(next));
+          } else {
+            localStorage.removeItem(`dimonex_mm_instances_${currentEnv}`);
+          }
+        } catch {}
+        return next;
+      });
+      if (selectedBotId === deletedId) {
         setSelectedBotId(null);
       }
     } catch (e) {}
@@ -1280,6 +1319,7 @@ export const MMConsoleView: React.FC<Props> = ({
       <div className="flex items-center gap-1 overflow-x-auto pb-1 border-b border-[#1e293b]">
         {[
           { id: 'OVERVIEW', label: 'Overview' },
+          { id: 'ADVANCED_MM', label: '🛡️ Advanced MM Engine' },
           { id: 'SMART_HFT_LADDER', label: '📐 Smart HFT Ladder' },
           { id: 'QUANT_HFT_MM', label: '⚡ Quant HFT MM' },
           { id: 'DEPTH_LIQUIDITY', label: '📊 Depth & Liquidity' },
@@ -2392,7 +2432,7 @@ export const MMConsoleView: React.FC<Props> = ({
                             <span className="text-red-400">{cfg?.number_of_ask_levels || 3} Asks</span>
                           </td>
                           <td className="py-3 px-4 text-slate-300 text-[11px]">
-                            {cfg?.price_mode === 'CUSTOM_BOUNDS' || cfg?.min_limit_buy_price ? (
+                            {cfg?.price_mode === 'CUSTOM_BOUNDS' ? (
                               <div>
                                 <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
                                   CUSTOM BOUNDS
@@ -2510,6 +2550,15 @@ export const MMConsoleView: React.FC<Props> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* TAB: ADVANCED MARKET MAKER & MULTI-TIMEFRAME ENGINE */}
+      {activeTab === 'ADVANCED_MM' && (
+        <AdvancedMarketMakerSection
+          user={user}
+          tradingPairs={tradingPairs}
+          currentEnv={currentEnv}
+        />
       )}
 
       {/* TAB: SMART HFT LADDER BOT & PATTERN CHART CREATOR ENGINE */}

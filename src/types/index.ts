@@ -21,7 +21,8 @@ export type BotType =
   | 'SELL_LAYERS' 
   | 'SMART_TRADE'
   | 'QUANT_HFT_MM'
-  | 'SMART_HFT_LADDER';
+  | 'SMART_HFT_LADDER'
+  | 'ADVANCED_MM';
 
 export interface UserProfile {
   id: string;
@@ -192,30 +193,97 @@ export type PatternTimeframe = '5m' | '15m' | '1h' | '4h';
 
 export interface SmartHftLadderConfig {
   account_id: string;
-  market_symbol: string;
+  market_symbol?: string;
+  pairId?: string;
   pattern: PatternFormationType;
   timeframe: PatternTimeframe;
-  min_price_bound: number;
-  max_price_bound: number;
-  min_buy_lot: number;
-  max_buy_lot: number;
-  min_sell_lot: number;
-  max_sell_lot: number;
-  order_count: number;
+  total_orders?: number;
+  order_count?: number;
+  bound_percentage?: number;
+  min_price_bound: number | string;
+  max_price_bound: number | string;
+  min_buy_lot: number | string;
+  max_buy_lot: number | string;
+  min_sell_lot: number | string;
+  max_sell_lot: number | string;
   reprice_interval_ms: number;
   activeOrderIds?: string[];
   currentAnchorPrice?: number;
-  lastAnchorPrice?: number;
+  lastAnchorPrice?: number | string;
   lastExecutionTimestamp?: number;
+  currentPatternIndex?: number;
+  totalBars?: number;
+  lastRepriceTimestamp?: number;
   lastPatternMetrics?: {
     patternName: string;
     barsGenerated: number;
+    currentBarIndex?: number;
+    totalBars?: number;
     anchorPrice: string;
     buyLevel1: { price: string; lot: string };
     buyLevelFurthest: { price: string; lot: string };
     sellLevel1: { price: string; lot: string };
     sellLevelFurthest: { price: string; lot: string };
   };
+}
+
+export type MarketRegimeType =
+  | 'SIDEWAYS'
+  | 'BULLISH_TREND'
+  | 'BEARISH_TREND'
+  | 'CONSOLIDATION'
+  | 'HIGH_VOLATILITY'
+  | 'LOW_VOLATILITY'
+  | 'BREAKOUT'
+  | 'REVERSAL';
+
+export interface AdvancedMarketMakerConfig {
+  account_id: string;
+  pair_id: string;
+  timeframe?: string;
+  
+  // Section B: Liquidity Configuration
+  bid_levels: number;
+  ask_levels: number;
+  bid_base_quantity: string;
+  ask_base_quantity: string;
+  quantity_distribution: 'LINEAR' | 'GEOMETRIC' | 'EXPONENTIAL' | 'FLAT';
+  spread_min_bps: number;
+  spread_max_bps: number;
+  price_offset_bps: number;
+  order_refresh_interval_ms: number;
+  maximum_open_orders: number;
+  spacing_mode: 'LINEAR' | 'GEOMETRIC' | 'VOLATILITY_ADAPTIVE';
+
+  // Section C: Adaptive Market Configuration
+  adaptive_quoting_enabled: boolean;
+  volatility_monitoring_enabled: boolean;
+  inventory_rebalancing_enabled: boolean;
+  dynamic_spread_enabled: boolean;
+  market_regime_detection_enabled: boolean;
+  risk_protection_enabled: boolean;
+
+  // Section D: Risk Configuration
+  maximum_inventory: string;
+  maximum_order_value_quote: string;
+  maximum_exposure_quote: string;
+  maximum_daily_loss_quote: string;
+  maximum_price_deviation_pct: number;
+  minimum_available_balance_quote: string;
+  emergency_stop: boolean;
+
+  // Monitoring State & Runtime Metrics
+  activeOrderIds?: string[];
+  lastRepriceTimestamp?: number;
+  lastReferencePrice?: string;
+  lastSpreadBps?: number;
+  lastDetectedRegime?: MarketRegimeType | string;
+  lastVolatilityAtrPct?: number;
+  lastInventoryBase?: string;
+  lastInventoryQuote?: string;
+  totalBidLiquidityQuote?: string;
+  totalAskLiquidityQuote?: string;
+  riskWarnings?: string[];
 }
 
 export interface BotInstance {
@@ -240,6 +308,7 @@ export interface BotInstance {
   quantHftConfig?: QuantHftConfig;
   smartHftConfig?: SmartHftLadderConfig;
   gridConfig?: any;
+  advancedMMConfig?: AdvancedMarketMakerConfig;
   stats: {
     ordersSubmitted: number;
     ordersAccepted: number;
