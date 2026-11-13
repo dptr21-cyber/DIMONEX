@@ -200,6 +200,8 @@ export interface SmartHftLadderConfig {
   total_orders?: number;
   order_count?: number;
   bound_percentage?: number;
+  min_spread_bps?: number;
+  spread_percentage?: number;
   min_price_bound: number | string;
   max_price_bound: number | string;
   min_buy_lot: number | string;
@@ -225,6 +227,107 @@ export interface SmartHftLadderConfig {
     sellLevel1: { price: string; lot: string };
     sellLevelFurthest: { price: string; lot: string };
   };
+}
+
+export interface RebalanceEvent {
+  id: string;
+  timestamp: number;
+  pairId: string;
+  side: 'BUY' | 'SELL';
+  quantity: string;
+  baseAmount?: string;
+  price: string;
+  quoteAmount: string;
+  targetRatioPct: number;
+  actualRatioPct: number;
+  deviationPct: number;
+  orderId?: string;
+  status: 'EXECUTED' | 'FAILED' | 'SKIPPED';
+  reason: string;
+}
+
+export interface PortfolioRebalanceConfig {
+  id: string;
+  accountId: string;
+  pairId: string;
+  targetBaseRatioPct: number;
+  deviationThresholdPct: number;
+  maxOrderSizeQuote: string;
+  rebalanceOrderType: 'LIMIT_PASSIVE' | 'LIMIT_AGGRESSIVE';
+  slippageTolerancePct: number;
+  checkIntervalSec: number;
+  enabled: boolean;
+  lastRebalanceTimestamp?: number;
+  lastTriggerReason?: string;
+  rebalanceHistory: RebalanceEvent[];
+}
+
+export interface PerformanceMetricPoint {
+  timestamp: number;
+  cumulativePnl: number;
+  realizedPnl: number;
+  unrealizedPnl: number;
+  baseInventoryValue: number;
+  quoteInventoryValue: number;
+  inventorySkewBps: number;
+  inventoryRatioPct: number;
+  latencyMs: number;
+  tradesCount: number;
+  volumeQuote: number;
+}
+
+export interface EngineTelemetrySeriesPoint {
+  timestamp: number;
+  ordersPerSecond: number;
+  cancellationsPerSecond: number;
+  tradesPerSecond: number;
+  avgLatencyMs: number;
+  p95LatencyMs: number;
+  maxLatencyMs: number;
+  feeGeneratedIdr: number;
+  makerFeeIdr: number;
+  takerFeeIdr: number;
+  cumulativeFeeIdr: number;
+}
+
+export interface PairFeeBreakdown {
+  pairId: string;
+  baseCurrency: string;
+  quoteCurrency: string;
+  tradesCount: number;
+  makerFeesNative: string;
+  takerFeesNative: string;
+  totalFeesIdr: number;
+  volumeIdr: number;
+}
+
+export interface EngineTelemetrySnapshot {
+  timestamp: number;
+  windowSeconds: number;
+  pairFilter: string;
+  summary: {
+    currentOps: number;
+    avgOps: number;
+    peakOps: number;
+    currentTradesPerSec: number;
+    avgLatencyMs: number;
+    p50LatencyMs: number;
+    p95LatencyMs: number;
+    p99LatencyMs: number;
+    maxLatencyMs: number;
+    totalFeesIdr: number;
+    makerFeesIdr: number;
+    takerFeesIdr: number;
+    windowFeesIdr: number;
+    feeRatePerMinIdr: number;
+    totalOrdersProcessed: number;
+    totalOrdersCancelled: number;
+    totalTradesExecuted: number;
+    openOrdersCount: number;
+    activeBotsCount: number;
+  };
+  pairBreakdown: PairFeeBreakdown[];
+  series: EngineTelemetrySeriesPoint[];
 }
 
 export type MarketRegimeType =

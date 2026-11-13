@@ -106,6 +106,7 @@ export async function startServer() {
       server: {
         middlewareMode: true,
         hmr: false,
+        ws: false,
       },
       appType: 'spa',
     });
@@ -117,6 +118,10 @@ export async function startServer() {
     if (res.headersSent) return next(err);
     console.error('[DIMONEX Server Error]:', err);
     res.status(500).json({ error: 'Internal Server Error', message: err?.message || 'Server error' });
+  });
+
+  server.on('error', (err: any) => {
+    console.error('[DIMONEX] HTTP Server error:', err);
   });
 
   server.listen(PORT, '0.0.0.0', () => {

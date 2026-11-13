@@ -23,7 +23,9 @@ import { PriceFollowerBotExecutor } from '../services/bots/PriceFollowerBot.js';
 import { SmartHftLadderBotExecutor } from '../services/bots/SmartHftLadderBot.js';
 import { AdvancedMarketMakerBotExecutor } from '../services/bots/AdvancedMarketMakerBot.js';
 import { timeframeAnalyticsService } from '../services/analytics/TimeframeAnalyticsService.js';
+import { portfolioRebalanceService } from '../services/rebalance/PortfolioRebalanceService.js';
 import { PrecisionMath } from '../ledger/PrecisionMath.js';
+import { engineTelemetry } from '../engine/EngineTelemetry.js';
 
 export const mmConsoleRouter = Router();
 
@@ -1624,7 +1626,9 @@ mmConsoleRouter.post('/smart-hft/preview', requireMMOrAdmin, (req, res) => {
       min_buy_lot,
       max_buy_lot,
       min_sell_lot,
-      max_sell_lot
+      max_sell_lot,
+      min_spread_bps,
+      spread_percentage
     } = req.body;
 
     const pair = db.tradingPairs.get(pairId || 'BTC-IDR');
@@ -1681,6 +1685,8 @@ mmConsoleRouter.post('/smart-hft/preview', requireMMOrAdmin, (req, res) => {
       max_buy_lot: String(max_buy_lot || '0.50'),
       min_sell_lot: String(min_sell_lot || '0.01'),
       max_sell_lot: String(max_sell_lot || '0.50'),
+      min_spread_bps: min_spread_bps ? Number(min_spread_bps) : undefined,
+      spread_percentage: spread_percentage ? Number(spread_percentage) : undefined,
       reprice_interval_ms: 3000
     };
 
@@ -1744,6 +1750,8 @@ mmConsoleRouter.post('/smart-hft/create', requireMMOrAdmin, (req, res) => {
       max_buy_lot,
       min_sell_lot,
       max_sell_lot,
+      min_spread_bps,
+      spread_percentage,
       reprice_interval_ms
     } = req.body;
 
@@ -1798,6 +1806,8 @@ mmConsoleRouter.post('/smart-hft/create', requireMMOrAdmin, (req, res) => {
       max_buy_lot: String(max_buy_lot || '0.50'),
       min_sell_lot: String(min_sell_lot || '0.01'),
       max_sell_lot: String(max_sell_lot || '0.50'),
+      min_spread_bps: min_spread_bps ? Number(min_spread_bps) : undefined,
+      spread_percentage: spread_percentage ? Number(spread_percentage) : undefined,
       reprice_interval_ms: Number(reprice_interval_ms || 4000),
       activeOrderIds: [],
       currentPatternIndex: 0,
@@ -2169,6 +2179,153 @@ mmConsoleRouter.get('/advanced-bot/:id/monitoring', requireMMOrAdmin, (req, res)
   }
 });
 
+// ==========================================
+// 10. AUTOMATED PORTFOLIO REBALANCING MODULE
+// ==========================================
 
+// Get Portfolio Status and Rebalancing Diagnostics
+mmConsoleRouter.get('/rebalance/status', requireMMOrAdmin, (req, res) => {
+  try {
+    const user = (req as any).user;
+    const pairId = (req.query.pairId as string) || 'BTC-IDR';
+    const accountId = (req.query.accountId as string) || user.id;
 
+    const config = portfolioRebalanceService.getConfig(accountId, pairId);
+    const status = portfolioRebalanceService.getPortfolioStatus(accountId, pairId);
 
+    res.json({
+      success: true,
+      config,
+      status
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Save or Update Portfolio Rebalancing Configuration
+mmConsoleRouter.post('/rebalance/config', requireMMOrAdmin, (req, res) => {
+  try {
+    const user = (req as any).user;
+    const {
+      pairId,
+      accountId,
+      targetBaseRatioPct,
+      deviationThresholdPct,
+      maxOrderSizeQuote,
+      rebalanceOrderType,
+      slippageTolerancePct,
+      checkIntervalSec,
+      enabled
+    } = req.body;
+
+    const targetAcct = accountId || user.id;
+    const targetPair = pairId || 'BTC-IDR';
+
+    const existingConfig = portfolioRebalanceService.getConfig(targetAcct, targetPair);
+
+    const updatedConfig = portfolioRebalanceService.saveConfig({
+      ...existingConfig,
+      targetBaseRatioPct: Number(targetBaseRatioPct ?? existingConfig.targetBaseRatioPct),
+      deviationThresholdPct: Number(deviationThresholdPct ?? existingConfig.deviationThresholdPct),
+      maxOrderSizeQuote: maxOrderSizeQuote !== undefined ? String(maxOrderSizeQuote) : existingConfig.maxOrderSizeQuote,
+      rebalanceOrderType: rebalanceOrderType || existingConfig.rebalanceOrderType,
+      slippageTolerancePct: Number(slippageTolerancePct ?? existingConfig.slippageTolerancePct),
+      checkIntervalSec: Number(checkIntervalSec ?? existingConfig.checkIntervalSec),
+      enabled: enabled !== undefined ? Boolean(enabled) : existingConfig.enabled
+    });
+
+    const status = portfolioRebalanceService.getPortfolioStatus(targetAcct, targetPair);
+
+    res.json({
+      success: true,
+      message: 'Konfigurasi penyeimbangan ulang portofolio berhasil disimpan.',
+      config: updatedConfig,
+      status
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Trigger Immediate Manual Rebalance Check & Order Placement
+mmConsoleRouter.post('/rebalance/execute-now', requireMMOrAdmin, (req, res) => {
+  try {
+    const user = (req as any).user;
+    const { pairId, accountId } = req.body;
+
+    const targetAcct = accountId || user.id;
+    const targetPair = pairId || 'BTC-IDR';
+
+    const result = portfolioRebalanceService.executeRebalance(targetAcct, targetPair, true);
+    const updatedStatus = portfolioRebalanceService.getPortfolioStatus(targetAcct, targetPair);
+
+    res.json({
+      success: result.success,
+      rebalanceEvent: result.rebalanceEvent,
+      status: updatedStatus
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get Rebalancing Audit Event History
+mmConsoleRouter.get('/rebalance/history', requireMMOrAdmin, (req, res) => {
+  try {
+    const user = (req as any).user;
+    const pairId = (req.query.pairId as string) || 'BTC-IDR';
+    const accountId = (req.query.accountId as string) || user.id;
+
+    const config = portfolioRebalanceService.getConfig(accountId, pairId);
+    res.json({
+      success: true,
+      history: config.rebalanceHistory || []
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// 11. HFT PERFORMANCE DASHBOARD (D3 TIME-SERIES)
+// ==========================================
+
+// Performance metrics time-series (PnL, Inventory Skew, Execution Latency)
+mmConsoleRouter.get('/performance/metrics', requireMMOrAdmin, (req, res) => {
+  try {
+    const user = (req as any).user;
+    const pairId = (req.query.pairId as string) || 'BTC-IDR';
+    const accountId = (req.query.accountId as string) || user.id;
+    const timeframe = ((req.query.timeframe as string) || '24H') as '1H' | '6H' | '24H' | '7D' | 'ALL';
+
+    const metrics = portfolioRebalanceService.getPerformanceMetrics(accountId, pairId, timeframe);
+
+    res.json({
+      success: true,
+      pairId,
+      timeframe,
+      ...metrics
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
+// 12. REAL-TIME HFT ENGINE TELEMETRY (OPS, LATENCY, FEE GENERATION)
+// ==========================================
+mmConsoleRouter.get('/engine/telemetry', requireMMOrAdmin, (req, res) => {
+  try {
+    const windowSec = Number(req.query.windowSec) || 60;
+    const pairId = (req.query.pairId as string) || 'ALL';
+    const snapshot = engineTelemetry.getTelemetry(windowSec, pairId);
+
+    res.json({
+      success: true,
+      ...snapshot
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});

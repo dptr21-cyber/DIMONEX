@@ -113,3 +113,11 @@ Seluruh akun di bawah telah di-*pre-seed* ke dalam basis data transaksional ACID
 > 2. Pada jendela login, buka tab atau daftar preset **"Akun Pengujian Demo Cepat"** untuk memilih akun yang diinginkan dengan 1-klik tanpa perlu mengetik manual.
 > 3. Formulir email dan password akan terisi otomatis, lalu tekan **"Masuk ke Platform"**.
 
+***
+
+## 🚀 Panduan Deployment
+
+* **Amazon EC2 (Direkomendasikan untuk Production Stateful Engine, WebSocket & HFT Bot):** Lihat [DEPLOY_EC2.md](./DEPLOY_EC2.md) untuk analisis kelayakan arsitektur serta langkah lengkap *Launch an instance using EC2*, setup Nginx + WebSocket `/ws`, PM2 single-instance, dan SSL/TLS.
+* **Vercel Serverless (Hanya Preview / Terbatas):** Lihat [DEPLOY_VERCEL.md](./DEPLOY_VERCEL.md) untuk catatan keterbatasan environment serverless terhadap in-memory order book dan WebSocket persisten.
+
+

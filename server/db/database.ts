@@ -15,7 +15,7 @@ import {
   TradingPair, Order, Trade, FiatTransaction, CryptoTransaction, ApiKey, AuditLog,
   BotInstance, RiskControlsConfig,
   Asset, ListingRequest, ListingApproval, Market, ListingAuditEvent,
-  TransactionalOutboxEvent, IdempotencyRecord
+  TransactionalOutboxEvent, IdempotencyRecord, PortfolioRebalanceConfig
 } from './types.js';
 import { PrecisionMath } from '../ledger/PrecisionMath.js';
 
@@ -96,6 +96,7 @@ export interface PersistedExchangeState {
   listingAuditEvents?: ListingAuditEvent[];
   outboxEvents?: [string, TransactionalOutboxEvent][];
   idempotencyRecords?: [string, IdempotencyRecord][];
+  portfolioRebalanceConfigs?: [string, PortfolioRebalanceConfig][];
 }
 
 class DatabaseStore {
@@ -123,6 +124,7 @@ class DatabaseStore {
   listingAuditEvents: ListingAuditEvent[] = [];
   outboxEvents: Map<string, TransactionalOutboxEvent> = new Map();
   idempotencyRecords: Map<string, IdempotencyRecord> = new Map();
+  portfolioRebalanceConfigs: Map<string, PortfolioRebalanceConfig> = new Map();
   
   private saveTimer: NodeJS.Timeout | null = null;
   private isSaving = false;
@@ -1179,7 +1181,8 @@ class DatabaseStore {
         markets: Array.from(this.markets.entries()),
         listingAuditEvents: this.listingAuditEvents,
         outboxEvents: Array.from(this.outboxEvents.entries()),
-        idempotencyRecords: Array.from(this.idempotencyRecords.entries())
+        idempotencyRecords: Array.from(this.idempotencyRecords.entries()),
+        portfolioRebalanceConfigs: Array.from(this.portfolioRebalanceConfigs.entries())
       };
 
       const jsonStr = JSON.stringify(state, (key, value) =>
@@ -1289,6 +1292,7 @@ class DatabaseStore {
             if (data.listingAuditEvents) this.listingAuditEvents = data.listingAuditEvents;
             if (data.outboxEvents) this.outboxEvents = new Map(data.outboxEvents);
             if (data.idempotencyRecords) this.idempotencyRecords = new Map(data.idempotencyRecords);
+            if (data.portfolioRebalanceConfigs) this.portfolioRebalanceConfigs = new Map(data.portfolioRebalanceConfigs);
 
             this.lastLoadedMtime = fs.statSync(p).mtimeMs;
             console.log(`[DIMONEX Database] Berhasil memuat snapshot disk (${p}): ${this.users.size} pengguna, ${this.orders.size} order, ${this.trades.length} transaksi, ${this.sessions.size} sesi login aktif.`);

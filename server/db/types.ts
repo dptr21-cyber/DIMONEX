@@ -203,6 +203,8 @@ export interface SmartHftLadderConfig {
   pattern: PatternFormationType;
   total_orders: number; // Default 40, max 100
   bound_percentage?: number; // Optional percentage range from current price (e.g. 1%, 2%, 3%, 5%, 8%)
+  min_spread_bps?: number; // Minimum spread buffer in basis points (e.g. 20 bps = 0.20%, prevents Level 1 from being too tight)
+  spread_percentage?: number; // Minimum spread buffer in percentage (e.g. 0.25%)
   min_price_bound: string; // Absolute lower bound (IDR / USDT quote unit)
   max_price_bound: string; // Absolute upper bound (IDR / USDT quote unit)
   min_buy_lot: string; // Base asset units (closest level)
@@ -227,6 +229,53 @@ export interface SmartHftLadderConfig {
     sellLevel1: { price: string; lot: string };
     sellLevelFurthest: { price: string; lot: string };
   };
+}
+
+export interface RebalanceEvent {
+  id: string;
+  timestamp: number;
+  pairId: string;
+  side: 'BUY' | 'SELL';
+  quantity: string;
+  baseAmount?: string;
+  price: string;
+  quoteAmount: string;
+  targetRatioPct: number;
+  actualRatioPct: number;
+  deviationPct: number;
+  orderId?: string;
+  status: 'EXECUTED' | 'FAILED' | 'SKIPPED';
+  reason: string;
+}
+
+export interface PortfolioRebalanceConfig {
+  id: string;
+  accountId: string;
+  pairId: string;
+  targetBaseRatioPct: number; // e.g. 50 (50% base, 50% quote asset value)
+  deviationThresholdPct: number; // e.g. 5 (triggers when |actual - target| >= 5%)
+  maxOrderSizeQuote: string; // Max quote value cap per rebalance order e.g. '100000000'
+  rebalanceOrderType: 'LIMIT_PASSIVE' | 'LIMIT_AGGRESSIVE';
+  slippageTolerancePct: number; // e.g. 0.2%
+  checkIntervalSec: number; // e.g. 10s
+  enabled: boolean;
+  lastRebalanceTimestamp?: number;
+  lastTriggerReason?: string;
+  rebalanceHistory: RebalanceEvent[];
+}
+
+export interface PerformanceMetricPoint {
+  timestamp: number;
+  cumulativePnl: number;
+  realizedPnl: number;
+  unrealizedPnl: number;
+  baseInventoryValue: number;
+  quoteInventoryValue: number;
+  inventorySkewBps: number;
+  inventoryRatioPct: number;
+  latencyMs: number;
+  tradesCount: number;
+  volumeQuote: number;
 }
 
 export interface AdvancedMarketMakerConfig {

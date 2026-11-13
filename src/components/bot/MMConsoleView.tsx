@@ -21,6 +21,9 @@ import { UserProfile, TradingPairItem, BotInstance, OrderItem, TradeItem, Enviro
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
 import { SmartHftLadderSection } from './SmartHftLadderSection.js';
 import { AdvancedMarketMakerSection } from './AdvancedMarketMakerSection.js';
+import { PerformanceDashboardSection } from './PerformanceDashboardSection.js';
+import { PortfolioRebalanceSection } from './PortfolioRebalanceSection.js';
+import { HftEngineTelemetrySection } from './HftEngineTelemetrySection.js';
 
 interface Props {
   user: UserProfile | null;
@@ -31,6 +34,9 @@ interface Props {
 
 type MMTab = 
   | 'OVERVIEW' 
+  | 'PERFORMANCE'
+  | 'HFT_TELEMETRY'
+  | 'PORTFOLIO_REBALANCE'
   | 'ADVANCED_MM'
   | 'SMART_HFT_LADDER'
   | 'QUANT_HFT_MM'
@@ -1319,6 +1325,9 @@ export const MMConsoleView: React.FC<Props> = ({
       <div className="flex items-center gap-1 overflow-x-auto pb-1 border-b border-[#1e293b]">
         {[
           { id: 'OVERVIEW', label: 'Overview' },
+          { id: 'PERFORMANCE', label: '📈 Dasbor Kinerja (D3)' },
+          { id: 'HFT_TELEMETRY', label: '⚡ HFT Engine Telemetry' },
+          { id: 'PORTFOLIO_REBALANCE', label: '⚖️ Rebalancing Portofolio' },
           { id: 'ADVANCED_MM', label: '🛡️ Advanced MM Engine' },
           { id: 'SMART_HFT_LADDER', label: '📐 Smart HFT Ladder' },
           { id: 'QUANT_HFT_MM', label: '⚡ Quant HFT MM' },
@@ -2550,6 +2559,30 @@ export const MMConsoleView: React.FC<Props> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* TAB: HFT PERFORMANCE DASHBOARD (D3 TELEMETRY) */}
+      {activeTab === 'PERFORMANCE' && (
+        <PerformanceDashboardSection
+          tradingPairs={tradingPairs}
+          onSetFeedback={setFeedbackMsg}
+        />
+      )}
+
+      {/* TAB: REAL-TIME HFT ENGINE TELEMETRY (OPS / LATENCY / FEE GENERATION) */}
+      {activeTab === 'HFT_TELEMETRY' && (
+        <HftEngineTelemetrySection
+          tradingPairs={tradingPairs}
+          onSetFeedback={setFeedbackMsg}
+        />
+      )}
+
+      {/* TAB: AUTOMATED PORTFOLIO REBALANCING */}
+      {activeTab === 'PORTFOLIO_REBALANCE' && (
+        <PortfolioRebalanceSection
+          tradingPairs={tradingPairs}
+          onSetFeedback={setFeedbackMsg}
+        />
       )}
 
       {/* TAB: ADVANCED MARKET MAKER & MULTI-TIMEFRAME ENGINE */}

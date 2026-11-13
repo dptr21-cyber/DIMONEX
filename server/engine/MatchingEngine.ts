@@ -13,6 +13,7 @@ import { db } from '../db/database.js';
 import { Order, TradingPair, OrderSide, OrderType, TimeInForce } from '../db/types.js';
 import { PrecisionMath } from '../ledger/PrecisionMath.js';
 import { LedgerService } from '../ledger/LedgerService.js';
+import { engineTelemetry } from './EngineTelemetry.js';
 
 export interface PlaceOrderInput {
   userId: string;
@@ -67,6 +68,7 @@ export class MatchingEngineManager {
    * 6. Return match result
    */
   placeOrder(input: PlaceOrderInput): MatchResult {
+    const startMs = performance.now();
     const pair = db.tradingPairs.get(input.pairId);
     if (!pair || !pair.isActive) {
       throw new Error(`Trading pair ${input.pairId} tidak aktif`);
@@ -155,12 +157,19 @@ export class MatchingEngineManager {
     const book = this.getOrderBook(input.pairId);
     const result = book.processOrder(order);
 
+    const elapsedMs = performance.now() - startMs;
+    engineTelemetry.recordOrderPlaced(input.pairId, elapsedMs);
+
     return result;
   }
 
   cancelOrder(orderId: string, userId: string, pairId: string, userRole?: string): Order {
+    const startMs = performance.now();
     const book = this.getOrderBook(pairId);
-    return book.cancelOrder(orderId, userId, userRole);
+    const cancelled = book.cancelOrder(orderId, userId, userRole);
+    const elapsedMs = performance.now() - startMs;
+    engineTelemetry.recordOrderCancelled(pairId, elapsedMs);
+    return cancelled;
   }
 
   /**

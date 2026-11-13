@@ -52,6 +52,7 @@ export const SmartHftLadderSection: React.FC<Props> = ({
   const [simMaxBuyLot, setSimMaxBuyLot] = useState<string>('0.50');
   const [simMinSellLot, setSimMinSellLot] = useState<string>('0.02');
   const [simMaxSellLot, setSimMaxSellLot] = useState<string>('0.50');
+  const [simSpreadBps, setSimSpreadBps] = useState<number>(25); // 25 bps = 0.25% safe spread buffer so orders don't stack on anchor
 
   // Preview Data State
   const [previewData, setPreviewData] = useState<any>(null);
@@ -135,7 +136,9 @@ export const SmartHftLadderSection: React.FC<Props> = ({
           min_buy_lot: simMinBuyLot,
           max_buy_lot: simMaxBuyLot,
           min_sell_lot: simMinSellLot,
-          max_sell_lot: simMaxSellLot
+          max_sell_lot: simMaxSellLot,
+          min_spread_bps: simSpreadBps,
+          spread_percentage: simSpreadBps / 100
         })
       });
 
@@ -155,7 +158,7 @@ export const SmartHftLadderSection: React.FC<Props> = ({
     if (simMinBound && simMaxBound) {
       fetchPreview();
     }
-  }, [simPairId, simTimeframe, simPattern, simTotalOrders, simMinBound, simMaxBound, simMinBuyLot, simMaxBuyLot, simMinSellLot, simMaxSellLot]);
+  }, [simPairId, simTimeframe, simPattern, simTotalOrders, simMinBound, simMaxBound, simMinBuyLot, simMaxBuyLot, simMinSellLot, simMaxSellLot, simSpreadBps]);
 
   // Render Canvas Chart
   useEffect(() => {
@@ -333,6 +336,8 @@ export const SmartHftLadderSection: React.FC<Props> = ({
           max_buy_lot: simMaxBuyLot,
           min_sell_lot: simMinSellLot,
           max_sell_lot: simMaxSellLot,
+          min_spread_bps: simSpreadBps,
+          spread_percentage: simSpreadBps / 100,
           reprice_interval_ms: repriceIntervalMs
         })
       });
@@ -587,7 +592,7 @@ export const SmartHftLadderSection: React.FC<Props> = ({
         </div>
 
         {/* Input Parameters Bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 p-3 bg-[#0f172a] rounded-xl text-xs font-mono">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2.5 p-3 bg-[#0f172a] rounded-xl text-xs font-mono">
           <div>
             <div className="flex items-center justify-between block mb-1">
               <label htmlFor="sim-min-bound-input" className="text-[10px] text-slate-400">Min Bound</label>
@@ -663,6 +668,27 @@ export const SmartHftLadderSection: React.FC<Props> = ({
                 value={simMaxSellLot}
                 onChange={e => setSimMaxSellLot(e.target.value)}
                 className="w-1/2 bg-[#1e293b] text-slate-200 px-1.5 py-1 rounded border border-slate-700 text-center"
+              />
+            </div>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label htmlFor="sim-spread-bps-input" className="text-[10px] text-slate-400">Spread Buffer (Anti-Mepet)</label>
+              <span className="text-[9px] text-amber-400 font-sans font-bold">{(simSpreadBps / 100).toFixed(2)}%</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <input
+                id="sim-spread-bps-input"
+                name="simSpreadBps"
+                aria-label="Spread Buffer Bps"
+                type="number"
+                min={5}
+                max={500}
+                step={5}
+                value={simSpreadBps}
+                onChange={e => setSimSpreadBps(Math.max(5, Number(e.target.value)))}
+                className="w-full bg-[#1e293b] text-amber-400 px-2 py-1 rounded border border-amber-500/30 font-bold text-center"
+                title="Buffer minimum antara Level 1 Buy dan Level 1 Sell terhadap Anchor Price agar tidak mepet/menumpuk"
               />
             </div>
           </div>
@@ -1118,9 +1144,9 @@ export const SmartHftLadderSection: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label htmlFor="modal-sim-total-orders" className="text-slate-300 block mb-1">Total Order Ladder (Max 100)</label>
+                  <label htmlFor="modal-sim-total-orders" className="text-slate-300 block mb-1">Total Order Ladder</label>
                   <input
                     id="modal-sim-total-orders"
                     name="modalSimTotalOrders"
@@ -1134,7 +1160,24 @@ export const SmartHftLadderSection: React.FC<Props> = ({
                   />
                 </div>
                 <div>
-                  <label htmlFor="modal-reprice-interval" className="text-slate-300 block mb-1">Interval Rotasi Tangga (ms)</label>
+                  <label htmlFor="modal-sim-spread-bps" className="text-slate-300 block mb-1">Spread Buffer (Anti-Mepet)</label>
+                  <div className="relative">
+                    <input
+                      id="modal-sim-spread-bps"
+                      name="modalSimSpreadBps"
+                      type="number"
+                      min={5}
+                      max={500}
+                      step={5}
+                      value={simSpreadBps}
+                      onChange={e => setSimSpreadBps(Math.max(5, Number(e.target.value)))}
+                      className="w-full bg-[#1e293b] text-amber-400 px-3 py-2 rounded-lg border border-amber-500/30 font-mono font-bold"
+                    />
+                    <span className="absolute right-2.5 top-2.5 text-[10px] text-amber-400 font-bold">{(simSpreadBps / 100).toFixed(2)}%</span>
+                  </div>
+                </div>
+                <div>
+                  <label htmlFor="modal-reprice-interval" className="text-slate-300 block mb-1">Interval Rotasi (ms)</label>
                   <input
                     id="modal-reprice-interval"
                     name="modalRepriceInterval"

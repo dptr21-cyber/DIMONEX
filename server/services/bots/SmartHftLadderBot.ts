@@ -359,9 +359,25 @@ export class SmartHftLadderBotExecutor {
     // Ensure sufficient channel width so all levels have strictly distinct prices
     const minRequiredSpan = BigInt(levelsPerSide) * safeTick;
 
+    // Calculate Half-Spread Offset buffer so Level 1 Buy & Sell are not too tight/mepet
+    let halfSpreadUnits = safeTick;
+    if (cfg.min_spread_bps && cfg.min_spread_bps > 0) {
+      // e.g. 20 bps total spread = 10 bps half spread
+      halfSpreadUnits = (effectiveAnchorUnits * BigInt(cfg.min_spread_bps)) / 20000n;
+    } else if (cfg.spread_percentage && cfg.spread_percentage > 0) {
+      // e.g. 0.30% total spread = 0.15% half spread
+      const halfBps = BigInt(Math.round(cfg.spread_percentage * 50));
+      halfSpreadUnits = (effectiveAnchorUnits * halfBps) / 10000n;
+    } else {
+      // Default safe buffer: at least 15 bps (0.15%) or 4 ticks to prevent over-aggressive immediate fills
+      const defaultBpsUnits = (effectiveAnchorUnits * 15n) / 20000n;
+      halfSpreadUnits = defaultBpsUnits > (safeTick * 4n) ? defaultBpsUnits : (safeTick * 4n);
+    }
+    const safeSpreadOffset = halfSpreadUnits > safeTick ? halfSpreadUnits : safeTick;
+
     // 1. BUY LADDER: Level 1 (closest below anchor) -> Level N (touching min_price_bound)
-    // Guarantee: P_buy,1 > P_buy,2 > ... > P_buy,N (Never identical prices)
-    const buyStartUnits = effectiveAnchorUnits - safeTick;
+    // Guarantee: P_buy,1 > P_buy,2 > ... > P_buy,N (Never identical prices, non-mepet spread)
+    const buyStartUnits = effectiveAnchorUnits - safeSpreadOffset;
     let effectiveMinBoundUnits = minBoundUnits;
     if (buyStartUnits - effectiveMinBoundUnits < minRequiredSpan) {
       effectiveMinBoundUnits = buyStartUnits > minRequiredSpan ? (buyStartUnits - minRequiredSpan) : safeTick;
@@ -409,8 +425,8 @@ export class SmartHftLadderBotExecutor {
     }
 
     // 2. SELL LADDER: Level 1 (closest above anchor) -> Level N (touching max_price_bound)
-    // Guarantee: P_sell,1 < P_sell,2 < ... < P_sell,N (Never identical prices)
-    const sellStartUnits = effectiveAnchorUnits + safeTick;
+    // Guarantee: P_sell,1 < P_sell,2 < ... < P_sell,N (Never identical prices, non-mepet spread)
+    const sellStartUnits = effectiveAnchorUnits + safeSpreadOffset;
     let effectiveMaxBoundUnits = maxBoundUnits;
     if (effectiveMaxBoundUnits - sellStartUnits < minRequiredSpan) {
       effectiveMaxBoundUnits = sellStartUnits + minRequiredSpan;
