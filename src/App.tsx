@@ -90,7 +90,7 @@ function AppContent() {
   const [selectedPriceForOrder, setSelectedPriceForOrder] = useState<string | null>(null);
   const [isPairDropdownOpen, setIsPairDropdownOpen] = useState(false);
   const [pairSearch, setPairSearch] = useState('');
-  const [pairFilterTab, setPairFilterTab] = useState<'ALL' | 'NEW' | 'IDR'>('ALL');
+  const [pairFilterTab, setPairFilterTab] = useState<'ALL' | 'NEW' | 'IDR' | 'USDT'>('ALL');
 
   // Depth & Trades
   const [depth, setDepth] = useState<{ bids: [string, string, string][]; asks: [string, string, string][]; spread: string }>({
@@ -114,6 +114,7 @@ function AppContent() {
 
   const handleSelectPair = (pairId: string) => {
     setSelectedPairIdState(pairId);
+    setSelectedPriceForOrder(null);
     localStorage.setItem('dimonex_pair', pairId);
   };
 
@@ -540,6 +541,7 @@ function AppContent() {
                             {[
                               { id: 'ALL', label: 'Semua' },
                               { id: 'IDR', label: 'Spot IDR' },
+                              { id: 'USDT', label: 'Spot USDT' },
                               { id: 'NEW', label: '🔥 Baru Listing' },
                             ].map(tab => (
                               <button
@@ -566,6 +568,7 @@ function AppContent() {
                                 if (!match) return false;
                                 if (pairFilterTab === 'NEW') return p.isNewListing || p.baseCurrency === 'SOL';
                                 if (pairFilterTab === 'IDR') return p.quoteCurrency === 'IDR';
+                                if (pairFilterTab === 'USDT') return p.quoteCurrency === 'USDT';
                                 return true;
                               })
                               .map(p => {
@@ -597,7 +600,7 @@ function AppContent() {
                                     </div>
                                     <div className="text-right font-mono">
                                       <div className="font-semibold text-[#F5F5F7]">
-                                        {formatIDR(p.lastPrice)}
+                                        {formatQuotePrice(p.lastPrice, p.quoteCurrency, p.quoteDecimals, true)}
                                       </div>
                                       <div className={`text-[10px] font-bold ${isPositive ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
                                         {isPositive ? '+' : ''}{chg.toFixed(2)}%
@@ -645,7 +648,9 @@ function AppContent() {
                   </div>
                   <div className="hidden sm:block">
                     <span className="text-[10px] text-[#686D7A] block">Maker / Taker</span>
-                    <span className="text-[#EB3458] font-semibold">0.10% / 0.20%</span>
+                    <span className="text-[#EB3458] font-semibold">
+                      {((selectedPair.makerFeeBps ?? 10) / 100).toFixed(2)}% / {((selectedPair.takerFeeBps ?? 20) / 100).toFixed(2)}%
+                    </span>
                   </div>
                 </div>
               </div>
@@ -662,6 +667,7 @@ function AppContent() {
                     <UserOrdersTable
                       openOrders={openOrders}
                       orderHistory={orderHistory}
+                      pairs={pairs}
                       onCancelOrder={handleCancelOrder}
                       isLoading={isLoadingOrders}
                       currentUserEmail={user?.email}
@@ -810,6 +816,7 @@ function AppContent() {
               openOrders={openOrders}
               orderHistory={orderHistory}
               recentTrades={recentTrades}
+              pairs={pairs}
               onCancelOrder={handleCancelOrder}
             />
           )}

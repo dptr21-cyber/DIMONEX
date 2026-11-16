@@ -418,8 +418,16 @@ export const ListingPortalPage: React.FC<Props> = ({
                     ) : (
                       filteredAssets.map(asset => {
                         const isIdr = asset.symbol === 'IDR';
-                        const pairId = `${asset.symbol}-IDR`;
-                        const isPairExisting = tradingPairs.some(p => p.id === pairId);
+                        const activeMarketsForBase = tradingPairs.filter(p => p.baseCurrency === asset.symbol);
+                        const preferredPair =
+                          activeMarketsForBase.find(p => p.id === asset.marketSymbol) ||
+                          activeMarketsForBase[0];
+                        const pairId = preferredPair?.id || asset.marketSymbol || `${asset.symbol}-IDR`;
+                        const marketLabels: string[] =
+                          Array.isArray(asset.activeMarketSymbols) && asset.activeMarketSymbols.length > 0
+                            ? asset.activeMarketSymbols
+                            : (activeMarketsForBase.length > 0 ? activeMarketsForBase.map(p => p.id) : []);
+                        const isPairExisting = activeMarketsForBase.length > 0 || marketLabels.length > 0;
 
                         return (
                           <tr key={asset.id} className="hover:bg-[#15171F]/50 transition-colors">
@@ -431,9 +439,9 @@ export const ListingPortalPage: React.FC<Props> = ({
                                 <div>
                                   <div className="font-bold text-[#F5F5F7] flex items-center gap-1.5">
                                     <span>{asset.symbol}</span>
-                                    {isIdr && (
+                                    {(isIdr || asset.symbol === 'USDT') && (
                                       <span className="text-[9px] px-1 py-0.2 rounded bg-[#00C087]/20 text-[#00C087] font-semibold">
-                                        BASE QUOTE
+                                        {isIdr ? 'BASE QUOTE' : 'QUOTE ASSET'}
                                       </span>
                                     )}
                                   </div>
@@ -500,12 +508,16 @@ export const ListingPortalPage: React.FC<Props> = ({
                               {isIdr ? (
                                 <span className="text-[11px] text-[#686D7A] italic">Quote Currency</span>
                               ) : isPairExisting || asset.hasActiveMarket ? (
-                                <span className="font-mono text-xs text-[#F5F5F7] font-semibold">
-                                  {pairId}
-                                </span>
+                                <div className="flex flex-wrap items-center gap-1">
+                                  {(marketLabels.length > 0 ? marketLabels : [pairId]).map(mSym => (
+                                    <span key={mSym} className="font-mono text-xs text-[#F5F5F7] font-semibold px-1.5 py-0.5 rounded bg-[#1C1F29] border border-[#292C38]">
+                                      {mSym}
+                                    </span>
+                                  ))}
+                                </div>
                               ) : (
                                 <span className="text-[10px] text-[#969BA8] px-2 py-0.5 rounded bg-[#1C1F29]">
-                                  Dalam Proses Listing
+                                  Dalam Proses Listing ({pairId})
                                 </span>
                               )}
                             </td>

@@ -8,7 +8,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { Search, Filter, Download, X, Clock, CheckCircle2, AlertCircle } from 'lucide-react';
-import { OrderItem, TradeItem } from '../../types/index.js';
+import { OrderItem, TradeItem, TradingPairItem } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatQuotePrice } from '../../lib/formatters.js';
 import { useToast } from '../ui/Toast.js';
 
@@ -16,6 +16,7 @@ interface OrdersViewProps {
   openOrders: OrderItem[];
   orderHistory: OrderItem[];
   recentTrades: TradeItem[];
+  pairs?: TradingPairItem[];
   onCancelOrder: (orderId: string, pairId?: string) => void;
 }
 
@@ -23,6 +24,7 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
   openOrders,
   orderHistory,
   recentTrades,
+  pairs = [],
   onCancelOrder,
 }) => {
   const { showToast } = useToast();
@@ -176,8 +178,10 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
                       })
                     : 'Just now';
 
-                  const qCurr = (item.pairId || '').split('-')[1] || 'IDR';
-                  const qDec = qCurr === 'USDT' ? 6 : 2;
+                  const matchedPair = pairs.find(p => p.id === item.pairId);
+                  const qCurr = matchedPair?.quoteCurrency || (item.pairId || '').split('-')[1] || 'IDR';
+                  const qDec = matchedPair?.quoteDecimals ?? (qCurr === 'USDT' ? 6 : 2);
+                  const bDec = matchedPair?.baseDecimals ?? 8;
 
                   return (
                     <tr key={item.id} className="hover:bg-[#1C1F29]/60 transition-colors">
@@ -193,10 +197,10 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
                         {formatQuotePrice(item.price, qCurr, qDec, true)}
                       </td>
                       <td className="py-3 px-4 text-right text-[#F5F5F7]">
-                        {formatCrypto(item.quantity, 8)}
+                        {formatCrypto(item.quantity, bDec)}
                       </td>
                       <td className="py-3 px-4 text-right text-[#969BA8]">
-                        {item.filledQuantity ? formatCrypto(item.filledQuantity, 8) : '0.00'}
+                        {item.filledQuantity ? formatCrypto(item.filledQuantity, bDec) : '0.00'}
                       </td>
                       <td className="py-3 px-4 text-center font-sans">
                         <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${

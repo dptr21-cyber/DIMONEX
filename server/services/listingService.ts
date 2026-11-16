@@ -29,6 +29,7 @@ import { ListingAuditService } from './listing/ListingAuditService.js';
 import { ListingActivationService, ActivationResult } from './listing/ListingActivationService.js';
 import { ListingService as InternalListingService, CreateAssetInput, CreateListingInput, UpdateListingInput } from './listing/ListingService.js';
 import { marketWsService } from '../websocket/MarketDataWs.js';
+import { PrecisionMath } from '../ledger/PrecisionMath.js';
 
 export interface EngineReadinessCheck {
   isReady: boolean;
@@ -359,9 +360,24 @@ export class ListingService {
     // Create DRAFT listing request linked to system portal user
     const listingId = crypto.randomUUID();
     const tickSize = isUsdtQuote ? '10000' : '100';      // Default 0.01 USDT or Rp 1.00
-    const lotSize = '1000000';   // Default lot base units
-    const minQuantity = '1000000';
+    const baseLotDefault = asset.decimals >= 2
+      ? (10n ** BigInt(asset.decimals - 2)).toString()   // 0.01 token
+      : '1';
+    const lotSize = baseLotDefault;
+    const minQuantity = baseLotDefault;
     const minNotional = isUsdtQuote ? '5000000' : '1000000'; // 5 USDT or Rp 10,000.00
+
+    let parsedInitialLiquidityQuote: string | undefined;
+    if (input.initialLiquidityCommitmentIdr) {
+      try {
+        const cleanedCommitment = String(input.initialLiquidityCommitmentIdr).trim().replace(/,/g, '');
+        if (cleanedCommitment) {
+          parsedInitialLiquidityQuote = PrecisionMath.parseToUnits(cleanedCommitment, quoteAsset.decimals).toString();
+        }
+      } catch {
+        parsedInitialLiquidityQuote = undefined;
+      }
+    }
 
     const listing: ListingRequest = {
       id: listingId,
@@ -380,7 +396,7 @@ export class ListingService {
       withdrawalEnabled: input.withdrawalEnabled !== undefined ? input.withdrawalEnabled : true,
       marketMakerAccountId: 'usr-mm-0000-0000-000000000001',
       projectOwnerAccountId: input.projectOwnerAccountId,
-      initialLiquidityQuoteIdr: input.initialLiquidityCommitmentIdr ? (BigInt(Math.floor(Number(input.initialLiquidityCommitmentIdr) || 0)) * (isUsdtQuote ? 1000000n : 100n)).toString() : undefined,
+      initialLiquidityQuoteIdr: parsedInitialLiquidityQuote,
       createdBy: `portal:${input.contactEmail}`,
       version: 1,
       createdAt: now,

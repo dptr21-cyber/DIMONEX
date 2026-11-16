@@ -7,9 +7,15 @@
  * percentage allocation controls, and Black & Crimson-Pink styling.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { TradingPairItem, UserProfile, UserBalance } from '../../types/index.js';
-import { formatIDR, formatCrypto, formatQuotePrice, safeBigInt } from '../../lib/formatters.js';
+import {
+  formatCrypto,
+  formatQuotePrice,
+  safeBigInt,
+  parseDecimalToUnits,
+  formatUnitsToDecimal,
+} from '../../lib/formatters.js';
 import { Button } from '../ui/Button.js';
 import { Input } from '../ui/Input.js';
 import { useToast } from '../ui/Toast.js';
@@ -21,6 +27,17 @@ interface Props {
   selectedPriceUnits: string | null;
   onOrderPlaced: (order?: any) => void;
   onOpenAuthModal: () => void;
+}
+
+function clampDecimalString(decStr: string, maxDecimals: number): string {
+  if (!decStr.includes('.')) return decStr;
+  const [intPart, fracPart] = decStr.split('.');
+  const firstNonZero = fracPart.search(/[1-9]/);
+  const keepDec = firstNonZero >= maxDecimals
+    ? Math.min(fracPart.length, firstNonZero + 4)
+    : maxDecimals;
+  const sliced = fracPart.slice(0, keepDec).replace(/0+$/, '');
+  return sliced ? `${intPart}.${sliced}` : intPart;
 }
 
 export const OrderPlacementForm: React.FC<Props> = ({
@@ -40,21 +57,52 @@ export const OrderPlacementForm: React.FC<Props> = ({
   const [allocationPct, setAllocationPct] = useState<number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const prevPairIdRef = useRef<string | null>(null);
+
+  const isQuoteIDR = (pair?.quoteCurrency || 'IDR').toUpperCase() === 'IDR';
+  const quoteDecimals =
+    pair?.quoteDecimals !== undefined && pair?.quoteDecimals !== null
+      ? pair.quoteDecimals
+      : (isQuoteIDR ? 2 : 6);
+  const baseDecimals =
+    pair?.baseDecimals !== undefined && pair?.baseDecimals !== null
+      ? pair.baseDecimals
+      : 8;
+
+  // Reset form inputs when switching trading pair, or populate from initial lastPrice
+  useEffect(() => {
+    if (prevPairIdRef.current !== pair?.id) {
+      prevPairIdRef.current = pair?.id || null;
+      setQuantityInput('');
+      setStopPriceInput('');
+      setAllocationPct(null);
+      setErrorMessage(null);
+
+      if (pair?.lastPrice && safeBigInt(pair.lastPrice) > 0n) {
+        setPriceInput(formatUnitsToDecimal(pair.lastPrice, quoteDecimals, true));
+      } else {
+        setPriceInput('');
+      }
+    }
+  }, [pair?.id, pair?.lastPrice, quoteDecimals]);
+
+  // Populate initial price if pair.lastPrice arrived slightly after mount and user hasn't typed yet
+  useEffect(() => {
+    if (!priceInput && !selectedPriceUnits && pair?.lastPrice && safeBigInt(pair.lastPrice) > 0n) {
+      setPriceInput(formatUnitsToDecimal(pair.lastPrice, quoteDecimals, true));
+    }
+  }, [pair?.lastPrice, quoteDecimals]);
 
   // Sync selected price from order book click
   useEffect(() => {
     if (selectedPriceUnits) {
-      try {
-        const rupiah = safeBigInt(selectedPriceUnits) / 100n;
-        setPriceInput(rupiah.toString());
-      } catch {}
-    } else if (!priceInput && pair?.lastPrice) {
-      try {
-        const rupiah = safeBigInt(pair.lastPrice) / 100n;
-        setPriceInput(rupiah.toString());
-      } catch {}
+      const units = safeBigInt(selectedPriceUnits);
+      if (units > 0n) {
+        setPriceInput(formatUnitsToDecimal(units, quoteDecimals, true));
+        setAllocationPct(null);
+      }
     }
-  }, [selectedPriceUnits, pair?.id]);
+  }, [selectedPriceUnits, quoteDecimals]);
 
   // Find relevant balances
   const quoteBalance = balances.find(b => b.currency === pair?.quoteCurrency);
@@ -63,7 +111,10 @@ export const OrderPlacementForm: React.FC<Props> = ({
   const availableQuoteBig = quoteBalance ? safeBigInt(quoteBalance.balanceAvailable) : 0n;
   const availableBaseBig = baseBalance ? safeBigInt(baseBalance.balanceAvailable) : 0n;
 
-  // Handle balance percentage fill
+  const baseScale = 10n ** BigInt(Math.max(0, baseDecimals));
+  const takerFeeBps = safeBigInt(pair?.takerFeeBps, 20n);
+
+  // Handle balance percentage fill using pure zero-float BigInt arithmetic
   const handlePercentageClick = (percent: number) => {
     setAllocationPct(percent);
     if (!user) {
@@ -71,46 +122,52 @@ export const OrderPlacementForm: React.FC<Props> = ({
       return;
     }
 
-    const pairDec = pair?.baseDecimals ?? 8;
     if (side === 'BUY') {
-      const priceRupiah = orderType === 'LIMIT'
-        ? (parseFloat(priceInput) || 0)
-        : Number(safeBigInt(pair?.lastPrice) / 100n);
-      if (priceRupiah <= 0 || !Number.isFinite(priceRupiah)) return;
+      const effectivePriceUnits =
+        orderType === 'LIMIT' || orderType === 'STOP_LIMIT'
+          ? parseDecimalToUnits(priceInput, quoteDecimals)
+          : safeBigInt(pair?.lastPrice);
+      if (effectivePriceUnits <= 0n || availableQuoteBig <= 0n) return;
 
-      const availableRupiah = Number(availableQuoteBig / 100n);
-      const budgetRupiah = (availableRupiah * percent) / 100;
-      const netBudget = budgetRupiah * 0.998; // fee reserve
-      const calculatedQty = netBudget / priceRupiah;
-      if (Number.isFinite(calculatedQty) && calculatedQty > 0) {
-        setQuantityInput(calculatedQty.toFixed(pairDec === 8 ? 6 : 4));
+      const budgetQuote = (availableQuoteBig * BigInt(percent)) / 100n;
+      // Reserve taker fee + 1 bps buffer so lockedAmount never exceeds available balance
+      const netQuote = (budgetQuote * 10000n) / (10000n + takerFeeBps + 1n);
+      const qtyUnits = (netQuote * baseScale) / effectivePriceUnits;
+      if (qtyUnits > 0n) {
+        const rawDec = formatUnitsToDecimal(qtyUnits, baseDecimals, true);
+        setQuantityInput(clampDecimalString(rawDec, Math.min(baseDecimals, 8)));
       }
     } else {
-      const baseUnits = (availableBaseBig * safeBigInt(percent)) / 100n;
-      const scale = 10 ** pairDec;
-      const qtyNum = Number(baseUnits) / scale;
-      if (Number.isFinite(qtyNum) && qtyNum > 0) {
-        setQuantityInput(qtyNum.toFixed(pairDec === 8 ? 6 : 4));
+      if (availableBaseBig <= 0n) return;
+      const qtyUnits = (availableBaseBig * BigInt(percent)) / 100n;
+      if (qtyUnits > 0n) {
+        const rawDec = formatUnitsToDecimal(qtyUnits, baseDecimals, true);
+        setQuantityInput(clampDecimalString(rawDec, Math.min(baseDecimals, 8)));
       }
     }
   };
 
-  // Estimate total quote amount & fee safely
-  const parsedPrice = parseFloat(priceInput);
-  const priceUnits = orderType === 'LIMIT' || orderType === 'STOP_LIMIT'
-    ? (Number.isFinite(parsedPrice) && parsedPrice > 0 ? safeBigInt(Math.floor(parsedPrice * 100)) : 0n)
-    : safeBigInt(pair?.lastPrice);
+  // Estimate total quote amount & fee safely with Zero-Float BigInt math
+  const priceUnits =
+    orderType === 'LIMIT' || orderType === 'STOP_LIMIT'
+      ? parseDecimalToUnits(priceInput, quoteDecimals)
+      : safeBigInt(pair?.lastPrice);
 
-  const baseDecimals = pair?.baseDecimals ?? 8;
-  const scale = 10n ** safeBigInt(baseDecimals, 8n);
-  const parsedQty = parseFloat(quantityInput);
-  const qtyUnits = Number.isFinite(parsedQty) && parsedQty > 0
-    ? safeBigInt(Math.floor(parsedQty * Number(scale)))
-    : 0n;
+  const stopPriceUnits =
+    orderType === 'STOP_LIMIT'
+      ? parseDecimalToUnits(stopPriceInput, quoteDecimals)
+      : 0n;
 
-  const quoteVolumeUnits = scale > 0n ? (qtyUnits * priceUnits) / scale : 0n;
-  const takerFeeBps = safeBigInt(pair?.takerFeeBps, 20n);
-  const estimatedFeeUnits = (quoteVolumeUnits * takerFeeBps) / 10000n;
+  const qtyUnits = parseDecimalToUnits(quantityInput, baseDecimals);
+
+  const quoteVolumeUnits =
+    baseScale > 0n && qtyUnits > 0n && priceUnits > 0n
+      ? (qtyUnits * priceUnits + baseScale / 2n) / baseScale
+      : 0n;
+  const estimatedFeeUnits =
+    takerFeeBps > 0n && quoteVolumeUnits > 0n
+      ? (quoteVolumeUnits * takerFeeBps + 5000n) / 10000n
+      : 0n;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -121,13 +178,18 @@ export const OrderPlacementForm: React.FC<Props> = ({
       return;
     }
 
-    if (!quantityInput || Number(quantityInput) <= 0) {
-      setErrorMessage('Please enter order quantity.');
+    if (qtyUnits <= 0n) {
+      setErrorMessage('Please enter a valid order quantity.');
       return;
     }
 
-    if ((orderType === 'LIMIT' || orderType === 'STOP_LIMIT') && (!priceInput || Number(priceInput) <= 0)) {
+    if ((orderType === 'LIMIT' || orderType === 'STOP_LIMIT') && priceUnits <= 0n) {
       setErrorMessage('Please enter a valid price.');
+      return;
+    }
+
+    if (orderType === 'STOP_LIMIT' && stopPriceUnits <= 0n) {
+      setErrorMessage('Please enter a valid stop trigger price.');
       return;
     }
 
@@ -143,6 +205,9 @@ export const OrderPlacementForm: React.FC<Props> = ({
 
       if (orderType === 'LIMIT' || orderType === 'STOP_LIMIT') {
         payload.price = priceUnits.toString();
+      }
+      if (orderType === 'STOP_LIMIT' && stopPriceUnits > 0n) {
+        payload.stopPrice = stopPriceUnits.toString();
       }
 
       const res = await fetch('/api/trading/order', {
@@ -178,6 +243,8 @@ export const OrderPlacementForm: React.FC<Props> = ({
       setIsSubmitting(false);
     }
   };
+
+  const pricePlaceholder = isQuoteIDR ? '0' : '0.0000';
 
   return (
     <div className="flex flex-col obsidian-glass border border-white/10 rounded-xl overflow-hidden p-4 shadow-xl select-none">
@@ -250,8 +317,8 @@ export const OrderPlacementForm: React.FC<Props> = ({
           <span>Available:</span>
           <span className="font-bold text-[#F5F5F7]">
             {side === 'BUY'
-              ? formatQuotePrice(availableQuoteBig.toString(), pair.quoteCurrency, pair.quoteDecimals, true)
-              : `${formatCrypto(availableBaseBig.toString(), pair.baseDecimals)} ${pair.baseCurrency}`}
+              ? formatQuotePrice(availableQuoteBig.toString(), pair.quoteCurrency, quoteDecimals, true)
+              : `${formatCrypto(availableBaseBig.toString(), baseDecimals)} ${pair.baseCurrency}`}
           </span>
         </div>
 
@@ -260,7 +327,7 @@ export const OrderPlacementForm: React.FC<Props> = ({
           <Input
             label="Stop Trigger Price"
             suffixText={pair.quoteCurrency}
-            placeholder="0.00"
+            placeholder={pricePlaceholder}
             value={stopPriceInput}
             onChange={e => setStopPriceInput(e.target.value)}
           />
@@ -271,7 +338,7 @@ export const OrderPlacementForm: React.FC<Props> = ({
           <Input
             label="Price"
             suffixText={pair.quoteCurrency}
-            placeholder="0.00"
+            placeholder={pricePlaceholder}
             value={priceInput}
             onChange={e => { setPriceInput(e.target.value); setAllocationPct(null); }}
           />
@@ -312,11 +379,11 @@ export const OrderPlacementForm: React.FC<Props> = ({
         <div className="p-3 rounded-lg bg-[#0D1017] border border-white/10 space-y-1.5 text-xs font-mono">
           <div className="flex justify-between text-[#9298A6]">
             <span>Order Value</span>
-            <span className="text-[#F5F5F7] font-semibold">{formatQuotePrice(quoteVolumeUnits.toString(), pair.quoteCurrency, pair.quoteDecimals, true)}</span>
+            <span className="text-[#F5F5F7] font-semibold">{formatQuotePrice(quoteVolumeUnits.toString(), pair.quoteCurrency, quoteDecimals, true)}</span>
           </div>
           <div className="flex justify-between text-[#9298A6]">
-            <span>Est. Fee (0.08%)</span>
-            <span className="text-[#9298A6]">{formatQuotePrice(estimatedFeeUnits.toString(), pair.quoteCurrency, pair.quoteDecimals, true)}</span>
+            <span>Est. Fee ({(Number(takerFeeBps) / 100).toFixed(2)}%)</span>
+            <span className="text-[#9298A6]">{formatQuotePrice(estimatedFeeUnits.toString(), pair.quoteCurrency, quoteDecimals, true)}</span>
           </div>
         </div>
 

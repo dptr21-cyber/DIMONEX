@@ -221,12 +221,14 @@ export class ListingService {
     minNotional: string;
     makerFeeBps?: number;
     takerFeeBps?: number;
+    quoteSymbol?: string;
   }): void {
+    const quoteUnitLabel = params.quoteSymbol === 'IDR' ? 'sen IDR' : `unit ${params.quoteSymbol || 'quote'}`;
     try {
       const tick = BigInt(params.tickSize);
       if (tick <= 0n) throw new Error('Tick size harus berupa integer positif lebih besar dari 0');
     } catch {
-      throw new Error(`Nilai tickSize tidak valid: ${params.tickSize}. Wajib berupa string integer eksak.`);
+      throw new Error(`Nilai tickSize tidak valid: ${params.tickSize}. Wajib berupa string integer eksak (${quoteUnitLabel}).`);
     }
 
     try {
@@ -247,9 +249,9 @@ export class ListingService {
 
     try {
       const minNotional = BigInt(params.minNotional);
-      if (minNotional <= 0n) throw new Error('Min notional harus berupa integer positif lebih besar dari 0 sen');
+      if (minNotional <= 0n) throw new Error(`Min notional harus berupa integer positif lebih besar dari 0 ${quoteUnitLabel}`);
     } catch {
-      throw new Error(`Nilai minNotional tidak valid: ${params.minNotional}. Wajib berupa string integer sen.`);
+      throw new Error(`Nilai minNotional tidak valid: ${params.minNotional}. Wajib berupa string integer ${quoteUnitLabel}.`);
     }
 
     if (params.makerFeeBps !== undefined) {
@@ -284,7 +286,7 @@ export class ListingService {
       throw new Error(`Listing untuk pasangan ${baseAsset.symbol}/${quoteAsset.symbol} sudah ada (Status: ${existingListing.status})`);
     }
 
-    this.validateFinancialParameters(input);
+    this.validateFinancialParameters({ ...input, quoteSymbol: quoteAsset.symbol });
 
     const listingId = crypto.randomUUID();
     const now = Date.now();
@@ -362,13 +364,15 @@ export class ListingService {
     }
 
     if (input.tickSize || input.lotSize || input.minQuantity || input.minNotional || input.makerFeeBps !== undefined || input.takerFeeBps !== undefined) {
+      const quoteAsset = db.assets.get(listing.quoteAssetId);
       this.validateFinancialParameters({
         tickSize: input.tickSize || listing.tickSize,
         lotSize: input.lotSize || listing.lotSize,
         minQuantity: input.minQuantity || listing.minQuantity,
         minNotional: input.minNotional || listing.minNotional,
         makerFeeBps: input.makerFeeBps !== undefined ? input.makerFeeBps : listing.makerFeeBps,
-        takerFeeBps: input.takerFeeBps !== undefined ? input.takerFeeBps : listing.takerFeeBps
+        takerFeeBps: input.takerFeeBps !== undefined ? input.takerFeeBps : listing.takerFeeBps,
+        quoteSymbol: quoteAsset?.symbol
       });
     }
 

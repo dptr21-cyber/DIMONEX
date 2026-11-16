@@ -225,8 +225,11 @@ export class ListingActivationService {
 
       // 7e. Prepare Designated Market Maker (MM) Account with initial liquidity
       const mmUserId = listing.marketMakerAccountId || 'usr-mm-0000-0000-000000000001';
-      const initialBaseSeed = listing.initialLiquidityBase || '1000000000000'; // 10,000 base tokens
-      const initialQuoteSeed = listing.initialLiquidityQuoteIdr || '5000000000000'; // 50B IDR sen
+      const defaultBaseSeed = (10000n * (10n ** BigInt(baseAsset.decimals))).toString(); // 10,000 base tokens
+      const defaultQuoteAmount = quoteAsset.symbol === 'IDR' ? 50000000n : 50000n; // 50M IDR or 50,000 USDT
+      const defaultQuoteSeed = (defaultQuoteAmount * (10n ** BigInt(quoteAsset.decimals))).toString();
+      const initialBaseSeed = listing.initialLiquidityBase || defaultBaseSeed;
+      const initialQuoteSeed = listing.initialLiquidityQuoteIdr || defaultQuoteSeed;
       db.createOrGetAccount(mmUserId, baseAsset.symbol, initialBaseSeed);
       db.createOrGetAccount(mmUserId, quoteAsset.symbol, initialQuoteSeed);
 

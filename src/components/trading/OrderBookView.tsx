@@ -13,7 +13,7 @@
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { TradingPairItem } from '../../types/index.js';
-import { formatCrypto, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
+import { formatCrypto, safeBigInt, formatQuotePrice, parseDecimalToUnits } from '../../lib/formatters.js';
 import { D3DepthChart } from './D3DepthChart.js';
 import { AreaChart as AreaChartIcon, Layers, Flame, Shield, TrendingDown, TrendingUp, SlidersHorizontal } from 'lucide-react';
 
@@ -88,9 +88,32 @@ export const OrderBookView: React.FC<Props> = ({
   const isQuoteIDR = (pair.quoteCurrency || 'IDR').toUpperCase() === 'IDR';
   const quoteDecimals = pair.quoteDecimals !== undefined && pair.quoteDecimals !== null ? pair.quoteDecimals : (isQuoteIDR ? 2 : 6);
 
+  // Determine reference price magnitude for adaptive aggregation steps
+  const refPriceUnits = useMemo(() => {
+    const lp = safeBigInt(pair.lastPrice);
+    if (lp > 0n) return lp;
+    const bestAsk = depth.asks?.[0]?.[0];
+    if (bestAsk) return safeBigInt(bestAsk);
+    const bestBid = depth.bids?.[0]?.[0];
+    if (bestBid) return safeBigInt(bestBid);
+    return 0n;
+  }, [pair.lastPrice, depth.asks, depth.bids]);
+
   // Dynamic aggregation options tailored to pair quote currency & price scale
   const aggregationOptions = useMemo(() => {
+    const scaleNum = 10 ** Math.max(0, quoteDecimals);
+    const refPrice = Number(refPriceUnits) / (scaleNum || 1);
+
     if (isQuoteIDR) {
+      if (refPrice > 0 && refPrice < 10000) {
+        return [
+          { label: 'Exact', value: 'exact' },
+          { label: '1', value: '1' },
+          { label: '10', value: '10' },
+          { label: '100', value: '100' },
+          { label: '1K', value: '1000' },
+        ];
+      }
       return [
         { label: 'Exact', value: 'exact' },
         { label: '10', value: '10' },
@@ -99,14 +122,51 @@ export const OrderBookView: React.FC<Props> = ({
         { label: '10K', value: '10000' },
       ];
     }
+
+    if (refPrice > 0 && refPrice < 0.01) {
+      return [
+        { label: 'Exact', value: 'exact' },
+        { label: '0.00001', value: '0.00001' },
+        { label: '0.0001', value: '0.0001' },
+        { label: '0.001', value: '0.001' },
+        { label: '0.01', value: '0.01' },
+      ];
+    }
+    if (refPrice > 0 && refPrice < 1) {
+      return [
+        { label: 'Exact', value: 'exact' },
+        { label: '0.0001', value: '0.0001' },
+        { label: '0.001', value: '0.001' },
+        { label: '0.01', value: '0.01' },
+        { label: '0.1', value: '0.1' },
+      ];
+    }
+    if (refPrice > 0 && refPrice < 100) {
+      return [
+        { label: 'Exact', value: 'exact' },
+        { label: '0.001', value: '0.001' },
+        { label: '0.01', value: '0.01' },
+        { label: '0.1', value: '0.1' },
+        { label: '1', value: '1' },
+      ];
+    }
+    if (refPrice >= 1000) {
+      return [
+        { label: 'Exact', value: 'exact' },
+        { label: '0.1', value: '0.1' },
+        { label: '1', value: '1' },
+        { label: '10', value: '10' },
+        { label: '100', value: '100' },
+      ];
+    }
     return [
       { label: 'Exact', value: 'exact' },
       { label: '0.01', value: '0.01' },
       { label: '0.1', value: '0.1' },
-      { label: '1.0', value: '1.0' },
+      { label: '1', value: '1' },
       { label: '10', value: '10' },
     ];
-  }, [isQuoteIDR]);
+  }, [isQuoteIDR, quoteDecimals, refPriceUnits]);
 
   // Aggregation precision state
   const [precision, setPrecisionState] = useState<string>(() => {
@@ -120,32 +180,20 @@ export const OrderBookView: React.FC<Props> = ({
     localStorage.setItem('dimonex_orderbook_precision', p);
   };
 
+  // Auto-reset precision to 'exact' when switching pairs if saved value is not valid for this pair
+  useEffect(() => {
+    if (!aggregationOptions.some(opt => opt.value === precision)) {
+      setPrecisionState('exact');
+      localStorage.setItem('dimonex_orderbook_precision', 'exact');
+    }
+  }, [pair.id, aggregationOptions, precision]);
+
   // Calculate step units in raw BigInt based on selected aggregation precision
   const stepUnits = useMemo<bigint>(() => {
     if (precision === 'exact') return 1n;
-
-    if (isQuoteIDR) {
-      // In IDR, raw price is scaled by 10^quoteDecimals (usually 100 for 2 decimals)
-      const scale = 10n ** BigInt(Math.max(0, quoteDecimals));
-      switch (precision) {
-        case '10': return 10n * scale;
-        case '100': return 100n * scale;
-        case '1000': return 1000n * scale;
-        case '10000': return 10000n * scale;
-        default: return 1n;
-      }
-    } else {
-      // Crypto / USDT quotes
-      const scale = 10n ** BigInt(Math.max(0, quoteDecimals));
-      switch (precision) {
-        case '0.01': return (scale / 100n) > 0n ? scale / 100n : 10000n;
-        case '0.1': return (scale / 10n) > 0n ? scale / 10n : 100000n;
-        case '1.0': return scale > 0n ? scale : 1000000n;
-        case '10': return (scale * 10n);
-        default: return 1n;
-      }
-    }
-  }, [precision, isQuoteIDR, quoteDecimals]);
+    const parsed = parseDecimalToUnits(precision, quoteDecimals);
+    return parsed > 0n ? parsed : 1n;
+  }, [precision, quoteDecimals]);
 
   const asksContainerRef = useRef<HTMLDivElement>(null);
 

@@ -329,8 +329,94 @@ export async function runInitialListingTestSuite() {
     '10. Market database status and matching engine state are fully synchronized'
   );
 
+  // -------------------------------------------------------------
+  // TEST 11: USDT Initial Listing Separation vs IDR
+  // -------------------------------------------------------------
+  console.log('\n--- Test 11: USDT vs IDR Initial Listing Separation ---');
+  const usdtQuote = ListingService.getQuoteAsset('USDT');
+  assert(usdtQuote.decimals === 6, `11a. USDT quote asset has 6 decimals (got ${usdtQuote.decimals})`);
+
+  const mmUserId = `usr-mm-usdt-test-${Date.now()}`;
+
+  const usdtTokenSym = `ARB${Date.now().toString().slice(-4)}`;
+  const usdtBaseAsset = ListingService.createAsset({
+    symbol: usdtTokenSym,
+    name: 'Arbitrum USDT Test',
+    assetType: 'TOKEN',
+    decimals: 18,
+    network: 'ARBITRUM',
+    contractAddress: '0x912CE59144191C1204E64559FE8253a0e49E6548',
+    depositEnabled: true,
+    withdrawalEnabled: true
+  }, makerAdminId);
+
+  const usdtListing = ListingService.createListingRequest({
+    assetId: usdtBaseAsset.id,
+    quoteAssetId: 'USDT',
+    tickSize: '100',                        // 0.0001 USDT (6 dec)
+    lotSize: (10n ** 16n).toString(),       // 0.01 token (18 dec)
+    minQuantity: (10n ** 16n).toString(),   // 0.01 token
+    minNotional: '5000000',                 // 5 USDT (6 dec)
+    makerFeeBps: 10,
+    takerFeeBps: 20,
+    marketMakerAccountId: mmUserId
+  }, makerAdminId);
+
+  ListingService.submitForReview(usdtListing.id, makerAdminId);
+  ListingService.approveListing(usdtListing.id, checkerAdminId, 'Approved USDT quote separation test');
+  const usdtActivation = await ListingActivationService.activateMarket(usdtListing.id, checkerAdminId);
+
+  const usdtPairSymbol = `${usdtTokenSym}-USDT`;
+  const activatedUsdtPair = db.tradingPairs.get(usdtPairSymbol);
+  const mmUsdtAfter = BigInt(db.createOrGetAccount(mmUserId, 'USDT').balanceAvailable);
+  const mmBaseAfter = BigInt(db.createOrGetAccount(mmUserId, usdtTokenSym).balanceAvailable);
+
+  assert(
+    Boolean(usdtActivation.success && activatedUsdtPair && activatedUsdtPair.quoteDecimals === 6 && activatedUsdtPair.baseDecimals === 18),
+    `11b. Activated ${usdtPairSymbol} has quoteDecimals=6 and baseDecimals=18`
+  );
+  assert(
+    mmUsdtAfter === 50000n * 1000000n,
+    `11c. USDT pre-seed allocated 50,000 USDT (6 dec) instead of IDR Rp 50M (actual=${mmUsdtAfter.toString()})`
+  );
+  assert(
+    mmBaseAfter === 10000n * (10n ** 18n),
+    '11d. Base token pre-seed scaled correctly to 18 decimals (10,000 tokens)'
+  );
+
+  // Public portal application scaling check for 18-decimal USDT token
+  const { ListingService: PublicListingService } = await import('../services/listingService.js');
+  const pubSym = `OPX${Date.now().toString().slice(-4)}`;
+  PublicListingService.submitPublicListingApplication({
+    tokenName: 'Optimism Test Token',
+    tokenSymbol: pubSym,
+    network: 'ETHEREUM',
+    contractAddress: '0x4200000000000000000000000000000000000042',
+    decimals: 18,
+    projectWebsite: 'https://optimism.io',
+    contactEmail: 'team@optimism.io',
+    quoteCurrency: 'USDT',
+    expectedInitialPriceIdr: '2.5',
+    initialLiquidityCommitmentIdr: '25000',
+    description: 'Automated USDT decimal scaling test'
+  }, '127.0.0.1');
+
+  const pubAsset = Array.from(db.assets.values()).find(a => a.symbol === pubSym);
+  const pubListing = pubAsset ? Array.from(db.listingRequests.values()).find(l => l.assetId === pubAsset.id) : undefined;
+  assert(
+    Boolean(
+      pubListing &&
+      pubListing.quoteAssetId === usdtQuote.id &&
+      pubListing.tickSize === '10000' &&
+      pubListing.minNotional === '5000000' &&
+      pubListing.lotSize === (10n ** 16n).toString() &&
+      pubListing.initialLiquidityQuoteIdr === '25000000000'
+    ),
+    '11e. Public portal USDT listing scales tickSize (0.01 USDT), minNotional (5 USDT), lotSize (0.01 18-dec token), and liquidity commitment (25,000 USDT)'
+  );
+
   console.log('\n================================================================');
-  console.log('   ALL 10 INITIAL LISTING TEST PHASES PASSED SUCCESSFULLY!      ');
+  console.log('   ALL 11 INITIAL LISTING TEST PHASES PASSED SUCCESSFULLY!      ');
   console.log('================================================================\n');
 }
 

@@ -107,8 +107,22 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     ? pair.baseDecimals
     : 8;
 
+  const getPrecisionForPrice = useCallback((refPrice: number) => {
+    if (!isUSDT && (pair.quoteCurrency || 'IDR').toUpperCase() === 'IDR') {
+      return 2;
+    }
+    if (refPrice > 0 && refPrice < 0.01) return Math.min(8, Math.max(6, quoteDec));
+    if (refPrice > 0 && refPrice < 1) return Math.min(8, Math.max(5, quoteDec));
+    if (refPrice > 0 && refPrice < 100) return Math.min(6, Math.max(4, quoteDec));
+    if (refPrice >= 1000) return 2;
+    return Math.min(4, Math.max(2, quoteDec));
+  }, [isUSDT, pair.quoteCurrency, quoteDec]);
+
+  const refFloatPrice = Number(safeBigInt(pair.lastPrice)) / (10 ** Math.max(0, quoteDec));
+  const displayPrecision = getPrecisionForPrice(refFloatPrice);
+
   // Calculate Simple Moving Average for candle array
-  const calculateSMA = useCallback((data: CandleItem[], period: number) => {
+  const calculateSMA = useCallback((data: CandleItem[], period: number, prec = displayPrecision) => {
     const result: { time: Time; value: number }[] = [];
     for (let i = 0; i < data.length; i++) {
       if (i < period - 1) continue;
@@ -118,11 +132,11 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       }
       result.push({
         time: data[i].time as Time,
-        value: Number((sum / period).toFixed(isUSDT ? 4 : 2))
+        value: Number((sum / period).toFixed(prec))
       });
     }
     return result;
-  }, [isUSDT]);
+  }, [displayPrecision]);
 
   /**
    * Process a single trade execution and update the live candlestick & volume series safely.
@@ -202,18 +216,19 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
 
       // Update Moving Averages on active bar
       if (!isDisposedRef.current && showMAs) {
+        const activePrec = getPrecisionForPrice(tradePrice);
         if (candlesRef.current.length >= 7 && ma7SeriesRef.current) {
           const ma7Val = candlesRef.current.slice(-7).reduce((acc, c) => acc + c.close, 0) / 7;
           ma7SeriesRef.current.update({
             time: (lastBarRef.current?.time || currentCandleTime) as Time,
-            value: Number(ma7Val.toFixed(isUSDT ? 4 : 2))
+            value: Number(ma7Val.toFixed(activePrec))
           });
         }
         if (candlesRef.current.length >= 25 && ma25SeriesRef.current) {
           const ma25Val = candlesRef.current.slice(-25).reduce((acc, c) => acc + c.close, 0) / 25;
           ma25SeriesRef.current.update({
             time: (lastBarRef.current?.time || currentCandleTime) as Time,
-            value: Number(ma25Val.toFixed(isUSDT ? 4 : 2))
+            value: Number(ma25Val.toFixed(activePrec))
           });
         }
       }
@@ -221,7 +236,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       if (err?.message?.includes('disposed')) return;
       console.warn('[DimonexChart] Trade execution process error:', err);
     }
-  }, [pair.id, quoteDec, baseDec, timeframe, showMAs, isUSDT]);
+  }, [pair.id, quoteDec, baseDec, timeframe, showMAs, getPrecisionForPrice]);
 
   // Fetch Authoritative OHLCV Historical Candles from Backend (Seamless & non-blocking)
   const loadCandles = useCallback(async (isInitial = false) => {
@@ -269,14 +284,23 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
 
         try {
           if (!isDisposedRef.current && candleSeriesRef.current && volumeSeriesRef.current) {
+            const sampleClose = data[data.length - 1]?.close || refFloatPrice;
+            const dynPrec = getPrecisionForPrice(sampleClose);
+            const dynMinMove = Number((1 / Math.pow(10, dynPrec)).toFixed(dynPrec));
+            const dynFormat = { type: 'price' as const, precision: dynPrec, minMove: dynMinMove };
+
+            candleSeriesRef.current.applyOptions({ priceFormat: dynFormat });
+            ma7SeriesRef.current?.applyOptions({ priceFormat: dynFormat });
+            ma25SeriesRef.current?.applyOptions({ priceFormat: dynFormat });
+
             candleSeriesRef.current.setData(candleData);
             volumeSeriesRef.current.setData(volumeData);
 
             if (ma7SeriesRef.current) {
-              ma7SeriesRef.current.setData(calculateSMA(data, 7));
+              ma7SeriesRef.current.setData(calculateSMA(data, 7, dynPrec));
             }
             if (ma25SeriesRef.current) {
-              ma25SeriesRef.current.setData(calculateSMA(data, 25));
+              ma25SeriesRef.current.setData(calculateSMA(data, 25, dynPrec));
             }
           }
         } catch (e: any) {
@@ -387,13 +411,21 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       }
     });
 
+    const initMinMove = Number((1 / Math.pow(10, displayPrecision)).toFixed(displayPrecision));
+    const initPriceFormat = {
+      type: 'price' as const,
+      precision: displayPrecision,
+      minMove: initMinMove
+    };
+
     // 1. Candlestick Series
     const candleSeries = chart.addSeries(CandlestickSeries, {
       upColor: '#16C784',
       downColor: '#EA3943',
       borderVisible: false,
       wickUpColor: '#16C784',
-      wickDownColor: '#EA3943'
+      wickDownColor: '#EA3943',
+      priceFormat: initPriceFormat
     });
 
     // 2. Volume Histogram Series (Sub-panel bottom)
@@ -413,14 +445,16 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       color: '#F59E0B',
       lineWidth: 1,
       priceLineVisible: false,
-      lastValueVisible: showMAs
+      lastValueVisible: showMAs,
+      priceFormat: initPriceFormat
     });
 
     const ma25Series = chart.addSeries(LineSeries, {
       color: '#38BDF8',
       lineWidth: 1,
       priceLineVisible: false,
-      lastValueVisible: showMAs
+      lastValueVisible: showMAs,
+      priceFormat: initPriceFormat
     });
 
     chartRef.current = chart;
@@ -627,22 +661,22 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
               <span className="text-[#9298A6]">{hoverInfo.timeStr}</span>
               <span>
                 O: <strong className="text-white">
-                  {hoverInfo.open.toLocaleString(isUSDT ? 'en-US' : 'id-ID', { maximumFractionDigits: isUSDT ? 4 : 2 })}
+                  {hoverInfo.open.toLocaleString(isUSDT ? 'en-US' : 'id-ID', { maximumFractionDigits: getPrecisionForPrice(hoverInfo.open) })}
                 </strong>
               </span>
               <span>
                 H: <strong className="text-[#16C784]">
-                  {hoverInfo.high.toLocaleString(isUSDT ? 'en-US' : 'id-ID', { maximumFractionDigits: isUSDT ? 4 : 2 })}
+                  {hoverInfo.high.toLocaleString(isUSDT ? 'en-US' : 'id-ID', { maximumFractionDigits: getPrecisionForPrice(hoverInfo.high) })}
                 </strong>
               </span>
               <span>
                 L: <strong className="text-[#EA3943]">
-                  {hoverInfo.low.toLocaleString(isUSDT ? 'en-US' : 'id-ID', { maximumFractionDigits: isUSDT ? 4 : 2 })}
+                  {hoverInfo.low.toLocaleString(isUSDT ? 'en-US' : 'id-ID', { maximumFractionDigits: getPrecisionForPrice(hoverInfo.low) })}
                 </strong>
               </span>
               <span>
                 C: <strong className={hoverInfo.close >= hoverInfo.open ? 'text-[#16C784]' : 'text-[#EA3943]'}>
-                  {hoverInfo.close.toLocaleString(isUSDT ? 'en-US' : 'id-ID', { maximumFractionDigits: isUSDT ? 4 : 2 })}
+                  {hoverInfo.close.toLocaleString(isUSDT ? 'en-US' : 'id-ID', { maximumFractionDigits: getPrecisionForPrice(hoverInfo.close) })}
                 </strong>
               </span>
               <span>

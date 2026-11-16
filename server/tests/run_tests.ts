@@ -659,6 +659,61 @@ Invalid Pair Bot,,SELL,0.01,0.05`;
   }).length;
   assert(remainingActive === 0 && cancelledOrders >= 0, `24. Advanced MM Emergency Stop successfully revokes active quotes (${cancelledOrders} cancelled)`);
 
+  // -------------------------------------------------------------------------
+  // TEST 25: USDT-Quoted Pair Decimal Price & Amount Limit Order + Order Book
+  // -------------------------------------------------------------------------
+  console.log('\n--- Test 25: USDT Pair Decimal Order Placement & Order Book ---');
+  const usdtPair = db.tradingPairs.get('BTC-USDT');
+  assert(Boolean(usdtPair && usdtPair.quoteDecimals === 6 && usdtPair.baseDecimals === 8), '25a. BTC-USDT pair uses 6 quote decimals and 8 base decimals');
+
+  const u1Usdt = db.createOrGetAccount(user1Id, 'USDT', '500000000000');
+  u1Usdt.balanceAvailable = (BigInt(u1Usdt.balanceAvailable) + 500000000000n).toString(); // +500,000 USDT
+  const u2Usdt = db.createOrGetAccount(user2Id, 'USDT', '500000000000');
+  u2Usdt.balanceAvailable = (BigInt(u2Usdt.balanceAvailable) + 500000000000n).toString();
+
+  const usdtBookInit = matchingEngine.getOrderBook('BTC-USDT');
+  const usdtMarket = db.markets.get('BTC-USDT');
+  const usdtTick = BigInt(usdtMarket?.tickSize || '10000');
+  const usdtBestBid = usdtBookInit.bids.length > 0 ? BigInt(usdtBookInit.bids[0].price) : 65000000000n;
+  const usdtBestAsk = usdtBookInit.asks.length > 0 ? BigInt(usdtBookInit.asks[0].price) : 72000000000n;
+  let usdtTestPrice = PrecisionMath.parseToUnits('68500.250000', 6); // 68500250000
+  if (usdtBestAsk > usdtTick * 2n) {
+    const mid = usdtBestBid > 0n && usdtBestAsk > usdtBestBid + usdtTick * 2n
+      ? (usdtBestBid + usdtBestAsk) / 2n
+      : usdtBestAsk - usdtTick;
+    usdtTestPrice = (mid / usdtTick) * usdtTick;
+    if (usdtTestPrice >= usdtBestAsk) {
+      usdtTestPrice = ((usdtBestAsk - usdtTick) / usdtTick) * usdtTick;
+    }
+  }
+  const usdtTestQty = PrecisionMath.parseToUnits('0.015', 8).toString(); // 1500000 satoshis
+  const usdtBuyLimit = matchingEngine.placeOrder({
+    userId: user1Id,
+    pairId: 'BTC-USDT',
+    side: 'BUY',
+    orderType: 'LIMIT',
+    timeInForce: 'GTC',
+    price: usdtTestPrice.toString(),
+    quantity: usdtTestQty
+  });
+  const usdtBookAfterBuy = matchingEngine.getOrderBook('BTC-USDT').getDepth(50);
+  const inUsdtBook = usdtBookAfterBuy.bids.some(b => BigInt(b[0]) === usdtTestPrice);
+  assert(inUsdtBook && usdtBuyLimit.takerOrder.status === 'NEW', '25b. Decimal USDT BUY LIMIT order rests accurately in BTC-USDT order book');
+
+  const usdtSellMatch = matchingEngine.placeOrder({
+    userId: user2Id,
+    pairId: 'BTC-USDT',
+    side: 'SELL',
+    orderType: 'LIMIT',
+    timeInForce: 'GTC',
+    price: usdtTestPrice.toString(),
+    quantity: usdtTestQty
+  });
+  assert(
+    usdtSellMatch.trades.length === 1 && usdtSellMatch.trades[0].price === usdtTestPrice.toString() && usdtSellMatch.trades[0].quantity === usdtTestQty,
+    '25c. Decimal USDT SELL LIMIT matches resting BUY at exact 6-decimal USDT price & 8-decimal BTC qty'
+  );
+
   console.log('\n================================================================');
   console.log(`TOTAL ACCEPTANCE TESTS: ${passed} PASSED, ${failed} FAILED`);
   console.log('================================================================\n');

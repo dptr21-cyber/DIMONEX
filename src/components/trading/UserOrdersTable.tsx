@@ -12,12 +12,13 @@
  */
 
 import React, { useState, useMemo } from 'react';
-import { OrderItem } from '../../types/index.js';
+import { OrderItem, TradingPairItem } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
 
 interface Props {
   openOrders: OrderItem[];
   orderHistory: OrderItem[];
+  pairs?: TradingPairItem[];
   onCancelOrder: (orderId: string, pairId: string) => Promise<void>;
   isLoading: boolean;
   currentUserEmail?: string;
@@ -27,6 +28,7 @@ interface Props {
 export const UserOrdersTable: React.FC<Props> = ({
   openOrders,
   orderHistory,
+  pairs = [],
   onCancelOrder,
   isLoading,
   currentUserEmail,
@@ -461,9 +463,14 @@ export const UserOrdersTable: React.FC<Props> = ({
             ) : (
               paginatedOrders.map(order => {
                 const isBuy = order.side === 'BUY';
-                const baseDecimals = order.pairId.startsWith('BTC') ? 8 : order.pairId.startsWith('ETH') ? 8 : 6;
-                const quoteCurrency = order.pairId.split('-')[1] || 'IDR';
-                const quoteDecimals = quoteCurrency === 'USDT' ? 6 : 2;
+                const matchedPair = pairs.find(p => p.id === order.pairId);
+                const baseDecimals = matchedPair?.baseDecimals ?? (
+                  order.pairId.startsWith('BTC') || order.pairId.startsWith('ETH') || order.pairId.startsWith('SOL') || order.pairId.startsWith('DOGE')
+                    ? 8
+                    : 6
+                );
+                const quoteCurrency = matchedPair?.quoteCurrency || order.pairId.split('-')[1] || 'IDR';
+                const quoteDecimals = matchedPair?.quoteDecimals ?? (quoteCurrency === 'USDT' ? 6 : 2);
                 let percentFilled = 0;
                 try {
                   const qtyBig = safeBigInt(order.quantity);

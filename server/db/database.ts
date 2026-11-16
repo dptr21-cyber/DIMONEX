@@ -875,7 +875,11 @@ class DatabaseStore {
     }
 
     // Inspect all pairs to avoid integer overflow / restrictive limits on tokens with high decimals
+    // and ensure all USDT-quoted pairs strictly enforce 6 quote decimals (1 USDT = 1,000,000 units)
     for (const [pairId, pair] of this.tradingPairs.entries()) {
+      if (pair.quoteCurrency === 'USDT' && pair.quoteDecimals !== 6) {
+        pair.quoteDecimals = 6;
+      }
       const dec = pair.baseDecimals || 8;
       const oneToken = 10n ** BigInt(dec);
       // If maxOrderSize is less than 50 tokens on non-BTC/ETH, increase to at least 1,000,000 tokens
@@ -1476,7 +1480,7 @@ class DatabaseStore {
         symbol: 'USDT',
         name: 'Tether USD',
         assetType: 'TOKEN',
-        decimals: 8,
+        decimals: 6,
         network: 'TRON',
         contractAddress: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t',
         status: 'ACTIVE',
@@ -1516,14 +1520,23 @@ class DatabaseStore {
     ];
 
     for (const a of defaultAssets) {
-      if (!this.assets.has(a.id)) {
+      const existing = this.assets.get(a.id);
+      if (!existing) {
         this.assets.set(a.id, a);
+      } else if (a.symbol === 'USDT' && existing.decimals !== 6) {
+        // Heal legacy 8-decimal USDT seed so initial USDT listings match PrecisionMath USDT = 6 decimals
+        existing.decimals = 6;
+        existing.updatedAt = Date.now();
+        this.assets.set(a.id, existing);
       }
     }
 
     // 3. Ensure Markets Map matches Trading Pairs
     const idrAsset = defaultAssets[0];
     for (const pair of this.tradingPairs.values()) {
+      if (pair.quoteCurrency === 'USDT' && pair.quoteDecimals !== 6) {
+        pair.quoteDecimals = 6;
+      }
       if (!this.markets.has(pair.id)) {
         const baseAsset = defaultAssets.find(a => a.symbol === pair.baseCurrency);
         const quoteAsset = defaultAssets.find(a => a.symbol === pair.quoteCurrency) || idrAsset;
@@ -1538,7 +1551,7 @@ class DatabaseStore {
             tickSize: pair.quoteCurrency === 'USDT' ? '10000' : '100', // 10000 = 0.01 USDT, 100 sen = 1 IDR
             lotSize: pair.minOrderSize,
             minQuantity: pair.minOrderSize,
-            minNotional: '1000000', // Rp 10,000.00
+            minNotional: pair.quoteCurrency === 'USDT' ? '5000000' : '1000000', // 5 USDT or Rp 10,000.00
             makerFeeBps: pair.makerFeeBps,
             takerFeeBps: pair.takerFeeBps,
             activatedAt: Date.now() - 86400000,

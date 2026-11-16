@@ -57,7 +57,8 @@ tradingRouter.get('/pairs', (req, res) => {
       ? db.listingRequests.get(market.listingRequestId)
       : Array.from(db.listingRequests.values()).find(l => {
           const base = db.assets.get(l.assetId);
-          return base && base.symbol === pair.baseCurrency;
+          const quote = db.assets.get(l.quoteAssetId);
+          return base && base.symbol === pair.baseCurrency && (!quote || quote.symbol === pair.quoteCurrency);
         });
 
     const baseAsset = Array.from(db.assets.values()).find(a => a.symbol === pair.baseCurrency);
@@ -211,7 +212,8 @@ tradingRouter.get('/symbols', (req, res) => {
 
   const baseAsset = db.assets.get(pair.baseCurrency) || Array.from(db.assets.values()).find(a => a.symbol === pair.baseCurrency);
   const minMov = 1;
-  const priceScale = pair.quoteCurrency === 'IDR' ? 1 : 100;
+  const quoteDec = pair.quoteDecimals !== undefined && pair.quoteDecimals !== null ? pair.quoteDecimals : (pair.quoteCurrency === 'IDR' ? 2 : 6);
+  const priceScale = pair.quoteCurrency === 'IDR' ? 1 : Math.pow(10, Math.min(8, Math.max(2, quoteDec)));
 
   res.json({
     name: pair.id,

@@ -46,6 +46,13 @@ import { Button } from '../../ui/Button.js';
 import { Input } from '../../ui/Input.js';
 import { Modal } from '../../ui/Modal.js';
 import { useToast } from '../../ui/Toast.js';
+import { formatQuotePrice, parseDecimalToUnits, formatUnitsToDecimal } from '../../../lib/formatters.js';
+
+function formatListingQuoteUnits(rawUnits: string | undefined, item: any): string {
+  const quoteSym = item?.quoteAsset?.symbol || (String(item?.symbol || '').includes('USDT') ? 'USDT' : 'IDR');
+  const quoteDec = item?.quoteAsset?.decimals ?? (quoteSym === 'USDT' ? 6 : 2);
+  return formatQuotePrice(rawUnits || '0', quoteSym, quoteDec, true);
+}
 
 interface Props {
   currentUser: any;
@@ -196,21 +203,11 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
   // Token Management Handlers
   const handleOpenTokenEdit = (pair: any) => {
     const baseDec = pair.baseDecimals || 8;
-    const factor = 10n ** BigInt(baseDec);
     const minUnits = BigInt(pair.minOrderSize || '100000000');
     const maxUnits = BigInt(pair.maxOrderSize || '1000000000000000');
 
-    let minTok = '1';
-    let maxTok = '10000000';
-    try {
-      const minWhole = minUnits / factor;
-      const minRemainder = minUnits % factor;
-      minTok = minRemainder === 0n ? minWhole.toString() : (Number(minUnits) / Number(factor)).toString();
-
-      const maxWhole = maxUnits / factor;
-      const maxRemainder = maxUnits % factor;
-      maxTok = maxRemainder === 0n ? maxWhole.toString() : (Number(maxUnits) / Number(factor)).toString();
-    } catch {}
+    const minTok = formatUnitsToDecimal(minUnits, baseDec, true);
+    const maxTok = formatUnitsToDecimal(maxUnits, baseDec, true);
 
     setSelectedPairForEdit(pair);
     setTokenEditForm({
@@ -814,7 +811,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 <tr>
                   <th className="py-3 px-4 font-sans">Trading Pair</th>
                   <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4 text-right">Tick Size (sen)</th>
+                  <th className="py-3 px-4 text-right">Tick Size</th>
                   <th className="py-3 px-4 text-right">Lot Size</th>
                   <th className="py-3 px-4 text-right">Fee (M/T bps)</th>
                   <th className="py-3 px-4">Maker / Checker</th>
@@ -854,10 +851,11 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                         {renderStatusBadge(item.status)}
                       </td>
                       <td className="py-3 px-4 text-right font-bold text-[#F5F5F7]">
-                        {item.tickSize} sen
+                        <div>{formatListingQuoteUnits(item.tickSize, item)}</div>
+                        <span className="text-[10px] text-[#686D7A] font-normal">{item.tickSize} units</span>
                       </td>
                       <td className="py-3 px-4 text-right text-[#969BA8]">
-                        {item.lotSize}
+                        {formatUnitsToDecimal(item.lotSize || '0', item.baseAsset?.decimals ?? 8, true)} {item.baseAsset?.symbol || ''}
                       </td>
                       <td className="py-3 px-4 text-right text-[#969BA8]">
                         {item.makerFeeBps} / {item.takerFeeBps}
@@ -986,15 +984,16 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
                       <div className="p-2.5 rounded bg-[#0E1016] border border-[#292C38]">
                         <span className="text-[#686D7A] block">Tick Size:</span>
-                        <span className="text-[#F5F5F7] font-bold">{item.tickSize} sen</span>
+                        <span className="text-[#F5F5F7] font-bold">{formatListingQuoteUnits(item.tickSize, item)}</span>
+                        <span className="text-[10px] text-[#686D7A] block">{item.tickSize} units</span>
                       </div>
                       <div className="p-2.5 rounded bg-[#0E1016] border border-[#292C38]">
                         <span className="text-[#686D7A] block">Lot Size:</span>
-                        <span className="text-[#F5F5F7] font-bold">{item.lotSize}</span>
+                        <span className="text-[#F5F5F7] font-bold">{formatUnitsToDecimal(item.lotSize || '0', item.baseAsset?.decimals ?? 8, true)} {item.baseAsset?.symbol || ''}</span>
                       </div>
                       <div className="p-2.5 rounded bg-[#0E1016] border border-[#292C38]">
                         <span className="text-[#686D7A] block">Min Order / Notional:</span>
-                        <span className="text-[#F5F5F7] font-bold">{item.minQuantity} / {item.minNotional} sen</span>
+                        <span className="text-[#F5F5F7] font-bold">{formatUnitsToDecimal(item.minQuantity || '0', item.baseAsset?.decimals ?? 8, true)} / {formatListingQuoteUnits(item.minNotional, item)}</span>
                       </div>
                       <div className="p-2.5 rounded bg-[#0E1016] border border-[#292C38]">
                         <span className="text-[#686D7A] block">Fee Structure:</span>
@@ -1066,8 +1065,8 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
 
                 <div className="text-xs font-mono space-y-1 text-[#969BA8]">
                   <div>Engine Pair ID: <strong className="text-white">{item.symbol}</strong></div>
-                  <div>Tick Size: {item.tickSize} sen | Lot: {item.lotSize}</div>
-                  <div>Base Decimals: {item.baseAsset?.decimals || 8} | Quote Decimals: {item.quoteAsset?.decimals || 2}</div>
+                  <div>Tick Size: {formatListingQuoteUnits(item.tickSize, item)} ({item.tickSize} units) | Lot: {formatUnitsToDecimal(item.lotSize || '0', item.baseAsset?.decimals ?? 8, true)}</div>
+                  <div>Base Decimals: {item.baseAsset?.decimals ?? 8} | Quote Decimals: {item.quoteAsset?.decimals ?? (String(item.symbol || '').includes('USDT') ? 6 : 2)}</div>
                 </div>
 
                 <div className="flex items-center justify-between pt-2 border-t border-[#292C38]">
@@ -1183,14 +1182,8 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
               .map(pair => {
                 const dec = pair.baseDecimals || 8;
                 const factor = 10n ** BigInt(dec);
-                let humanMin = '0';
-                let humanMax = '0';
-                try {
-                  const minUnits = BigInt(pair.minOrderSize || '0');
-                  const maxUnits = BigInt(pair.maxOrderSize || '0');
-                  humanMin = (Number(minUnits) / Number(factor)).toLocaleString('id-ID', { maximumFractionDigits: dec });
-                  humanMax = (Number(maxUnits) / Number(factor)).toLocaleString('id-ID', { maximumFractionDigits: dec });
-                } catch {}
+                const humanMin = formatUnitsToDecimal(pair.minOrderSize || '0', dec, true);
+                const humanMax = formatUnitsToDecimal(pair.maxOrderSize || '0', dec, true);
 
                 return (
                   <div
@@ -1217,7 +1210,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                             </span>
                           </div>
                           <span className="text-xs text-[#969BA8]">
-                            Base: <strong className="text-white">{pair.baseCurrency}</strong> · Quote: <strong className="text-white">{pair.quoteCurrency}</strong> · 1 {pair.baseCurrency} = {Math.pow(10, dec).toLocaleString('id-ID')} unit atomik
+                            Base: <strong className="text-white">{pair.baseCurrency}</strong> · Quote: <strong className="text-white">{pair.quoteCurrency}</strong> · 1 {pair.baseCurrency} = {factor.toLocaleString('id-ID')} unit atomik
                           </span>
                         </div>
                       </div>
@@ -1264,12 +1257,15 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                       <div className="p-3 rounded-lg bg-[#0E1016] border border-[#292C38]">
                         <span className="text-[11px] text-[#969BA8] block mb-1">Tick & Lot Size</span>
                         <div className="text-sm font-bold text-white font-mono">
-                          {pair.quoteCurrency === 'USDT'
-                            ? `$${(Number(pair.tickSize || 10000) / 1000000).toFixed(4)}`
-                            : `Rp ${(Number(pair.tickSize || 100) / 100).toLocaleString('id-ID')}`}
+                          {formatQuotePrice(
+                            pair.tickSize || (pair.quoteCurrency === 'USDT' ? '10000' : '100'),
+                            pair.quoteCurrency,
+                            pair.quoteDecimals ?? (pair.quoteCurrency === 'USDT' ? 6 : 2),
+                            true
+                          )}
                         </div>
                         <span className="text-[10px] text-[#686D7A] font-mono block mt-0.5">
-                          Tick: {pair.tickSize || (pair.quoteCurrency === 'USDT' ? '10000' : '100')} · Lot: {pair.lotSize || pair.minOrderSize}
+                          Tick: {pair.tickSize || (pair.quoteCurrency === 'USDT' ? '10000' : '100')} · Lot: {humanMin} {pair.baseCurrency}
                         </span>
                       </div>
 
@@ -1368,14 +1364,20 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                     value={wizardData.selectedAssetId}
                     onChange={e => {
                       const ast = assets.find(a => a.id === e.target.value);
+                      const newDec = ast ? ast.decimals : 8;
+                      const unitScale = 10n ** BigInt(Math.max(0, newDec));
                       setWizardData({
                         ...wizardData,
                         selectedAssetId: e.target.value,
                         symbol: ast ? ast.symbol : '',
                         name: ast ? ast.name : '',
-                        decimals: ast ? ast.decimals : 8,
+                        decimals: newDec,
                         network: ast ? ast.network : 'ETHEREUM',
-                        contractAddress: ast?.contractAddress || ''
+                        contractAddress: ast?.contractAddress || '',
+                        lotSize: unitScale.toString(),
+                        minQuantity: parseDecimalToUnits(wizardData.minTokens || '1', newDec).toString(),
+                        maxQuantity: parseDecimalToUnits(wizardData.maxTokens || '10000000', newDec).toString(),
+                        initialLiquidityBase: (10000n * unitScale).toString()
                       });
                     }}
                     className="w-full bg-[#0E1016] border border-[#292C38] rounded-lg p-2.5 text-xs text-[#F5F5F7] font-mono outline-none"
@@ -1423,7 +1425,19 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                       <Input
                         type="number"
                         value={wizardData.decimals.toString()}
-                        onChange={e => setWizardData({ ...wizardData, decimals: parseInt(e.target.value, 10) || 8 })}
+                        onChange={e => {
+                          const parsed = parseInt(e.target.value, 10);
+                          const newDec = Number.isInteger(parsed) ? Math.min(18, Math.max(0, parsed)) : 8;
+                          const unitScale = 10n ** BigInt(newDec);
+                          setWizardData({
+                            ...wizardData,
+                            decimals: newDec,
+                            lotSize: unitScale.toString(),
+                            minQuantity: parseDecimalToUnits(wizardData.minTokens || '1', newDec).toString(),
+                            maxQuantity: parseDecimalToUnits(wizardData.maxTokens || '10000000', newDec).toString(),
+                            initialLiquidityBase: (10000n * unitScale).toString()
+                          });
+                        }}
                       />
                     </div>
                   </div>
@@ -1637,12 +1651,10 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xs text-[#969BA8]">
-                    Tick Size ({wizardData.quoteCurrency === 'USDT' ? 'USDT Units' : 'IDR Sen'}):
+                    Tick Size ({wizardData.quoteCurrency === 'USDT' ? 'USDT Units (6 Desimal)' : 'IDR Sen (2 Desimal)'}):
                   </label>
                   <span className="text-[11px] font-mono font-bold text-blue-400">
-                    Setara: {wizardData.quoteCurrency === 'USDT' 
-                      ? `$${(Number(wizardData.tickSize || 0) / 1000000).toFixed(4)} USDT` 
-                      : `Rp ${(Number(wizardData.tickSize || 0) / 100).toLocaleString('id-ID')}`}
+                    Setara: {formatQuotePrice(wizardData.tickSize || '0', wizardData.quoteCurrency, wizardData.quoteCurrency === 'USDT' ? 6 : 2, true)}
                   </span>
                 </div>
                 <Input
@@ -1654,6 +1666,12 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                   <span className="text-[10px] text-[#686D7A]">Preset:</span>
                   {wizardData.quoteCurrency === 'USDT' ? (
                     <>
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '100' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                        $0.0001 (100)
+                      </button>
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '1000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                        $0.001 (1.000)
+                      </button>
                       <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '10000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
                         $0.01 (10.000)
                       </button>
@@ -1688,7 +1706,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xs text-[#969BA8]">Lot Size (Base units integer eksak):</label>
                   <span className="text-[11px] font-mono font-bold text-blue-400">
-                    Setara: {(Number(wizardData.lotSize || 0) / Math.pow(10, wizardData.decimals || 8)).toLocaleString('id-ID', { maximumFractionDigits: wizardData.decimals || 8 })} {wizardData.symbol || 'TOKEN'}
+                    Setara: {formatUnitsToDecimal(wizardData.lotSize || '0', wizardData.decimals ?? 8, true)} {wizardData.symbol || 'TOKEN'}
                   </span>
                 </div>
                 <Input
@@ -1698,13 +1716,13 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 />
                 <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
                   <span className="text-[10px] text-[#686D7A]">Preset:</span>
-                  <button type="button" onClick={() => setWizardData({ ...wizardData, lotSize: (10n ** BigInt(wizardData.decimals || 8)).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                  <button type="button" onClick={() => setWizardData({ ...wizardData, lotSize: (10n ** BigInt(wizardData.decimals ?? 8)).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
                     1 {wizardData.symbol || 'Token'}
                   </button>
-                  <button type="button" onClick={() => setWizardData({ ...wizardData, lotSize: ((10n ** BigInt(wizardData.decimals || 8)) / 100n).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                  <button type="button" onClick={() => setWizardData({ ...wizardData, lotSize: ((wizardData.decimals ?? 8) >= 2 ? (10n ** BigInt((wizardData.decimals ?? 8) - 2)) : 1n).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
                     0.01 {wizardData.symbol || 'Token'}
                   </button>
-                  <button type="button" onClick={() => setWizardData({ ...wizardData, lotSize: ((10n ** BigInt(wizardData.decimals || 8)) / 10000n).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                  <button type="button" onClick={() => setWizardData({ ...wizardData, lotSize: ((wizardData.decimals ?? 8) >= 4 ? (10n ** BigInt((wizardData.decimals ?? 8) - 4)) : 1n).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
                     0.0001 {wizardData.symbol || 'Token'}
                   </button>
                 </div>
@@ -1714,12 +1732,10 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xs text-[#969BA8]">
-                    Min Notional Value ({wizardData.quoteCurrency === 'USDT' ? 'USDT Units' : 'IDR Sen'}):
+                    Min Notional Value ({wizardData.quoteCurrency === 'USDT' ? 'USDT Units (6 Desimal)' : 'IDR Sen (2 Desimal)'}):
                   </label>
                   <span className="text-[11px] font-mono font-bold text-blue-400">
-                    Setara: {wizardData.quoteCurrency === 'USDT' 
-                      ? `$${(Number(wizardData.minNotional || 0) / 1000000).toFixed(2)} USDT` 
-                      : `Rp ${(Number(wizardData.minNotional || 0) / 100).toLocaleString('id-ID')}`}
+                    Setara: {formatQuotePrice(wizardData.minNotional || '0', wizardData.quoteCurrency, wizardData.quoteCurrency === 'USDT' ? 6 : 2, true)}
                   </span>
                 </div>
                 <Input
@@ -1853,7 +1869,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                         Injeksi Token ({wizardData.symbol || 'Base'} Units):
                       </label>
                       <span className="text-[11px] font-mono font-bold text-blue-400">
-                        Setara: {(Number(wizardData.initialLiquidityBase || 0) / Math.pow(10, wizardData.decimals || 8)).toLocaleString('id-ID', { maximumFractionDigits: wizardData.decimals || 8 })} {wizardData.symbol || 'Token'}
+                        Setara: {formatUnitsToDecimal(wizardData.initialLiquidityBase || '0', wizardData.decimals ?? 8, true)} {wizardData.symbol || 'Token'}
                       </span>
                     </div>
                     <Input
@@ -1863,13 +1879,13 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                     />
                     <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
                       <span className="text-[10px] text-[#686D7A]">Preset:</span>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityBase: (100n * (10n ** BigInt(wizardData.decimals || 8))).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityBase: (100n * (10n ** BigInt(wizardData.decimals ?? 8))).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
                         100 {wizardData.symbol || 'Token'}
                       </button>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityBase: (1000n * (10n ** BigInt(wizardData.decimals || 8))).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityBase: (1000n * (10n ** BigInt(wizardData.decimals ?? 8))).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
                         1.000 {wizardData.symbol || 'Token'}
                       </button>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityBase: (100000n * (10n ** BigInt(wizardData.decimals || 8))).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityBase: (100000n * (10n ** BigInt(wizardData.decimals ?? 8))).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
                         100.000 {wizardData.symbol || 'Token'}
                       </button>
                     </div>
@@ -1882,9 +1898,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                         Injeksi Modal {wizardData.quoteCurrency} ({wizardData.quoteCurrency === 'USDT' ? 'Units' : 'Sen'}):
                       </label>
                       <span className="text-[11px] font-mono font-bold text-blue-400">
-                        Setara: {wizardData.quoteCurrency === 'USDT' 
-                          ? `$${(Number(wizardData.initialLiquidityQuoteIdr || 0) / 1000000).toLocaleString('id-ID')} USDT` 
-                          : `Rp ${(Number(wizardData.initialLiquidityQuoteIdr || 0) / 100).toLocaleString('id-ID')}`}
+                        Setara: {formatQuotePrice(wizardData.initialLiquidityQuoteIdr || '0', wizardData.quoteCurrency, wizardData.quoteCurrency === 'USDT' ? 6 : 2, true)}
                       </span>
                     </div>
                     <Input
@@ -1932,7 +1946,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                       <span>💡</span> Konverter Kuantitas Order (Bebas Bingung Angka Integer / Nol)
                     </span>
                     <span className="text-[11px] text-[#969BA8] block">
-                      Token ini memiliki <strong>{wizardData.decimals} desimal</strong> (1 {wizardData.symbol || 'TOKEN'} = {Math.pow(10, wizardData.decimals).toLocaleString('id-ID')} unit atomik).
+                      Token ini memiliki <strong>{wizardData.decimals} desimal</strong> (1 {wizardData.symbol || 'TOKEN'} = {(10n ** BigInt(wizardData.decimals ?? 8)).toLocaleString('id-ID')} unit atomik).
                     </span>
                   </div>
                   <div className="flex gap-1.5 bg-[#171923] p-1 rounded border border-[#292C38] self-start sm:self-auto">
@@ -1971,18 +1985,14 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                           value={wizardData.minTokens}
                           onChange={e => {
                             const val = e.target.value;
-                            const dec = wizardData.decimals || 8;
-                            let atomic = '100000000';
-                            try {
-                              const [intP, fracP = ''] = val.split('.');
-                              atomic = (BigInt(intP || '0') * (10n ** BigInt(dec)) + BigInt((fracP.slice(0, dec).padEnd(dec, '0')) || '0')).toString();
-                            } catch {}
+                            const dec = wizardData.decimals ?? 8;
+                            const atomic = parseDecimalToUnits(val, dec).toString();
                             setWizardData({ ...wizardData, minTokens: val, minQuantity: atomic });
                           }}
                           placeholder="Contoh: 1"
                         />
                         <span className="text-[10px] text-emerald-400 mt-1 block font-mono">
-                          = {Number(wizardData.minQuantity || 0).toLocaleString('id-ID')} unit atomik
+                          = {(() => { try { return BigInt(wizardData.minQuantity || '0').toLocaleString('id-ID'); } catch { return wizardData.minQuantity || '0'; } })()} unit atomik
                         </span>
                       </div>
                     ) : (
@@ -1991,13 +2001,8 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                           value={wizardData.minQuantity}
                           onChange={e => {
                             const val = e.target.value;
-                            const dec = wizardData.decimals || 8;
-                            let tok = '1';
-                            try {
-                              const b = BigInt(val || '0');
-                              const div = 10n ** BigInt(dec);
-                              tok = (Number(b) / Number(div)).toString();
-                            } catch {}
+                            const dec = wizardData.decimals ?? 8;
+                            const tok = formatUnitsToDecimal(val || '0', dec, true);
                             setWizardData({ ...wizardData, minQuantity: val, minTokens: tok });
                           }}
                         />
@@ -2021,18 +2026,14 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                           value={wizardData.maxTokens}
                           onChange={e => {
                             const val = e.target.value;
-                            const dec = wizardData.decimals || 8;
-                            let atomic = '1000000000000000';
-                            try {
-                              const [intP, fracP = ''] = val.split('.');
-                              atomic = (BigInt(intP || '0') * (10n ** BigInt(dec)) + BigInt((fracP.slice(0, dec).padEnd(dec, '0')) || '0')).toString();
-                            } catch {}
+                            const dec = wizardData.decimals ?? 8;
+                            const atomic = parseDecimalToUnits(val, dec).toString();
                             setWizardData({ ...wizardData, maxTokens: val, maxQuantity: atomic });
                           }}
                           placeholder="Contoh: 10000000"
                         />
                         <span className="text-[10px] text-blue-400 mt-1 block font-mono">
-                          = {Number(wizardData.maxQuantity || 0).toLocaleString('id-ID')} unit atomik
+                          = {(() => { try { return BigInt(wizardData.maxQuantity || '0').toLocaleString('id-ID'); } catch { return wizardData.maxQuantity || '0'; } })()} unit atomik
                         </span>
                       </div>
                     ) : (
@@ -2041,13 +2042,8 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                           value={wizardData.maxQuantity}
                           onChange={e => {
                             const val = e.target.value;
-                            const dec = wizardData.decimals || 8;
-                            let tok = '10000000';
-                            try {
-                              const b = BigInt(val || '0');
-                              const div = 10n ** BigInt(dec);
-                              tok = (Number(b) / Number(div)).toString();
-                            } catch {}
+                            const dec = wizardData.decimals ?? 8;
+                            const tok = formatUnitsToDecimal(val || '0', dec, true);
                             setWizardData({ ...wizardData, maxQuantity: val, maxTokens: tok });
                           }}
                         />
@@ -2155,11 +2151,15 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 )}
                 <div className="flex justify-between">
                   <span className="text-[#686D7A]">Tick Size:</span>
-                  <span className="text-[#00C087] font-bold">{wizardData.tickSize} sen</span>
+                  <span className="text-[#00C087] font-bold">
+                    {formatQuotePrice(wizardData.tickSize, wizardData.quoteCurrency, wizardData.quoteCurrency === 'USDT' ? 6 : 2, true)} ({wizardData.tickSize} units)
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-[#686D7A]">Lot Size:</span>
-                  <span className="text-[#F5F5F7]">{wizardData.lotSize} base units</span>
+                  <span className="text-[#F5F5F7]">
+                    {formatUnitsToDecimal(wizardData.lotSize || '0', wizardData.decimals ?? 8, true)} {wizardData.symbol} ({wizardData.lotSize} base units)
+                  </span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-[#686D7A]">Fee Structure:</span>
@@ -2482,7 +2482,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 Spesifikasi Presisi Token {tokenEditForm.baseCurrency}
               </span>
               <p className="text-[11px] text-slate-300 leading-relaxed">
-                Token ini menggunakan <strong>{tokenEditForm.baseDecimals} desimal</strong> (1 {tokenEditForm.baseCurrency} = {Math.pow(10, tokenEditForm.baseDecimals).toLocaleString('id-ID')} unit terkecil).
+                Token ini menggunakan <strong>{tokenEditForm.baseDecimals} desimal</strong> (1 {tokenEditForm.baseCurrency} = {(10n ** BigInt(tokenEditForm.baseDecimals ?? 8)).toLocaleString('id-ID')} unit terkecil).
                 Untuk mencegah bot MM ditolak saat menempatkan order berulang, pastikan kuantitas maksimum cukup besar (misal: 10.000.000 token).
               </p>
             </div>
@@ -2556,12 +2556,8 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                     value={tokenEditForm.minOrderTokens}
                     onChange={e => {
                       const val = e.target.value;
-                      const dec = tokenEditForm.baseDecimals || 8;
-                      let atomic = '0';
-                      try {
-                        const [intP, fracP = ''] = val.split('.');
-                        atomic = (BigInt(intP || '0') * (10n ** BigInt(dec)) + BigInt((fracP.slice(0, dec).padEnd(dec, '0')) || '0')).toString();
-                      } catch {}
+                      const dec = tokenEditForm.baseDecimals ?? 8;
+                      const atomic = parseDecimalToUnits(val, dec).toString();
                       setTokenEditForm(prev => ({ ...prev, minOrderTokens: val, minOrderSize: atomic }));
                     }}
                     placeholder="1"
@@ -2571,11 +2567,8 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                     value={tokenEditForm.minOrderSize}
                     onChange={e => {
                       const val = e.target.value;
-                      const dec = tokenEditForm.baseDecimals || 8;
-                      let tok = '0';
-                      try {
-                        tok = (Number(BigInt(val || '0')) / Number(10n ** BigInt(dec))).toString();
-                      } catch {}
+                      const dec = tokenEditForm.baseDecimals ?? 8;
+                      const tok = formatUnitsToDecimal(val || '0', dec, true);
                       setTokenEditForm(prev => ({ ...prev, minOrderSize: val, minOrderTokens: tok }));
                     }}
                     placeholder="100000000"
@@ -2597,12 +2590,8 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                     value={tokenEditForm.maxOrderTokens}
                     onChange={e => {
                       const val = e.target.value;
-                      const dec = tokenEditForm.baseDecimals || 8;
-                      let atomic = '0';
-                      try {
-                        const [intP, fracP = ''] = val.split('.');
-                        atomic = (BigInt(intP || '0') * (10n ** BigInt(dec)) + BigInt((fracP.slice(0, dec).padEnd(dec, '0')) || '0')).toString();
-                      } catch {}
+                      const dec = tokenEditForm.baseDecimals ?? 8;
+                      const atomic = parseDecimalToUnits(val, dec).toString();
                       setTokenEditForm(prev => ({ ...prev, maxOrderTokens: val, maxOrderSize: atomic }));
                     }}
                     placeholder="10000000"
@@ -2612,11 +2601,8 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                     value={tokenEditForm.maxOrderSize}
                     onChange={e => {
                       const val = e.target.value;
-                      const dec = tokenEditForm.baseDecimals || 8;
-                      let tok = '0';
-                      try {
-                        tok = (Number(BigInt(val || '0')) / Number(10n ** BigInt(dec))).toString();
-                      } catch {}
+                      const dec = tokenEditForm.baseDecimals ?? 8;
+                      const tok = formatUnitsToDecimal(val || '0', dec, true);
                       setTokenEditForm(prev => ({ ...prev, maxOrderSize: val, maxOrderTokens: tok }));
                     }}
                     placeholder="1000000000000000"

@@ -172,8 +172,14 @@ listingRouter.get('/track/:id', (req, res) => {
 // GET /public-list - Public list of all assets for listing explore tab
 listingRouter.get('/public-list', (req, res) => {
   const assets = Array.from(db.assets.values()).map(a => {
-    const market = Array.from(db.markets.values()).find(m => m.baseAssetId === a.id);
-    const listing = Array.from(db.listingRequests.values()).find(l => l.assetId === a.id);
+    const assetMarkets = Array.from(db.markets.values()).filter(m => m.baseAssetId === a.id);
+    const activeMarket = assetMarkets.find(m => m.status === 'ACTIVE') || assetMarkets[0];
+    const listing = Array.from(db.listingRequests.values()).find(l => l.assetId === a.id && l.status !== 'CANCELLED' && l.status !== 'REJECTED')
+      || Array.from(db.listingRequests.values()).find(l => l.assetId === a.id);
+    const listingQuote = listing ? db.assets.get(listing.quoteAssetId) : undefined;
+    const fallbackMarketSymbol = listingQuote ? `${a.symbol}-${listingQuote.symbol}` : `${a.symbol}-IDR`;
+    const activeMarketSymbols = assetMarkets.filter(m => m.status === 'ACTIVE').map(m => m.symbol);
+
     return {
       id: a.id,
       symbol: a.symbol,
@@ -187,8 +193,9 @@ listingRouter.get('/public-list', (req, res) => {
       withdrawalEnabled: a.withdrawalEnabled,
       depositOpenedAt: a.depositOpenedAt || listing?.depositOpenedAt,
       withdrawalOpenedAt: a.withdrawalOpenedAt || listing?.withdrawalOpenedAt,
-      hasActiveMarket: market ? market.status === 'ACTIVE' : false,
-      marketSymbol: market ? market.symbol : `${a.symbol}-IDR`,
+      hasActiveMarket: activeMarket ? activeMarket.status === 'ACTIVE' : false,
+      marketSymbol: activeMarket ? activeMarket.symbol : fallbackMarketSymbol,
+      activeMarketSymbols,
       marketMakerAccountId: listing?.marketMakerAccountId,
       projectOwnerAccountId: listing?.projectOwnerAccountId
     };

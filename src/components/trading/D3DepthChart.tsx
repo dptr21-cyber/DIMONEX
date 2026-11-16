@@ -17,7 +17,7 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
 import * as d3 from 'd3';
 import { TradingPairItem } from '../../types/index.js';
-import { formatIDR, formatCrypto, safeBigInt } from '../../lib/formatters.js';
+import { formatIDR, formatCrypto, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
 import { ZoomIn, ZoomOut, RotateCcw, Crosshair } from 'lucide-react';
 
 interface Props {
@@ -58,23 +58,17 @@ export const D3DepthChart: React.FC<Props> = ({
   const [hoveredPoint, setHoveredPoint] = useState<DepthPoint | null>(null);
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
 
-  const isQuoteUSDT = pair.quoteCurrency === 'USDT';
+  const isQuoteIDR = (pair.quoteCurrency || 'IDR').toUpperCase() === 'IDR';
+  const quoteDecimals =
+    pair.quoteDecimals !== undefined && pair.quoteDecimals !== null
+      ? pair.quoteDecimals
+      : (isQuoteIDR ? 2 : 6);
   const baseScale = 10 ** (pair.baseDecimals || 8);
-  const quoteScale = isQuoteUSDT ? 10 ** (pair.quoteDecimals || 6) : 100; // IDR is sen (100)
+  const quoteScale = 10 ** Math.max(0, quoteDecimals);
 
   // Format price helper based on quote currency
   const formatPrice = (priceUnitsStr: string) => {
-    if (isQuoteUSDT) {
-      try {
-        const u = safeBigInt(priceUnitsStr);
-        const dec = pair.quoteDecimals || 6;
-        const val = Number(u) / (10 ** dec);
-        return `${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })} USDT`;
-      } catch {
-        return `${priceUnitsStr} USDT`;
-      }
-    }
-    return formatIDR(priceUnitsStr, false);
+    return formatQuotePrice(priceUnitsStr, pair.quoteCurrency, quoteDecimals, true);
   };
 
   // 1. Process Depth Data into Cumulative Step Arrays
@@ -339,8 +333,12 @@ export const D3DepthChart: React.FC<Props> = ({
       .ticks(Math.max(3, Math.floor(innerWidth / 90)))
       .tickFormat(d => {
         const val = Number(d);
-        if (isQuoteUSDT) {
-          return val >= 1000 ? `$${(val / 1000).toFixed(1)}k` : `$${val.toFixed(2)}`;
+        if (!isQuoteIDR) {
+          if (val >= 1000) return `$${(val / 1000).toFixed(1)}k`;
+          if (val >= 1) return `$${val.toFixed(2)}`;
+          if (val >= 0.01) return `$${val.toFixed(4)}`;
+          if (val > 0) return `$${val.toPrecision(3)}`;
+          return '$0';
         }
         if (val >= 1000000000) return `${(val / 1000000000).toFixed(1)}M`;
         if (val >= 1000000) return `${(val / 1000000).toFixed(0)}jt`;
@@ -505,7 +503,7 @@ export const D3DepthChart: React.FC<Props> = ({
       }
     });
 
-  }, [bidPoints, askPoints, midPriceNum, zoomFactor, height, isQuoteUSDT, myOpenOrderPrices, onSelectPrice, quoteScale]);
+  }, [bidPoints, askPoints, midPriceNum, zoomFactor, height, isQuoteIDR, myOpenOrderPrices, onSelectPrice, quoteScale]);
 
   return (
     <div
