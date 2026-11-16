@@ -18,9 +18,10 @@ import { db, SYSTEM_TREASURY_ID } from '../db/database.js';
 import { matchingEngine } from '../engine/MatchingEngine.js';
 import { PrecisionMath } from '../ledger/PrecisionMath.js';
 import { marketWsService } from '../websocket/MarketDataWs.js';
-import { BotInstance, OrderBotConfig, VolumeBotConfig, PriceFollowerConfig, DepthLiquidityConfig, Order, Trade } from '../db/types.js';
+import { BotInstance, OrderBotConfig, VolumeBotConfig, PriceFollowerConfig, DepthLiquidityConfig, MovementDepthLiquidityConfig, Order, Trade } from '../db/types.js';
 import { PriceFollowerBotExecutor } from './bots/PriceFollowerBot.js';
 import { DepthLiquidityBotExecutor } from './bots/DepthLiquidityBot.js';
+import { MovementDepthLiquidityBotExecutor } from './bots/MovementDepthLiquidityBot.js';
 import { QuantHftBotExecutor } from './bots/QuantHftBot.js';
 import { SmartHftLadderBotExecutor } from './bots/SmartHftLadderBot.js';
 import { AdvancedMarketMakerBotExecutor } from './bots/AdvancedMarketMakerBot.js';
@@ -248,6 +249,29 @@ export class BotWorkerManager {
           errors.push('Pada Custom Pricing Mode, batas harga (Min/Max Buy & Sell) harus diisi angka positif > 0.');
         }
       }
+    } else if (bot.botType === 'MOVEMENT_DEPTH_LIQUIDITY') {
+      const cfg = bot.movementDepthConfig;
+      if (!cfg) {
+        errors.push('Konfigurasi Movement Depth (WS) Bot tidak boleh kosong.');
+        return { isValid: false, errors };
+      }
+      const leaderSym = (cfg.leader_symbol || '').trim().toUpperCase();
+      const enabledWhitelist = db.getEnabledExternalWsSymbols();
+      if (!leaderSym || !enabledWhitelist.includes(leaderSym)) {
+        errors.push(`Pair acuan WebSocket "${leaderSym || '-'}" belum terdaftar/aktif di Whitelist Admin.`);
+      }
+      if (!Number.isFinite(cfg.movement_sensitivity) || cfg.movement_sensitivity === 0) {
+        errors.push('Sensitivitas pergerakan (Beta) harus angka != 0 (misal 1.0).');
+      }
+      const anchorVal = parseFloat(String(cfg.anchor_local_price || '0'));
+      const pairLastVal = Number(BigInt(pair.lastPrice || '0')) / (10 ** (pair.quoteDecimals || 2));
+      if (!(anchorVal > 0) && !(pairLastVal > 0)) {
+        errors.push('Target Local Anchor Price harus diisi angka positif > 0.');
+      }
+      if (!cfg.number_of_bid_levels || cfg.number_of_bid_levels < 1) cfg.number_of_bid_levels = 5;
+      if (!cfg.number_of_ask_levels || cfg.number_of_ask_levels < 1) cfg.number_of_ask_levels = 5;
+      if (cfg.number_of_bid_levels > 20) errors.push('Jumlah level bid maksimal 20 level.');
+      if (cfg.number_of_ask_levels > 20) errors.push('Jumlah level ask maksimal 20 level.');
     } else if (bot.botType === 'QUANT_HFT_MM') {
       const cfg = bot.quantHftConfig;
       if (!cfg) {
@@ -368,6 +392,8 @@ export class BotWorkerManager {
       this.schedulePriceFollowerTick(runtime);
     } else if (bot.botType === 'DEPTH_LIQUIDITY') {
       this.scheduleDepthLiquidityTick(runtime);
+    } else if (bot.botType === 'MOVEMENT_DEPTH_LIQUIDITY') {
+      this.scheduleMovementDepthTick(runtime);
     } else if (bot.botType === 'QUANT_HFT_MM') {
       this.scheduleQuantHftBotTick(runtime);
     } else if (bot.botType === 'SMART_HFT_LADDER') {
@@ -426,6 +452,8 @@ export class BotWorkerManager {
         cancelledOrdersCount += PriceFollowerBotExecutor.cancelOpenBotOrders(bot, this.addLog.bind(this));
       } else if (bot.botType === 'DEPTH_LIQUIDITY') {
         cancelledOrdersCount += DepthLiquidityBotExecutor.cancelOpenDepthOrders(bot, this.addLog.bind(this));
+      } else if (bot.botType === 'MOVEMENT_DEPTH_LIQUIDITY') {
+        cancelledOrdersCount += MovementDepthLiquidityBotExecutor.cancelOpenBotOrders(bot, this.addLog.bind(this));
       } else if (bot.botType === 'QUANT_HFT_MM') {
         cancelledOrdersCount += QuantHftBotExecutor.cancelOpenBotOrders(bot, this.addLog.bind(this));
       } else if (bot.botType === 'SMART_HFT_LADDER') {
@@ -1007,6 +1035,41 @@ export class BotWorkerManager {
         }
       }
       this.scheduleDepthLiquidityTick(runtime);
+    }, intervalMs);
+  }
+
+  /**
+   * Movement Depth (Relative WS Follower) Scheduling Loop
+   */
+  private scheduleMovementDepthTick(runtime: WorkerRuntime) {
+    if (!runtime.isRunning) return;
+
+    const bot = db.botInstances.get(runtime.botId);
+    if (!bot || bot.status !== 'RUNNING') {
+      runtime.isRunning = false;
+      this.workers.delete(runtime.botId);
+      return;
+    }
+
+    const intervalMs = Math.max(1000, bot.movementDepthConfig?.minimum_reprice_interval_ms || 3000);
+
+    runtime.timer = setTimeout(() => {
+      if (!runtime.isRunning) return;
+      try {
+        MovementDepthLiquidityBotExecutor.executeCycle(bot, this.addLog.bind(this));
+        runtime.consecutiveErrors = 0;
+      } catch (err: any) {
+        runtime.consecutiveErrors++;
+        this.addLog(bot, `Error pada Movement Depth cycle: ${err.message}`, 'ERROR');
+        if (runtime.consecutiveErrors >= db.riskControls.maxConsecutiveErrors) {
+          bot.status = 'RISK_HALTED';
+          bot.errorInfo = `Consecutive error threshold breached (${runtime.consecutiveErrors}).`;
+          this.addLog(bot, bot.errorInfo, 'RISK');
+          this.stopWorker(bot.id, false);
+          return;
+        }
+      }
+      this.scheduleMovementDepthTick(runtime);
     }, intervalMs);
   }
 

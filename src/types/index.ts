@@ -22,7 +22,8 @@ export type BotType =
   | 'SMART_TRADE'
   | 'QUANT_HFT_MM'
   | 'SMART_HFT_LADDER'
-  | 'ADVANCED_MM';
+  | 'ADVANCED_MM'
+  | 'MOVEMENT_DEPTH_LIQUIDITY';
 
 export interface UserProfile {
   id: string;
@@ -122,6 +123,69 @@ export interface DepthLiquidityConfig {
   anti_stacking_enabled?: boolean;    // Strict anti-stacking protection
   number_of_bid_levels: number;       // e.g. 5 to 20
   number_of_ask_levels: number;       // e.g. 5 to 20
+  bid_level_offsets_bps: number[];
+  ask_level_offsets_bps: number[];
+  bid_quantities: string[];
+  ask_quantities: string[];
+  quantity_randomization_enabled: boolean;
+  random_min_quantity: string;
+  random_max_quantity: string;
+  minimum_reprice_interval_ms: number;
+  minimum_price_change_bps: number;
+  maximum_open_orders: number;
+  maximum_total_bid_value_idr: string;
+  maximum_total_ask_quantity: string;
+  maximum_inventory: string;
+  maximum_order_value_idr: string;
+  max_data_age_ms: number;
+  tick_size: number;
+  lot_size: string;
+  dry_run: boolean;
+  enabled: boolean;
+  activeOrderIds?: string[];
+  lastRepriceTimestamp?: number;
+  liquidity_refresh_cooldown_sec?: number;
+  randomize_placement_enabled?: boolean;
+  price_randomization_ticks?: number;
+  last_refresh_timestamp?: number;
+  next_refresh_timestamp?: number;
+}
+
+export interface ExternalWsWhitelistEntry {
+  symbol: string;
+  baseAsset: string;
+  quoteAsset: string;
+  label?: string;
+  providers: ('binance' | 'bybit')[];
+  enabled: boolean;
+  addedBy?: string;
+  addedAt: number;
+  binancePrice?: number | null;
+  bybitPrice?: number | null;
+  binanceFresh?: boolean;
+  bybitFresh?: boolean;
+}
+
+export interface MovementDepthLiquidityConfig {
+  account_id: string;
+  market_symbol: string;
+  leader_symbol: string;
+  leader_provider: 'AGGREGATED' | 'BINANCE' | 'BYBIT';
+  anchor_local_price: string;
+  leader_baseline_price?: number;
+  last_leader_price?: number;
+  last_leader_return_pct?: number;
+  last_projected_local_price?: number;
+  movement_sensitivity: number;
+  movement_threshold_bps?: number;
+  min_price_guard?: string;
+  max_price_guard?: string;
+  spread_bps?: number;
+  spacing_mode: 'LINEAR' | 'GEOMETRIC' | 'CONCENTRATED' | 'FIXED_IDR' | 'PERCENT_BPS';
+  level_spacing_idr?: number;
+  anti_stacking_enabled?: boolean;
+  number_of_bid_levels: number;
+  number_of_ask_levels: number;
   bid_level_offsets_bps: number[];
   ask_level_offsets_bps: number[];
   bid_quantities: string[];
@@ -408,6 +472,7 @@ export interface BotInstance {
   volumeBotConfig?: VolumeBotConfig;
   priceFollowerConfig?: PriceFollowerConfig;
   depthLiquidityConfig?: DepthLiquidityConfig;
+  movementDepthConfig?: MovementDepthLiquidityConfig;
   quantHftConfig?: QuantHftConfig;
   smartHftConfig?: SmartHftLadderConfig;
   gridConfig?: any;

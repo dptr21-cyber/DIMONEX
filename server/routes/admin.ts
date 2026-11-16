@@ -12,7 +12,8 @@ import crypto from 'crypto';
 import { requireAdmin } from './auth.js';
 import { db } from '../db/database.js';
 import { PrecisionMath } from '../ledger/PrecisionMath.js';
-import { TradingPair } from '../db/types.js';
+import { TradingPair, ExternalWsWhitelistEntry } from '../db/types.js';
+import { priceAggregatorService, parseExternalPairSymbol } from '../services/external/PriceAggregatorService.js';
 
 export const adminRouter = Router();
 
@@ -575,7 +576,7 @@ adminRouter.get('/bots/all', requireAdmin, (req, res) => {
         status: b.status,
         ownerEmail: owner ? owner.email : 'Unknown',
         ownerUserId: b.ownerUserId,
-        activeOrdersCount: b.depthLiquidityConfig?.activeOrderIds?.length || ((b.priceFollowerConfig?.activeBuyOrderId ? 1 : 0) + (b.priceFollowerConfig?.activeSellOrderId ? 1 : 0)) || 0,
+        activeOrdersCount: b.depthLiquidityConfig?.activeOrderIds?.length || b.movementDepthConfig?.activeOrderIds?.length || ((b.priceFollowerConfig?.activeBuyOrderId ? 1 : 0) + (b.priceFollowerConfig?.activeSellOrderId ? 1 : 0)) || 0,
         stats: b.stats,
         lastHeartbeat: b.lastHeartbeat,
         createdAt: b.createdAt
@@ -804,4 +805,220 @@ adminRouter.post('/vip-tiers/update', requireAdmin, (req, res) => {
 // 18. Get Audit Logs
 adminRouter.get('/audit-logs', requireAdmin, (req, res) => {
   res.json(db.auditLogs.slice(-200).reverse());
+});
+
+// ============================================================================
+// 19. EXTERNAL WEBSOCKET PAIR WHITELIST (Binance & Bybit Spot Curation)
+// ============================================================================
+
+adminRouter.get('/external-ws/whitelist', requireAdmin, (req, res) => {
+  try {
+    const items = Array.from(db.externalWsWhitelist.values()).map(entry => {
+      const snap = priceAggregatorService.getSymbolSnapshot(entry.symbol, 'AGGREGATED');
+      return {
+        ...entry,
+        binancePrice: snap.binancePrice,
+        bybitPrice: snap.bybitPrice,
+        binanceFresh: snap.binanceFresh,
+        bybitFresh: snap.bybitFresh
+      };
+    });
+
+    res.json({
+      success: true,
+      items,
+      feedStatus: {
+        binance: {
+          status: priceAggregatorService.binance.getConnectionStatus(),
+          subscribedCount: priceAggregatorService.binance.getSubscribedSymbols().length,
+          subscribedSymbols: priceAggregatorService.binance.getSubscribedSymbols()
+        },
+        bybit: {
+          status: priceAggregatorService.bybit.getConnectionStatus(),
+          subscribedCount: priceAggregatorService.bybit.getSubscribedSymbols().length,
+          subscribedSymbols: priceAggregatorService.bybit.getSubscribedSymbols()
+        }
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+adminRouter.get('/external-ws/catalog', requireAdmin, async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim().toUpperCase();
+    const providerFilter = String(req.query.provider || 'ALL').toUpperCase();
+    const force = req.query.refresh === '1';
+
+    const catalog = await priceAggregatorService.fetchAvailableCatalog(force);
+    let filtered = catalog.items;
+
+    if (providerFilter === 'BINANCE') {
+      filtered = filtered.filter(i => i.providers.includes('binance'));
+    } else if (providerFilter === 'BYBIT') {
+      filtered = filtered.filter(i => i.providers.includes('bybit'));
+    }
+
+    if (q) {
+      filtered = filtered.filter(i =>
+        i.symbol.includes(q) ||
+        i.baseAsset.includes(q) ||
+        i.quoteAsset.includes(q)
+      );
+    }
+
+    const whitelistedSet = new Set(Array.from(db.externalWsWhitelist.keys()));
+    const limited = filtered.slice(0, 60).map(item => ({
+      ...item,
+      isWhitelisted: whitelistedSet.has(item.symbol)
+    }));
+
+    res.json({
+      success: true,
+      source: catalog.source,
+      fetchedAt: catalog.fetchedAt,
+      totalMatches: filtered.length,
+      items: limited
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+adminRouter.post('/external-ws/whitelist/add', requireAdmin, async (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const rawSymbol = String(req.body?.symbol || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!rawSymbol || rawSymbol.length < 4) {
+      return res.status(400).json({ error: 'Simbol pair tidak valid (contoh: SOLUSDT, PEPEUSDT, ETHBTC).' });
+    }
+
+    const providersInput = Array.isArray(req.body?.providers) && req.body.providers.length > 0
+      ? req.body.providers.filter((p: string) => p === 'binance' || p === 'bybit')
+      : ['binance', 'bybit'];
+    const providers: ('binance' | 'bybit')[] = providersInput.length > 0 ? providersInput : ['binance', 'bybit'];
+
+    const parsed = parseExternalPairSymbol(rawSymbol);
+    const label = req.body?.label
+      ? String(req.body.label).trim()
+      : `${parsed.baseAsset} / ${parsed.quoteAsset}`;
+
+    const entry: ExternalWsWhitelistEntry = {
+      symbol: rawSymbol,
+      baseAsset: parsed.baseAsset,
+      quoteAsset: parsed.quoteAsset,
+      label,
+      providers,
+      enabled: true,
+      addedBy: adminUser?.email || 'ADMIN',
+      addedAt: Date.now()
+    };
+
+    db.externalWsWhitelist.set(rawSymbol, entry);
+    db.saveToDisk();
+
+    // Seed initial price if available from REST catalog & sync live WS streams
+    await priceAggregatorService.seedSymbolFromCatalog(rawSymbol, providers);
+    priceAggregatorService.syncWhitelistSymbols(
+      db.getEnabledExternalWsSymbols('binance'),
+      db.getEnabledExternalWsSymbols('bybit')
+    );
+
+    db.auditLogs.push({
+      id: crypto.randomUUID(),
+      actorId: adminUser?.id || 'ADMIN',
+      action: 'EXTERNAL_WS_WHITELIST_ADDED',
+      resource: `ws_pair:${rawSymbol}`,
+      details: `Pair ${rawSymbol} (${providers.join(', ')}) ditambahkan ke whitelist WebSocket oleh ${adminUser?.email}`,
+      createdAt: Date.now()
+    });
+    db.scheduleSave();
+
+    res.json({
+      success: true,
+      message: `Pair ${rawSymbol} ditambahkan ke whitelist & stream WebSocket Binance/Bybit disinkronkan.`,
+      entry
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+adminRouter.post('/external-ws/whitelist/toggle', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const rawSymbol = String(req.body?.symbol || '').trim().toUpperCase();
+    const entry = db.externalWsWhitelist.get(rawSymbol);
+    if (!entry) {
+      return res.status(404).json({ error: `Pair ${rawSymbol} tidak ditemukan di whitelist.` });
+    }
+
+    entry.enabled = req.body?.enabled !== undefined ? Boolean(req.body.enabled) : !entry.enabled;
+    if (Array.isArray(req.body?.providers) && req.body.providers.length > 0) {
+      const validProvs = req.body.providers.filter((p: string) => p === 'binance' || p === 'bybit');
+      if (validProvs.length > 0) entry.providers = validProvs;
+    }
+
+    db.externalWsWhitelist.set(rawSymbol, entry);
+    db.saveToDisk();
+
+    priceAggregatorService.syncWhitelistSymbols(
+      db.getEnabledExternalWsSymbols('binance'),
+      db.getEnabledExternalWsSymbols('bybit')
+    );
+
+    db.auditLogs.push({
+      id: crypto.randomUUID(),
+      actorId: adminUser?.id || 'ADMIN',
+      action: 'EXTERNAL_WS_WHITELIST_TOGGLED',
+      resource: `ws_pair:${rawSymbol}`,
+      details: `Pair ${rawSymbol} diubah status=${entry.enabled ? 'ENABLED' : 'DISABLED'} oleh ${adminUser?.email}`,
+      createdAt: Date.now()
+    });
+    db.scheduleSave();
+
+    res.json({
+      success: true,
+      message: `Pair ${rawSymbol} sekarang ${entry.enabled ? 'AKTIF' : 'NONAKTIF'} di WebSocket feed.`,
+      entry
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+adminRouter.post('/external-ws/whitelist/remove', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const rawSymbol = String(req.body?.symbol || '').trim().toUpperCase();
+    if (!db.externalWsWhitelist.has(rawSymbol)) {
+      return res.status(404).json({ error: `Pair ${rawSymbol} tidak ditemukan di whitelist.` });
+    }
+
+    db.externalWsWhitelist.delete(rawSymbol);
+    db.saveToDisk();
+
+    priceAggregatorService.syncWhitelistSymbols(
+      db.getEnabledExternalWsSymbols('binance'),
+      db.getEnabledExternalWsSymbols('bybit')
+    );
+
+    db.auditLogs.push({
+      id: crypto.randomUUID(),
+      actorId: adminUser?.id || 'ADMIN',
+      action: 'EXTERNAL_WS_WHITELIST_REMOVED',
+      resource: `ws_pair:${rawSymbol}`,
+      details: `Pair ${rawSymbol} dihapus dari whitelist WebSocket oleh ${adminUser?.email}`,
+      createdAt: Date.now()
+    });
+    db.scheduleSave();
+
+    res.json({
+      success: true,
+      message: `Pair ${rawSymbol} dihapus dari whitelist & di-unsubscribe dari WebSocket.`
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
 });

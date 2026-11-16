@@ -167,31 +167,94 @@ export class BinancePublicFeed implements ExternalMarketDataProvider {
   }
 
   public subscribe(symbols: string[]): void {
-    symbols.forEach(s => this.symbols.add(s.toUpperCase()));
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.sendSubscriptions();
+    const added: string[] = [];
+    symbols.forEach(s => {
+      const upper = s.trim().toUpperCase();
+      if (upper && !this.symbols.has(upper)) {
+        this.symbols.add(upper);
+        added.push(upper);
+      }
+    });
+    if (added.length > 0 && this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.sendStreamBatch('SUBSCRIBE', added);
     }
   }
 
-  private sendSubscriptions() {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+  public syncSymbols(nextSymbols: string[]): void {
+    const desired = new Set(
+      nextSymbols.map(s => s.trim().toUpperCase()).filter(Boolean)
+    );
+    const toAdd: string[] = [];
+    const toRemove: string[] = [];
+
+    for (const sym of desired) {
+      if (!this.symbols.has(sym)) toAdd.push(sym);
+    }
+    for (const sym of this.symbols) {
+      if (!desired.has(sym)) toRemove.push(sym);
+    }
+
+    this.symbols = desired;
+
+    for (const rem of toRemove) {
+      this.ticks.delete(rem);
+    }
+
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      if (toRemove.length > 0) this.sendStreamBatch('UNSUBSCRIBE', toRemove);
+      if (toAdd.length > 0) this.sendStreamBatch('SUBSCRIBE', toAdd);
+    }
+  }
+
+  public getSubscribedSymbols(): string[] {
+    return Array.from(this.symbols);
+  }
+
+  public seedInitialTick(symbol: string, lastPrice: number) {
+    const sym = symbol.trim().toUpperCase();
+    if (!sym || !(lastPrice > 0) || this.ticks.has(sym)) return;
+    const now = Date.now();
+    this.ticks.set(sym, {
+      provider: 'binance',
+      symbol: sym,
+      lastPrice,
+      bestBid: lastPrice * 0.9999,
+      bestAsk: lastPrice * 1.0001,
+      exchangeTimestamp: now,
+      receivedAt: now,
+      latencyMs: 20,
+      isFresh: true,
+      isValid: true
+    });
+  }
+
+  private sendStreamBatch(method: 'SUBSCRIBE' | 'UNSUBSCRIBE', targetSymbols: string[]) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || targetSymbols.length === 0) return;
 
     const streams: string[] = [];
-    for (const sym of this.symbols) {
+    for (const sym of targetSymbols) {
       const lower = sym.toLowerCase();
       streams.push(`${lower}@trade`);
       streams.push(`${lower}@bookTicker`);
     }
 
-    const payload = {
-      method: 'SUBSCRIBE',
-      params: streams,
-      id: Date.now()
-    };
+    // Binance recommends <= 200 streams per connection; chunk at 80 streams per payload
+    const chunkSize = 80;
+    for (let i = 0; i < streams.length; i += chunkSize) {
+      const batch = streams.slice(i, i + chunkSize);
+      const payload = {
+        method,
+        params: batch,
+        id: Date.now() + i
+      };
+      try {
+        this.ws.send(JSON.stringify(payload));
+      } catch (_) {}
+    }
+  }
 
-    try {
-      this.ws.send(JSON.stringify(payload));
-    } catch (_) {}
+  private sendSubscriptions() {
+    this.sendStreamBatch('SUBSCRIBE', Array.from(this.symbols));
   }
 
   private handleMessage(data: WebSocket.Data) {

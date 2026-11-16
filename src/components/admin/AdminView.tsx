@@ -47,9 +47,11 @@ import {
   Flame,
   ArrowDownLeft,
   Percent,
-  Sliders
+  Sliders,
+  Radio,
+  Trash2
 } from 'lucide-react';
-import { UserProfile, TradingPairItem } from '../../types/index.js';
+import { UserProfile, TradingPairItem, ExternalWsWhitelistEntry } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
 import { ListingManagementView } from './listing/ListingManagementView.js';
 
@@ -89,6 +91,16 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
   const [copyMasters, setCopyMasters] = useState<any[]>([]);
   const [vipTiers, setVipTiers] = useState<any[]>([]);
   const [fxStatus, setFxStatus] = useState<any>(null);
+  const [wsWhitelist, setWsWhitelist] = useState<ExternalWsWhitelistEntry[]>([]);
+  const [wsFeedStatus, setWsFeedStatus] = useState<any>(null);
+  const [wsCatalog, setWsCatalog] = useState<any[]>([]);
+  const [wsCatalogSource, setWsCatalogSource] = useState<string>('');
+  const [wsCatalogSearch, setWsCatalogSearch] = useState<string>('');
+  const [wsCatalogProvider, setWsCatalogProvider] = useState<'ALL' | 'BINANCE' | 'BYBIT'>('ALL');
+  const [wsManualSymbol, setWsManualSymbol] = useState<string>('');
+  const [wsManualProviders, setWsManualProviders] = useState<{ binance: boolean; bybit: boolean }>({ binance: true, bybit: true });
+  const [wsCatalogLoading, setWsCatalogLoading] = useState<boolean>(false);
+  const [wsActionBusy, setWsActionBusy] = useState<boolean>(false);
 
   // Filters & searches
   const [userSearch, setUserSearch] = useState('');
@@ -189,7 +201,8 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         earnRes,
         copyRes,
         vipRes,
-        fxRes
+        fxRes,
+        wlRes
       ] = await Promise.all([
         fetch('/api/admin/stats', { headers }),
         fetch('/api/admin/users', { headers }),
@@ -200,7 +213,8 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         fetch('/api/admin/earn/pools', { headers }),
         fetch('/api/admin/copy-trading/masters', { headers }),
         fetch('/api/admin/vip-tiers', { headers }),
-        fetch('/api/mm/fx-status', { headers })
+        fetch('/api/mm/fx-status', { headers }),
+        fetch('/api/admin/external-ws/whitelist', { headers })
       ]);
 
       if (statsRes.ok) setStats(await statsRes.json());
@@ -213,12 +227,44 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
       if (copyRes.ok) setCopyMasters(await copyRes.json());
       if (vipRes.ok) setVipTiers(await vipRes.json());
       if (fxRes.ok) setFxStatus(await fxRes.json());
+      if (wlRes.ok) {
+        const wlData = await wlRes.json();
+        setWsWhitelist(wlData.items || []);
+        setWsFeedStatus(wlData.feedStatus || null);
+      }
     } catch (err: any) {
       console.error('Failed to load admin data:', err);
     } finally {
       setIsLoading(false);
     }
   }, [isAdmin]);
+
+  const loadWsCatalog = useCallback(async (q = wsCatalogSearch, prov = wsCatalogProvider, force = false) => {
+    if (!isAdmin) return;
+    setWsCatalogLoading(true);
+    try {
+      const token = localStorage.getItem('dimonex_auth_token');
+      const params = new URLSearchParams({ q, provider: prov, refresh: force ? '1' : '0' });
+      const res = await fetch(`/api/admin/external-ws/catalog?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setWsCatalog(data.items || []);
+        setWsCatalogSource(data.source || 'LIVE');
+      }
+    } catch (e) {
+      console.error('Failed to load external WS catalog', e);
+    } finally {
+      setWsCatalogLoading(false);
+    }
+  }, [isAdmin, wsCatalogSearch, wsCatalogProvider]);
+
+  useEffect(() => {
+    if (isAdmin && activeTab === 'FX' && wsCatalog.length === 0) {
+      loadWsCatalog('', 'ALL', false);
+    }
+  }, [isAdmin, activeTab, wsCatalog.length, loadWsCatalog]);
 
   useEffect(() => {
     if (isAdmin) {
@@ -675,6 +721,93 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
     }
   };
 
+  const handleAddWsWhitelist = async (symbol: string, providers?: ('binance' | 'bybit')[], label?: string) => {
+    const clean = symbol.trim().toUpperCase();
+    if (!clean) {
+      showToast('error', 'Masukkan simbol pair (contoh: SOLUSDT, PEPEUSDT).');
+      return;
+    }
+    const provs: ('binance' | 'bybit')[] = providers && providers.length > 0
+      ? providers
+      : [
+          ...(wsManualProviders.binance ? ['binance' as const] : []),
+          ...(wsManualProviders.bybit ? ['bybit' as const] : [])
+        ];
+    if (provs.length === 0) {
+      showToast('error', 'Pilih minimal 1 sumber WebSocket (Binance atau Bybit).');
+      return;
+    }
+    setWsActionBusy(true);
+    try {
+      const token = localStorage.getItem('dimonex_auth_token');
+      const res = await fetch('/api/admin/external-ws/whitelist/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ symbol: clean, providers: provs, label })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('success', data.message);
+        setWsManualSymbol('');
+        await loadAllData();
+        await loadWsCatalog(wsCatalogSearch, wsCatalogProvider, false);
+      } else {
+        showToast('error', data.error || 'Gagal menambah pair whitelist');
+      }
+    } catch (e: any) {
+      showToast('error', e.message);
+    } finally {
+      setWsActionBusy(false);
+    }
+  };
+
+  const handleToggleWsWhitelist = async (symbol: string, nextEnabled: boolean) => {
+    setWsActionBusy(true);
+    try {
+      const token = localStorage.getItem('dimonex_auth_token');
+      const res = await fetch('/api/admin/external-ws/whitelist/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ symbol, enabled: nextEnabled })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('success', data.message);
+        await loadAllData();
+      } else {
+        showToast('error', data.error);
+      }
+    } catch (e: any) {
+      showToast('error', e.message);
+    } finally {
+      setWsActionBusy(false);
+    }
+  };
+
+  const handleRemoveWsWhitelist = async (symbol: string) => {
+    setWsActionBusy(true);
+    try {
+      const token = localStorage.getItem('dimonex_auth_token');
+      const res = await fetch('/api/admin/external-ws/whitelist/remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ symbol })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast('success', data.message);
+        await loadAllData();
+        await loadWsCatalog(wsCatalogSearch, wsCatalogProvider, false);
+      } else {
+        showToast('error', data.error);
+      }
+    } catch (e: any) {
+      showToast('error', e.message);
+    } finally {
+      setWsActionBusy(false);
+    }
+  };
+
   const filteredUsers = usersList.filter(u => {
     const q = userSearch.toLowerCase();
     return (
@@ -768,7 +901,7 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
           { id: 'WITHDRAWALS', label: `Antrean Penarikan`, icon: ArrowUpRight, badge: pendingWithdrawalCount > 0 ? pendingWithdrawalCount : undefined },
           { id: 'LEDGER', label: 'Buku Besar & Solvensi', icon: Wallet },
           { id: 'BOTS', label: `Bot & MM (${botsList.length})`, icon: Bot },
-          { id: 'FX', label: 'FX Engine (USDT/IDR)', icon: TrendingUp },
+          { id: 'FX', label: `FX Engine & WS Pairs (${wsWhitelist.filter(w => w.enabled).length})`, icon: TrendingUp },
           { id: 'PRODUCTS', label: 'Earn, Copy & VIP', icon: PiggyBank },
           { id: 'RISK', label: `Risk & AML (${riskAlerts.length})`, icon: ShieldAlert },
           { id: 'AUDIT', label: 'Audit Trail', icon: FileText }
@@ -1607,6 +1740,260 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                   <span className="text-[#9298A6]">Aggregator Threshold:</span>
                   <span className="text-purple-400 font-bold">200 BPS (2%)</span>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          {/* SECTION 2: WHITELIST PAIR WEBSOCKET BINANCE & BYBIT */}
+          <div className="p-5 rounded-2xl bg-[#0D1017] border border-cyan-500/20 space-y-5 shadow-xl">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-white/10 pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Radio className="w-4 h-4 text-cyan-400" />
+                  <h4 className="text-sm font-bold text-[#F5F5F7] font-display">
+                    Whitelist Pair WebSocket Binance &amp; Bybit (Acuan Pergerakan Bot)
+                  </h4>
+                </div>
+                <p className="text-xs text-[#9298A6] mt-1">
+                  Kurasi daftar pair minimal yang di-subscribe ke stream WebSocket Binance &amp; Bybit. Hanya pair aktif di whitelist ini yang muncul di Bot Depth Movement (WS) agar konsumsi bandwidth &amp; RAM tetap ringan.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
+                <span className={`px-2.5 py-1 rounded-lg border ${
+                  wsFeedStatus?.binance?.status === 'CONNECTED'
+                    ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                    : 'bg-amber-950/50 border-amber-500/40 text-amber-300'
+                }`}>
+                  Binance WS: {wsFeedStatus?.binance?.status || 'CONNECTING'} ({wsFeedStatus?.binance?.subscribedCount ?? 0} streams)
+                </span>
+                <span className={`px-2.5 py-1 rounded-lg border ${
+                  wsFeedStatus?.bybit?.status === 'CONNECTED'
+                    ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                    : 'bg-amber-950/50 border-amber-500/40 text-amber-300'
+                }`}>
+                  Bybit WS: {wsFeedStatus?.bybit?.status || 'CONNECTING'} ({wsFeedStatus?.bybit?.subscribedCount ?? 0} streams)
+                </span>
+              </div>
+            </div>
+
+            {/* Quick Manual Add & Spot Catalog Search */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+              <div className="lg:col-span-5 p-4 rounded-xl bg-[#131722] border border-white/10 space-y-3">
+                <h5 className="text-xs font-bold text-[#F5F5F7] flex items-center gap-2">
+                  <Plus className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Tambah Pair Manual ke Whitelist</span>
+                </h5>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={wsManualSymbol}
+                    onChange={e => setWsManualSymbol(e.target.value.toUpperCase())}
+                    placeholder="Contoh: PEPEUSDT, SUIUSDT, ETHBTC"
+                    className="flex-1 bg-[#0D1017] border border-white/10 rounded-lg px-3 py-2 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                  />
+                  <button
+                    type="button"
+                    disabled={wsActionBusy}
+                    onClick={() => handleAddWsWhitelist(wsManualSymbol)}
+                    className="px-3.5 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-bold whitespace-nowrap"
+                  >
+                    + Tambah
+                  </button>
+                </div>
+                <div className="flex items-center gap-4 text-[11px] text-[#9298A6]">
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={wsManualProviders.binance}
+                      onChange={e => setWsManualProviders(prev => ({ ...prev, binance: e.target.checked }))}
+                      className="rounded border-slate-600"
+                    />
+                    <span>Subscribe Binance WS</span>
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={wsManualProviders.bybit}
+                      onChange={e => setWsManualProviders(prev => ({ ...prev, bybit: e.target.checked }))}
+                      className="rounded border-slate-600"
+                    />
+                    <span>Subscribe Bybit WS</span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="lg:col-span-7 p-4 rounded-xl bg-[#131722] border border-white/10 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h5 className="text-xs font-bold text-[#F5F5F7] flex items-center gap-2">
+                    <Search className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Telusuri Katalog Spot Binance &amp; Bybit ({wsCatalogSource || 'LIVE'})</span>
+                  </h5>
+                  <button
+                    type="button"
+                    onClick={() => loadWsCatalog(wsCatalogSearch, wsCatalogProvider, true)}
+                    disabled={wsCatalogLoading}
+                    className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] text-slate-300 flex items-center gap-1"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${wsCatalogLoading ? 'animate-spin' : ''}`} />
+                    <span>Sync Katalog</span>
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    type="text"
+                    value={wsCatalogSearch}
+                    onChange={e => {
+                      const val = e.target.value.toUpperCase();
+                      setWsCatalogSearch(val);
+                      loadWsCatalog(val, wsCatalogProvider, false);
+                    }}
+                    placeholder="Cari simbol Spot (mis. SOL, PEPE, SUI, TON, BTC)..."
+                    className="flex-1 min-w-[180px] bg-[#0D1017] border border-white/10 rounded-lg px-3 py-1.5 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                  />
+                  <select
+                    value={wsCatalogProvider}
+                    onChange={e => {
+                      const prov = e.target.value as 'ALL' | 'BINANCE' | 'BYBIT';
+                      setWsCatalogProvider(prov);
+                      loadWsCatalog(wsCatalogSearch, prov, false);
+                    }}
+                    className="bg-[#0D1017] border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono"
+                  >
+                    <option value="ALL">Binance + Bybit</option>
+                    <option value="BINANCE">Binance Spot</option>
+                    <option value="BYBIT">Bybit Spot</option>
+                  </select>
+                </div>
+
+                <div className="max-h-40 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-2 pr-1">
+                  {wsCatalogLoading && wsCatalog.length === 0 ? (
+                    <div className="col-span-2 text-xs text-slate-400 py-4 text-center">Memuat katalog Spot Binance &amp; Bybit...</div>
+                  ) : wsCatalog.length === 0 ? (
+                    <div className="col-span-2 text-xs text-slate-500 py-4 text-center">Tidak ada pair cocok. Gunakan input manual di sebelah kiri.</div>
+                  ) : (
+                    wsCatalog.slice(0, 20).map((item: any) => (
+                      <div key={item.symbol} className="flex items-center justify-between p-2 rounded-lg bg-[#0D1017] border border-white/5 text-[11px] font-mono">
+                        <div className="min-w-0">
+                          <div className="font-bold text-slate-200 flex items-center gap-1.5">
+                            <span>{item.symbol}</span>
+                            {item.providers.includes('binance') && (
+                              <span className="px-1 py-0.2 rounded bg-amber-500/15 text-amber-300 text-[9px]">BN</span>
+                            )}
+                            {item.providers.includes('bybit') && (
+                              <span className="px-1 py-0.2 rounded bg-cyan-500/15 text-cyan-300 text-[9px]">BY</span>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-slate-400 truncate">
+                            {item.binancePrice ? `BN: $${item.binancePrice}` : ''} {item.bybitPrice ? `BY: $${item.bybitPrice}` : ''}
+                          </div>
+                        </div>
+                        {item.isWhitelisted ? (
+                          <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 text-[10px] font-bold">
+                            Di Whitelist
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={wsActionBusy}
+                            onClick={() => handleAddWsWhitelist(item.symbol, item.providers, `${item.baseAsset} / ${item.quoteAsset}`)}
+                            className="px-2.5 py-1 rounded bg-cyan-600/20 hover:bg-cyan-600/40 border border-cyan-500/40 text-cyan-200 text-[10px] font-bold"
+                          >
+                            + Pilih
+                          </button>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Active Curated Whitelist Table */}
+            <div className="rounded-xl border border-white/10 overflow-hidden bg-[#131722]/60">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead className="bg-[#171923] text-[#9298A6] text-[10px] uppercase border-b border-white/10">
+                    <tr>
+                      <th className="px-4 py-3">Pair WS</th>
+                      <th className="px-4 py-3">Label</th>
+                      <th className="px-4 py-3">Provider Subscribe</th>
+                      <th className="px-4 py-3">Harga Binance</th>
+                      <th className="px-4 py-3">Harga Bybit</th>
+                      <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3 text-right">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {wsWhitelist.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
+                          Belum ada pair WebSocket dalam whitelist. Tambahkan dari katalog di atas.
+                        </td>
+                      </tr>
+                    ) : (
+                      wsWhitelist.map(entry => (
+                        <tr key={entry.symbol} className="hover:bg-white/5 transition-colors">
+                          <td className="px-4 py-3 font-bold text-white">{entry.symbol}</td>
+                          <td className="px-4 py-3 text-slate-300 font-sans">{entry.label || `${entry.baseAsset}/${entry.quoteAsset}`}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-1.5">
+                              {entry.providers.includes('binance') && (
+                                <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px]">Binance</span>
+                              )}
+                              {entry.providers.includes('bybit') && (
+                                <span className="px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-[10px]">Bybit</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-slate-200">
+                            {entry.binancePrice ? (
+                              <span className={entry.binanceFresh ? 'text-emerald-300' : 'text-amber-300'}>
+                                {entry.binancePrice}
+                              </span>
+                            ) : (
+                              <span className="text-slate-500">-</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-slate-200">
+                            {entry.bybitPrice ? (
+                              <span className={entry.bybitFresh ? 'text-emerald-300' : 'text-amber-300'}>
+                                {entry.bybitPrice}
+                              </span>
+                            ) : (
+                              <span className="text-slate-500">-</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <button
+                              type="button"
+                              disabled={wsActionBusy}
+                              onClick={() => handleToggleWsWhitelist(entry.symbol, !entry.enabled)}
+                              className={`px-2.5 py-0.5 rounded text-[10px] font-bold border ${
+                                entry.enabled
+                                  ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300 hover:bg-emerald-900/50'
+                                  : 'bg-slate-800 border-slate-600 text-slate-400 hover:bg-slate-700'
+                              }`}
+                            >
+                              {entry.enabled ? 'AKTIF (WS ON)' : 'NONAKTIF'}
+                            </button>
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <button
+                              type="button"
+                              disabled={wsActionBusy}
+                              onClick={() => handleRemoveWsWhitelist(entry.symbol)}
+                              className="p-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/60 border border-red-500/30 text-red-300"
+                              title={`Hapus ${entry.symbol} dari whitelist WS`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>

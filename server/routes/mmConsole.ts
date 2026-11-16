@@ -15,10 +15,11 @@ import { requireAuth, requireMM, requireAdmin } from './auth.js';
 import { AuthService } from '../auth/AuthService.js';
 import { db } from '../db/database.js';
 import { botWorkerManager } from '../services/BotWorkerManager.js';
-import { BotInstance, OrderBotConfig, VolumeBotConfig, PriceFollowerConfig, DepthLiquidityConfig, QuantHftConfig, SmartHftLadderConfig, AdvancedMarketMakerConfig, PatternFormationType, PatternTimeframe, Environment } from '../db/types.js';
+import { BotInstance, OrderBotConfig, VolumeBotConfig, PriceFollowerConfig, DepthLiquidityConfig, MovementDepthLiquidityConfig, QuantHftConfig, SmartHftLadderConfig, AdvancedMarketMakerConfig, PatternFormationType, PatternTimeframe, Environment } from '../db/types.js';
 import { priceAggregatorService } from '../services/external/PriceAggregatorService.js';
 import { fxConversionService } from '../services/external/FxConversionService.js';
 import { DepthLiquidityBotExecutor } from '../services/bots/DepthLiquidityBot.js';
+import { MovementDepthLiquidityBotExecutor } from '../services/bots/MovementDepthLiquidityBot.js';
 import { PriceFollowerBotExecutor } from '../services/bots/PriceFollowerBot.js';
 import { SmartHftLadderBotExecutor } from '../services/bots/SmartHftLadderBot.js';
 import { AdvancedMarketMakerBotExecutor } from '../services/bots/AdvancedMarketMakerBot.js';
@@ -372,6 +373,17 @@ mmConsoleRouter.post('/instance/clone', requireMMOrAdmin, (req, res) => {
         }
       : undefined;
 
+    const clonedMdConfig: MovementDepthLiquidityConfig | undefined = sourceBot.movementDepthConfig
+      ? {
+          ...JSON.parse(JSON.stringify(sourceBot.movementDepthConfig)),
+          ...(overrides?.movementDepthConfig || {}),
+          activeOrderIds: [],
+          lastRepriceTimestamp: undefined,
+          leader_baseline_price: undefined,
+          last_leader_return_pct: 0
+        }
+      : undefined;
+
     const clonedQuantHftConfig: QuantHftConfig | undefined = sourceBot.quantHftConfig
       ? {
           ...JSON.parse(JSON.stringify(sourceBot.quantHftConfig)),
@@ -395,6 +407,7 @@ mmConsoleRouter.post('/instance/clone', requireMMOrAdmin, (req, res) => {
       volumeBotConfig: clonedVolumeConfig,
       priceFollowerConfig: clonedPfConfig,
       depthLiquidityConfig: clonedDlConfig,
+      movementDepthConfig: clonedMdConfig,
       quantHftConfig: clonedQuantHftConfig,
       gridConfig: sourceBot.gridConfig ? JSON.parse(JSON.stringify(sourceBot.gridConfig)) : undefined,
       stats: {
@@ -510,6 +523,29 @@ mmConsoleRouter.post('/instance/:id/update', requireMMOrAdmin, (req, res) => {
         ...req.body.depthLiquidityConfig,
         account_id: req.body.depthLiquidityConfig.account_id || bot.accountId
       };
+    }
+
+    if (req.body.movementDepthConfig) {
+      const nextLeaderSym = (req.body.movementDepthConfig.leader_symbol || bot.movementDepthConfig?.leader_symbol || '').trim().toUpperCase();
+      const prevAnchor = bot.movementDepthConfig?.anchor_local_price;
+      const nextAnchor = req.body.movementDepthConfig.anchor_local_price;
+      const leaderChanged = Boolean(nextLeaderSym && nextLeaderSym !== bot.movementDepthConfig?.leader_symbol);
+      const anchorChanged = nextAnchor !== undefined && String(nextAnchor) !== String(prevAnchor);
+      const updatedMovementConfig = {
+        ...bot.movementDepthConfig,
+        ...req.body.movementDepthConfig,
+        leader_symbol: nextLeaderSym,
+        account_id: req.body.movementDepthConfig.account_id || bot.accountId
+      };
+      if (leaderChanged || anchorChanged) {
+        const snap = priceAggregatorService.getSymbolSnapshot(nextLeaderSym, updatedMovementConfig.leader_provider || 'AGGREGATED');
+        if (snap.price > 0) {
+          updatedMovementConfig.leader_baseline_price = snap.price;
+          updatedMovementConfig.last_leader_price = snap.price;
+          updatedMovementConfig.last_leader_return_pct = 0;
+        }
+      }
+      bot.movementDepthConfig = updatedMovementConfig;
     }
 
     if (req.body.quantHftConfig) {
@@ -688,6 +724,20 @@ mmConsoleRouter.post('/instance/:id/refresh-liquidity', requireMMOrAdmin, (req, 
         message: `Likuiditas bot ${bot.name} berhasil disegarkan secara instan dengan randomisasi tick baru.`,
         bot
       });
+    } else if (bot.botType === 'MOVEMENT_DEPTH_LIQUIDITY' && bot.movementDepthConfig) {
+      bot.movementDepthConfig.last_refresh_timestamp = 0;
+      bot.movementDepthConfig.lastRepriceTimestamp = 0;
+      botWorkerManager.addLog(bot, `⚡ Trigger manual refresh Depth Movement (WS) oleh ${user.email}. Menyinkronkan pergerakan ${bot.movementDepthConfig.leader_symbol}...`, 'INFO');
+      const executed = MovementDepthLiquidityBotExecutor.executeCycle(bot, (b, msg, type) => {
+        botWorkerManager.addLog(b, msg, type);
+      });
+      db.scheduleSave();
+      return res.json({
+        success: true,
+        executed,
+        message: `Likuiditas Depth Movement bot ${bot.name} berhasil disegarkan secara instan.`,
+        bot
+      });
     } else if (bot.botType === 'PRICE_FOLLOWER' && bot.priceFollowerConfig) {
       bot.priceFollowerConfig.lastRepriceTimestamp = 0;
       botWorkerManager.addLog(bot, `⚡ Trigger manual refresh harga referensi oleh ${user.email}.`, 'INFO');
@@ -704,6 +754,52 @@ mmConsoleRouter.post('/instance/:id/refresh-liquidity', requireMMOrAdmin, (req, 
     }
 
     res.json({ success: true, message: `Bot ${bot.name} tidak memiliki konfigurasi ladder depth.`, bot });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// 11bc. Reset Anchor Baseline for Movement Depth Bot
+mmConsoleRouter.post('/instance/:id/reset-anchor', requireMMOrAdmin, (req, res) => {
+  try {
+    const user = (req as any).user;
+    const bot = db.botInstances.get(req.params.id);
+    if (!bot) return res.status(404).json({ error: 'Bot tidak ditemukan' });
+    if (bot.botType !== 'MOVEMENT_DEPTH_LIQUIDITY' || !bot.movementDepthConfig) {
+      return res.status(400).json({ error: 'Fitur Reset Anchor hanya berlaku untuk bot Depth Movement (WS).' });
+    }
+
+    const result = MovementDepthLiquidityBotExecutor.resetAnchor(
+      bot,
+      req.body?.anchor_local_price,
+      (b, msg, type) => botWorkerManager.addLog(b, msg, type)
+    );
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    // Re-deploy ladder immediately if currently running
+    if (bot.status === 'RUNNING') {
+      MovementDepthLiquidityBotExecutor.executeCycle(bot, (b, msg, type) => {
+        botWorkerManager.addLog(b, msg, type);
+      });
+    }
+
+    db.auditLogs.push({
+      id: crypto.randomUUID(),
+      actorId: user.id,
+      action: 'MOVEMENT_BOT_ANCHOR_RESET',
+      resource: `bot:${bot.id}`,
+      details: `Anchor lokal (${result.anchorLocalPrice}) & baseline ${bot.movementDepthConfig.leader_symbol} (${result.leaderBaselinePrice}) di-reset oleh ${user.email}`,
+      createdAt: Date.now()
+    });
+    db.scheduleSave();
+
+    res.json({
+      success: true,
+      message: `Anchor bot ${bot.name} dikunci ulang ke harga lokal ${result.anchorLocalPrice} (Baseline ${bot.movementDepthConfig.leader_symbol}: ${result.leaderBaselinePrice}).`,
+      bot
+    });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
@@ -1100,6 +1196,32 @@ mmConsoleRouter.get('/external-feeds', requireMMOrAdmin, (req, res) => {
   }
 });
 
+mmConsoleRouter.get('/external-feeds/whitelist', requireMMOrAdmin, (req, res) => {
+  try {
+    const items = Array.from(db.externalWsWhitelist.values())
+      .filter(entry => entry.enabled)
+      .map(entry => {
+        const snap = priceAggregatorService.getSymbolSnapshot(entry.symbol, 'AGGREGATED');
+        return {
+          ...entry,
+          binancePrice: snap.binancePrice,
+          bybitPrice: snap.bybitPrice,
+          binanceFresh: snap.binanceFresh,
+          bybitFresh: snap.bybitFresh
+        };
+      });
+
+    res.json({
+      success: true,
+      items,
+      binanceStatus: priceAggregatorService.binance.getConnectionStatus(),
+      bybitStatus: priceAggregatorService.bybit.getConnectionStatus()
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 mmConsoleRouter.post('/external-feeds/reconnect', requireMMOrAdmin, async (req, res) => {
   try {
     const { provider } = req.body;
@@ -1478,6 +1600,199 @@ mmConsoleRouter.post('/depth-liquidity/create', requireMMOrAdmin, (req, res) => 
     db.scheduleSave();
 
     res.json({ success: true, message: `Depth & Liquidity Bot "${bot.name}" berhasil dibuat.`, bot });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ============================================================================
+// 22b. CREATE MOVEMENT DEPTH LIQUIDITY BOT (Relative WS Movement Follower)
+// ============================================================================
+mmConsoleRouter.post('/movement-depth/create', requireMMOrAdmin, (req, res) => {
+  try {
+    const user = (req as any).user;
+    const {
+      name,
+      pairId,
+      environment,
+      account_id,
+      leader_symbol,
+      leader_provider,
+      anchor_local_price,
+      movement_sensitivity,
+      movement_threshold_bps,
+      min_price_guard,
+      max_price_guard,
+      spread_bps,
+      spacing_mode,
+      level_spacing_idr,
+      anti_stacking_enabled,
+      number_of_bid_levels,
+      number_of_ask_levels,
+      bid_level_offsets_bps,
+      ask_level_offsets_bps,
+      bid_quantities,
+      ask_quantities,
+      quantity_randomization_enabled,
+      random_min_quantity,
+      random_max_quantity,
+      minimum_reprice_interval_ms,
+      minimum_price_change_bps,
+      maximum_open_orders,
+      maximum_total_bid_value_idr,
+      maximum_total_ask_quantity,
+      maximum_inventory,
+      maximum_order_value_idr,
+      max_data_age_ms,
+      tick_size,
+      lot_size,
+      dry_run,
+      liquidity_refresh_cooldown_sec,
+      randomize_placement_enabled,
+      price_randomization_ticks
+    } = req.body;
+
+    if (!name || !pairId) {
+      return res.status(400).json({ error: 'Nama bot dan Trading Pair wajib diisi.' });
+    }
+
+    const pair = db.tradingPairs.get(pairId);
+    if (!pair) {
+      return res.status(404).json({ error: `Trading pair target ${pairId} tidak ditemukan.` });
+    }
+
+    const cleanLeaderSym = String(leader_symbol || '').trim().toUpperCase();
+    const wlEntry = db.externalWsWhitelist.get(cleanLeaderSym);
+    if (!cleanLeaderSym || !wlEntry || !wlEntry.enabled) {
+      return res.status(400).json({
+        error: `Pair acuan WebSocket "${cleanLeaderSym || '-'}" belum aktif di Whitelist Admin. Hubungi Admin untuk menambahkannya ke whitelist WS Binance/Bybit.`
+      });
+    }
+
+    let resolvedAnchor = parseFloat(String(anchor_local_price || '0'));
+    if (!(resolvedAnchor > 0)) {
+      resolvedAnchor = Number(BigInt(pair.lastPrice || '0')) / (10 ** (pair.quoteDecimals || 2));
+    }
+    if (!(resolvedAnchor > 0)) {
+      return res.status(400).json({ error: 'Target Local Anchor Price wajib diisi angka positif > 0.' });
+    }
+
+    const sensitivityNum = Number(movement_sensitivity ?? 1.0);
+    if (!Number.isFinite(sensitivityNum) || sensitivityNum === 0) {
+      return res.status(400).json({ error: 'Sensitivitas pergerakan (Beta) harus angka != 0.' });
+    }
+
+    const providerChoice: 'AGGREGATED' | 'BINANCE' | 'BYBIT' =
+      leader_provider === 'BINANCE' || leader_provider === 'BYBIT' ? leader_provider : 'AGGREGATED';
+    const initialSnap = priceAggregatorService.getSymbolSnapshot(cleanLeaderSym, providerChoice);
+    const compatibleTick = MovementDepthLiquidityBotExecutor.getCompatibleTickSize(
+      pairId,
+      tick_size ? Number(tick_size) : undefined,
+      resolvedAnchor
+    );
+    const defaultSpacing = Math.max(compatibleTick, Math.round((resolvedAnchor * 0.005) / compatibleTick) * compatibleTick);
+
+    const isUsdtPair = pair.quoteCurrency === 'USDT';
+    const defaultQtyArray = pairId === 'USDT-IDR'
+      ? ['25.0', '50.0', '75.0', '100.0', '150.0']
+      : isUsdtPair
+        ? ['10.0', '20.0', '35.0', '50.0', '75.0']
+        : ['10.0', '20.0', '30.0', '50.0', '80.0'];
+
+    const movementDepthConfig: MovementDepthLiquidityConfig = {
+      account_id: account_id || user.id,
+      market_symbol: pairId,
+      leader_symbol: cleanLeaderSym,
+      leader_provider: providerChoice,
+      anchor_local_price: String(resolvedAnchor),
+      leader_baseline_price: initialSnap.price > 0 ? initialSnap.price : undefined,
+      last_leader_price: initialSnap.price > 0 ? initialSnap.price : undefined,
+      last_leader_return_pct: 0,
+      last_projected_local_price: resolvedAnchor,
+      movement_sensitivity: sensitivityNum,
+      movement_threshold_bps: Math.max(1, Number(movement_threshold_bps || minimum_price_change_bps || 10)),
+      min_price_guard: min_price_guard ? String(min_price_guard) : undefined,
+      max_price_guard: max_price_guard ? String(max_price_guard) : undefined,
+      spread_bps: Math.max(2, Number(spread_bps || 20)),
+      spacing_mode: spacing_mode || 'PERCENT_BPS',
+      level_spacing_idr: Number(level_spacing_idr || defaultSpacing),
+      anti_stacking_enabled: anti_stacking_enabled !== undefined ? Boolean(anti_stacking_enabled) : true,
+      number_of_bid_levels: Math.min(20, Math.max(1, Number(number_of_bid_levels || 5))),
+      number_of_ask_levels: Math.min(20, Math.max(1, Number(number_of_ask_levels || 5))),
+      bid_level_offsets_bps: Array.isArray(bid_level_offsets_bps) ? bid_level_offsets_bps : [20, 45, 75, 110, 150],
+      ask_level_offsets_bps: Array.isArray(ask_level_offsets_bps) ? ask_level_offsets_bps : [20, 45, 75, 110, 150],
+      bid_quantities: Array.isArray(bid_quantities) ? bid_quantities : defaultQtyArray,
+      ask_quantities: Array.isArray(ask_quantities) ? ask_quantities : defaultQtyArray,
+      quantity_randomization_enabled: Boolean(quantity_randomization_enabled),
+      random_min_quantity: String(random_min_quantity || '5.0'),
+      random_max_quantity: String(random_max_quantity || '25.0'),
+      minimum_reprice_interval_ms: Number(minimum_reprice_interval_ms || 3000),
+      minimum_price_change_bps: Number(minimum_price_change_bps || 10),
+      maximum_open_orders: Number(maximum_open_orders || 40),
+      maximum_total_bid_value_idr: String(maximum_total_bid_value_idr || '500000000000'),
+      maximum_total_ask_quantity: String(maximum_total_ask_quantity || '10000000.0'),
+      maximum_inventory: String(maximum_inventory || '10000000.0'),
+      maximum_order_value_idr: String(maximum_order_value_idr || '10000000000'),
+      max_data_age_ms: Number(max_data_age_ms || 30000),
+      tick_size: compatibleTick,
+      lot_size: String(lot_size || '0.0001'),
+      dry_run: Boolean(dry_run),
+      liquidity_refresh_cooldown_sec: Math.max(2, Number(liquidity_refresh_cooldown_sec || 10)),
+      randomize_placement_enabled: randomize_placement_enabled !== undefined ? Boolean(randomize_placement_enabled) : true,
+      price_randomization_ticks: Math.max(1, Number(price_randomization_ticks || 2)),
+      enabled: true,
+      activeOrderIds: []
+    };
+
+    const botId = `bot-mov-${crypto.randomUUID().slice(0, 8)}`;
+    const bot: BotInstance = {
+      id: botId,
+      name,
+      botType: 'MOVEMENT_DEPTH_LIQUIDITY',
+      pairId,
+      environment: (environment as Environment) || 'DEMO',
+      ownerUserId: user.id,
+      accountId: account_id || user.id,
+      version: 1,
+      status: 'READY',
+      lastHeartbeat: Date.now(),
+      movementDepthConfig,
+      stats: {
+        ordersSubmitted: 0,
+        ordersAccepted: 0,
+        ordersFilled: 0,
+        executedVolume: '0',
+        totalTrades: 0
+      },
+      deployedOrderIds: [],
+      logs: [
+        {
+          timestamp: Date.now(),
+          message: `Bot Depth Movement (WS) "${name}" dibuat untuk ${pairId}. Mengikuti % pergerakan ${cleanLeaderSym} (${providerChoice}, Beta ${sensitivityNum}x) dari Anchor Lokal ${resolvedAnchor} ${pair.quoteCurrency}.`,
+          type: 'INFO'
+        }
+      ],
+      createdBy: user.email,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+
+    db.botInstances.set(botId, bot);
+    db.auditLogs.push({
+      id: crypto.randomUUID(),
+      actorId: user.id,
+      action: 'MOVEMENT_DEPTH_BOT_CREATED',
+      resource: `bot:${botId}`,
+      details: `Bot Depth Movement (WS) ${name} (${pairId}) mengikuti ${cleanLeaderSym} dibuat oleh ${user.email}`,
+      createdAt: Date.now()
+    });
+    db.scheduleSave();
+
+    res.json({
+      success: true,
+      bot,
+      message: `Bot Depth Movement (WS) ${name} berhasil dibuat untuk ${pairId} dengan acuan ${cleanLeaderSym}.`
+    });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }

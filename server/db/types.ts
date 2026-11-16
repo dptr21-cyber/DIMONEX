@@ -26,7 +26,8 @@ export type BotType =
   | 'SMART_TRADE'
   | 'QUANT_HFT_MM'
   | 'SMART_HFT_LADDER'
-  | 'ADVANCED_MM';
+  | 'ADVANCED_MM'
+  | 'MOVEMENT_DEPTH_LIQUIDITY';
 
 export type JournalTxType = 
   | 'DEPOSIT' 
@@ -137,6 +138,65 @@ export interface DepthLiquidityConfig {
   maximum_open_orders: number;        // e.g. 20 to 40
   maximum_total_bid_value_idr: string;// e.g. '500000000'
   maximum_total_ask_quantity: string; // e.g. '5.0'
+  maximum_inventory: string;
+  maximum_order_value_idr: string;
+  max_data_age_ms: number;
+  tick_size: number;
+  lot_size: string;
+  dry_run: boolean;
+  enabled: boolean;
+  activeOrderIds?: string[];
+  lastRepriceTimestamp?: number;
+  liquidity_refresh_cooldown_sec?: number;
+  randomize_placement_enabled?: boolean;
+  price_randomization_ticks?: number;
+  last_refresh_timestamp?: number;
+  next_refresh_timestamp?: number;
+}
+
+export interface ExternalWsWhitelistEntry {
+  symbol: string;       // e.g. 'BTCUSDT', 'SOLUSDT'
+  baseAsset: string;    // e.g. 'BTC'
+  quoteAsset: string;   // e.g. 'USDT'
+  label?: string;
+  providers: ('binance' | 'bybit')[];
+  enabled: boolean;
+  addedBy?: string;
+  addedAt: number;
+}
+
+export interface MovementDepthLiquidityConfig {
+  account_id: string;
+  market_symbol: string;
+  leader_symbol: string; // e.g. 'BTCUSDT' from Admin WS whitelist
+  leader_provider: 'AGGREGATED' | 'BINANCE' | 'BYBIT';
+  anchor_local_price: string; // Initial local price for target token e.g. '1000' IDR or '0.05' USDT
+  leader_baseline_price?: number; // Captured leader price at start/anchor reset
+  last_leader_price?: number;
+  last_leader_return_pct?: number;
+  last_projected_local_price?: number;
+  movement_sensitivity: number; // Beta multiplier e.g. 1.0 = 1:1 % move
+  movement_threshold_bps?: number; // Min move bps to trigger early rotation
+  min_price_guard?: string; // Optional floor price in local quote currency
+  max_price_guard?: string; // Optional ceiling price in local quote currency
+  spread_bps?: number; // Half-spread bps around projected price (default 20 bps)
+  spacing_mode: 'LINEAR' | 'GEOMETRIC' | 'CONCENTRATED' | 'FIXED_IDR' | 'PERCENT_BPS';
+  level_spacing_idr?: number;
+  anti_stacking_enabled?: boolean;
+  number_of_bid_levels: number;
+  number_of_ask_levels: number;
+  bid_level_offsets_bps: number[];
+  ask_level_offsets_bps: number[];
+  bid_quantities: string[];
+  ask_quantities: string[];
+  quantity_randomization_enabled: boolean;
+  random_min_quantity: string;
+  random_max_quantity: string;
+  minimum_reprice_interval_ms: number;
+  minimum_price_change_bps: number;
+  maximum_open_orders: number;
+  maximum_total_bid_value_idr: string;
+  maximum_total_ask_quantity: string;
   maximum_inventory: string;
   maximum_order_value_idr: string;
   max_data_age_ms: number;
@@ -346,6 +406,7 @@ export interface BotInstance {
   volumeBotConfig?: VolumeBotConfig;
   priceFollowerConfig?: PriceFollowerConfig;
   depthLiquidityConfig?: DepthLiquidityConfig;
+  movementDepthConfig?: MovementDepthLiquidityConfig;
   quantHftConfig?: QuantHftConfig;
   smartHftConfig?: SmartHftLadderConfig;
   gridConfig?: any;

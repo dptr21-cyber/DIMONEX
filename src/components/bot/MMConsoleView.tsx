@@ -17,7 +17,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { UserProfile, TradingPairItem, BotInstance, OrderItem, TradeItem, Environment, BotStatus, BotType } from '../../types/index.js';
+import { UserProfile, TradingPairItem, BotInstance, OrderItem, TradeItem, Environment, BotStatus, BotType, ExternalWsWhitelistEntry } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
 import { SmartHftLadderSection } from './SmartHftLadderSection.js';
 import { AdvancedMarketMakerSection } from './AdvancedMarketMakerSection.js';
@@ -41,6 +41,7 @@ type MMTab =
   | 'SMART_HFT_LADDER'
   | 'QUANT_HFT_MM'
   | 'DEPTH_LIQUIDITY'
+  | 'MOVEMENT_DEPTH'
   | 'PRICE_FOLLOWER'
   | 'EXTERNAL_FEEDS'
   | 'FX_RATES'
@@ -98,6 +99,7 @@ export const MMConsoleView: React.FC<Props> = ({
   const [isVolumeBotModalOpen, setIsVolumeBotModalOpen] = useState(false);
   const [isPriceFollowerModalOpen, setIsPriceFollowerModalOpen] = useState(false);
   const [isDepthLiquidityModalOpen, setIsDepthLiquidityModalOpen] = useState(false);
+  const [isMovementDepthModalOpen, setIsMovementDepthModalOpen] = useState(false);
   const [isQuantHftModalOpen, setIsQuantHftModalOpen] = useState(false);
   const [isCloneModalOpen, setIsCloneModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -159,6 +161,45 @@ export const MMConsoleView: React.FC<Props> = ({
   const [dlMaxOpenOrders, setDlMaxOpenOrders] = useState('20');
   const [dlTickSize, setDlTickSize] = useState('');
   const [dlLotSize, setDlLotSize] = useState('0.0001');
+
+  // Admin Curated WebSocket Whitelist & Movement Depth (WS) Bot Form State
+  const [wsWhitelist, setWsWhitelist] = useState<ExternalWsWhitelistEntry[]>([]);
+  const [wsFeedConnStatus, setWsFeedConnStatus] = useState<{ binance?: string; bybit?: string }>({});
+  const [mdName, setMdName] = useState('Depth Movement Bot BTC-Follower');
+  const [mdPairId, setMdPairId] = useState('BTC-IDR');
+  const [mdLeaderSymbol, setMdLeaderSymbol] = useState('BTCUSDT');
+  const [mdLeaderProvider, setMdLeaderProvider] = useState<'AGGREGATED' | 'BINANCE' | 'BYBIT'>('AGGREGATED');
+  const [mdAnchorLocalPrice, setMdAnchorLocalPrice] = useState('1000');
+  const [mdSensitivity, setMdSensitivity] = useState('1.0');
+  const [mdThresholdBps, setMdThresholdBps] = useState('10');
+  const [mdMinPriceGuard, setMdMinPriceGuard] = useState('');
+  const [mdMaxPriceGuard, setMdMaxPriceGuard] = useState('');
+  const [mdSpreadBps, setMdSpreadBps] = useState('20');
+  const [mdSpacingMode, setMdSpacingMode] = useState<'LINEAR' | 'GEOMETRIC' | 'CONCENTRATED' | 'FIXED_IDR' | 'PERCENT_BPS'>('PERCENT_BPS');
+  const [mdAntiStacking, setMdAntiStacking] = useState(true);
+  const [mdLevelSpacing, setMdLevelSpacing] = useState('10');
+  const [mdNumBids, setMdNumBids] = useState('5');
+  const [mdNumAsks, setMdNumAsks] = useState('5');
+  const [mdBidOffsets, setMdBidOffsets] = useState('20, 45, 75, 110, 150');
+  const [mdAskOffsets, setMdAskOffsets] = useState('20, 45, 75, 110, 150');
+  const [mdBidQuantities, setMdBidQuantities] = useState('10.0, 20.0, 30.0, 50.0, 80.0');
+  const [mdAskQuantities, setMdAskQuantities] = useState('10.0, 20.0, 30.0, 50.0, 80.0');
+  const [mdRandomizeQty, setMdRandomizeQty] = useState(false);
+  const [mdRandomMinQty, setMdRandomMinQty] = useState('5.0');
+  const [mdRandomMaxQty, setMdRandomMaxQty] = useState('25.0');
+  const [mdRepriceInterval, setMdRepriceInterval] = useState('3000');
+  const [mdRefreshCooldownSec, setMdRefreshCooldownSec] = useState('10');
+  const [mdExactPlacement, setMdExactPlacement] = useState(true);
+  const [mdRandomizePlacement, setMdRandomizePlacement] = useState(false);
+  const [mdPriceRandomizationTicks, setMdPriceRandomizationTicks] = useState('0');
+  const [mdMaxInventory, setMdMaxInventory] = useState('1000000.0');
+  const [mdMaxTotalBidValIdr, setMdMaxTotalBidValIdr] = useState('5000000000');
+  const [mdMaxTotalAskQty, setMdMaxTotalAskQty] = useState('1000000.0');
+  const [mdMaxOpenOrders, setMdMaxOpenOrders] = useState('20');
+  const [mdTickSize, setMdTickSize] = useState('');
+  const [mdLotSize, setMdLotSize] = useState('0.0001');
+  const [mdDryRun, setMdDryRun] = useState(false);
+  const [mdSimMovePct, setMdSimMovePct] = useState<number>(2.0);
 
   // Quant HFT Market Maker Form State
   const [qhftName, setQhftName] = useState('Quant HFT MM BTC-IDR');
@@ -259,6 +300,27 @@ export const MMConsoleView: React.FC<Props> = ({
   const [editDlMaxOpenOrders, setEditDlMaxOpenOrders] = useState('20');
   const [editDlTickSize, setEditDlTickSize] = useState('');
   const [editDlLotSize, setEditDlLotSize] = useState('0.0001');
+
+  // Movement Depth Edit state
+  const [editMdLeaderSymbol, setEditMdLeaderSymbol] = useState('BTCUSDT');
+  const [editMdLeaderProvider, setEditMdLeaderProvider] = useState<'AGGREGATED' | 'BINANCE' | 'BYBIT'>('AGGREGATED');
+  const [editMdAnchorLocalPrice, setEditMdAnchorLocalPrice] = useState('1000');
+  const [editMdSensitivity, setEditMdSensitivity] = useState('1.0');
+  const [editMdThresholdBps, setEditMdThresholdBps] = useState('10');
+  const [editMdMinPriceGuard, setEditMdMinPriceGuard] = useState('');
+  const [editMdMaxPriceGuard, setEditMdMaxPriceGuard] = useState('');
+  const [editMdSpreadBps, setEditMdSpreadBps] = useState('20');
+  const [editMdSpacingMode, setEditMdSpacingMode] = useState<'LINEAR' | 'GEOMETRIC' | 'CONCENTRATED' | 'FIXED_IDR' | 'PERCENT_BPS'>('PERCENT_BPS');
+  const [editMdLevelSpacing, setEditMdLevelSpacing] = useState('10');
+  const [editMdAntiStacking, setEditMdAntiStacking] = useState(true);
+  const [editMdNumBids, setEditMdNumBids] = useState('5');
+  const [editMdNumAsks, setEditMdNumAsks] = useState('5');
+  const [editMdRefreshCooldown, setEditMdRefreshCooldown] = useState('10');
+  const [editMdExactPlacement, setEditMdExactPlacement] = useState(true);
+  const [editMdRandomizePlacement, setEditMdRandomizePlacement] = useState(false);
+  const [editMdPriceRandomizationTicks, setEditMdPriceRandomizationTicks] = useState('0');
+  const [editMdMaxOpenOrders, setEditMdMaxOpenOrders] = useState('20');
+  const [editMdTickSize, setEditMdTickSize] = useState('');
 
   // Interactive Spot Formula Calculator State
   const [calcBasePair, setCalcBasePair] = useState<'BTC' | 'ETH' | 'SOL'>('BTC');
@@ -409,14 +471,15 @@ export const MMConsoleView: React.FC<Props> = ({
     return () => clearInterval(timer);
   }, [user]);
 
-  // Load external feeds & FX data
+  // Load external feeds, WS whitelist & FX data
   useEffect(() => {
     if (!user) return;
     const fetchFeedsAndFx = async () => {
       try {
-        const [feedsRes, fxRes] = await Promise.all([
+        const [feedsRes, fxRes, wlRes] = await Promise.all([
           fetch('/api/mm/external-feeds', { headers: getAuthHeaders() }),
-          fetch('/api/mm/fx-rate', { headers: getAuthHeaders() })
+          fetch('/api/mm/fx-rate', { headers: getAuthHeaders() }),
+          fetch('/api/mm/external-feeds/whitelist', { headers: getAuthHeaders() })
         ]);
         if (feedsRes.ok) setExternalFeeds(await feedsRes.json());
         if (fxRes.ok) {
@@ -424,6 +487,15 @@ export const MMConsoleView: React.FC<Props> = ({
           setFxData(fx);
           if (fx.currentRate?.rate && (!manualFxRate || manualFxRate === '16350')) {
             setManualFxRate(String(fx.currentRate.rate));
+          }
+        }
+        if (wlRes.ok) {
+          const wl = await wlRes.json();
+          const items: ExternalWsWhitelistEntry[] = wl.items || [];
+          setWsWhitelist(items);
+          setWsFeedConnStatus({ binance: wl.binanceStatus, bybit: wl.bybitStatus });
+          if (items.length > 0 && !items.some(i => i.symbol === mdLeaderSymbol)) {
+            setMdLeaderSymbol(items[0].symbol);
           }
         }
       } catch (e) {}
@@ -600,6 +672,30 @@ export const MMConsoleView: React.FC<Props> = ({
       setEditDlLotSize(bot.depthLiquidityConfig.lot_size || '0.0001');
     }
 
+    if (bot.movementDepthConfig) {
+      const m = bot.movementDepthConfig;
+      setEditMdLeaderSymbol(m.leader_symbol || 'BTCUSDT');
+      setEditMdLeaderProvider(m.leader_provider || 'AGGREGATED');
+      setEditMdAnchorLocalPrice(m.anchor_local_price || '1000');
+      setEditMdSensitivity(String(m.movement_sensitivity ?? 1.0));
+      setEditMdThresholdBps(String(m.movement_threshold_bps ?? 10));
+      setEditMdMinPriceGuard(m.min_price_guard || '');
+      setEditMdMaxPriceGuard(m.max_price_guard || '');
+      setEditMdSpreadBps(String(m.spread_bps ?? 20));
+      setEditMdSpacingMode(m.spacing_mode || 'PERCENT_BPS');
+      setEditMdLevelSpacing(String(m.level_spacing_idr || 10));
+      setEditMdAntiStacking(m.anti_stacking_enabled !== false);
+      setEditMdNumBids(String(m.number_of_bid_levels || 5));
+      setEditMdNumAsks(String(m.number_of_ask_levels || 5));
+      setEditMdRefreshCooldown(String(m.liquidity_refresh_cooldown_sec || 10));
+      const isExact = m.randomize_placement_enabled === false || (m.price_randomization_ticks ?? 0) === 0;
+      setEditMdExactPlacement(isExact);
+      setEditMdRandomizePlacement(!isExact);
+      setEditMdPriceRandomizationTicks(String(m.price_randomization_ticks ?? (isExact ? 0 : 2)));
+      setEditMdMaxOpenOrders(String(m.maximum_open_orders || 20));
+      setEditMdTickSize(m.tick_size ? String(m.tick_size) : '');
+    }
+
     if (bot.quantHftConfig) {
       setEditQhftTargetSpread(String(bot.quantHftConfig.target_spread_pct || 0.08));
       setEditQhftMicroOrderSize(bot.quantHftConfig.micro_order_size || '0.001');
@@ -687,6 +783,28 @@ export const MMConsoleView: React.FC<Props> = ({
         maximum_open_orders: parseInt(editDlMaxOpenOrders, 10) || 20,
         tick_size: editDlTickSize ? parseFloat(editDlTickSize) : undefined,
         lot_size: editDlLotSize
+      };
+    } else if (editingBot.botType === 'MOVEMENT_DEPTH_LIQUIDITY') {
+      payload.movementDepthConfig = {
+        ...editingBot.movementDepthConfig,
+        leader_symbol: editMdLeaderSymbol,
+        leader_provider: editMdLeaderProvider,
+        anchor_local_price: editMdAnchorLocalPrice,
+        movement_sensitivity: parseFloat(editMdSensitivity) || 1.0,
+        movement_threshold_bps: Math.max(1, parseInt(editMdThresholdBps, 10) || 10),
+        min_price_guard: editMdMinPriceGuard.trim() || undefined,
+        max_price_guard: editMdMaxPriceGuard.trim() || undefined,
+        spread_bps: Math.max(2, parseInt(editMdSpreadBps, 10) || 20),
+        spacing_mode: editMdSpacingMode,
+        level_spacing_idr: parseFloat(editMdLevelSpacing) || 10,
+        anti_stacking_enabled: editMdAntiStacking,
+        number_of_bid_levels: Math.min(20, Math.max(1, parseInt(editMdNumBids, 10) || 5)),
+        number_of_ask_levels: Math.min(20, Math.max(1, parseInt(editMdNumAsks, 10) || 5)),
+        liquidity_refresh_cooldown_sec: Math.max(2, parseInt(editMdRefreshCooldown, 10) || 10),
+        randomize_placement_enabled: editMdExactPlacement ? false : editMdRandomizePlacement,
+        price_randomization_ticks: editMdExactPlacement ? 0 : Math.max(1, parseInt(editMdPriceRandomizationTicks, 10) || 2),
+        maximum_open_orders: parseInt(editMdMaxOpenOrders, 10) || 20,
+        tick_size: editMdTickSize ? parseFloat(editMdTickSize) : undefined
       };
     } else if (editingBot.botType === 'QUANT_HFT_MM') {
       payload.quantHftConfig = {
@@ -990,6 +1108,84 @@ export const MMConsoleView: React.FC<Props> = ({
     } catch (e) {}
   };
 
+  const handleMdPairChange = (newPair: string) => {
+    setMdPairId(newPair);
+    const activePair = tradingPairs.find(p => p.id === newPair);
+    const isUsdtQuote = activePair?.quoteCurrency === 'USDT' || newPair.endsWith('-USDT');
+    const pairLastFloat = activePair && activePair.lastPrice
+      ? Number(safeBigInt(activePair.lastPrice)) / (10 ** (activePair.quoteDecimals || (isUsdtQuote ? 4 : 2)))
+      : 0;
+
+    setMdName(`Depth Movement ${newPair} <- ${mdLeaderSymbol}`);
+    if (pairLastFloat > 0) {
+      setMdAnchorLocalPrice(isUsdtQuote ? pairLastFloat.toFixed(pairLastFloat < 1 ? 5 : 4) : String(Math.round(pairLastFloat)));
+      setMdLevelSpacing(isUsdtQuote ? (pairLastFloat < 1 ? '0.001' : '0.01') : String(Math.max(1, Math.round(pairLastFloat * 0.005))));
+    } else if (isUsdtQuote) {
+      setMdAnchorLocalPrice('0.05');
+      setMdLevelSpacing('0.0005');
+    } else {
+      setMdAnchorLocalPrice('1000');
+      setMdLevelSpacing('10');
+    }
+  };
+
+  const handleResetAnchor = async (botId: string) => {
+    try {
+      await handleAction(`/api/mm/instance/${botId}/reset-anchor`, 'POST', {});
+    } catch (e) {}
+  };
+
+  const handleCreateMovementDepth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const bidOffsets = mdBidOffsets.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+      const askOffsets = mdAskOffsets.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
+      const bidQtys = mdBidQuantities.split(',').map(s => s.trim()).filter(Boolean);
+      const askQtys = mdAskQuantities.split(',').map(s => s.trim()).filter(Boolean);
+
+      const res = await handleAction('/api/mm/movement-depth/create', 'POST', {
+        name: mdName,
+        pairId: mdPairId,
+        environment: currentEnv,
+        leader_symbol: mdLeaderSymbol,
+        leader_provider: mdLeaderProvider,
+        anchor_local_price: mdAnchorLocalPrice,
+        movement_sensitivity: parseFloat(mdSensitivity) || 1.0,
+        movement_threshold_bps: Math.max(1, parseInt(mdThresholdBps, 10) || 10),
+        min_price_guard: mdMinPriceGuard.trim() || undefined,
+        max_price_guard: mdMaxPriceGuard.trim() || undefined,
+        spread_bps: Math.max(2, parseInt(mdSpreadBps, 10) || 20),
+        spacing_mode: mdSpacingMode,
+        level_spacing_idr: parseFloat(mdLevelSpacing) || 10,
+        anti_stacking_enabled: mdAntiStacking,
+        number_of_bid_levels: Math.min(20, Math.max(1, parseInt(mdNumBids, 10) || 5)),
+        number_of_ask_levels: Math.min(20, Math.max(1, parseInt(mdNumAsks, 10) || 5)),
+        bid_level_offsets_bps: bidOffsets,
+        ask_level_offsets_bps: askOffsets,
+        bid_quantities: bidQtys,
+        ask_quantities: askQtys,
+        quantity_randomization_enabled: mdExactPlacement ? false : mdRandomizeQty,
+        random_min_quantity: mdRandomMinQty,
+        random_max_quantity: mdRandomMaxQty,
+        minimum_reprice_interval_ms: parseInt(mdRepriceInterval, 10) || 3000,
+        dry_run: mdDryRun,
+        liquidity_refresh_cooldown_sec: Math.max(2, parseInt(mdRefreshCooldownSec, 10) || 10),
+        randomize_placement_enabled: mdExactPlacement ? false : mdRandomizePlacement,
+        price_randomization_ticks: mdExactPlacement ? 0 : Math.max(1, parseInt(mdPriceRandomizationTicks, 10) || 2),
+        maximum_inventory: mdMaxInventory,
+        maximum_total_bid_value_idr: mdMaxTotalBidValIdr,
+        maximum_total_ask_quantity: mdMaxTotalAskQty,
+        maximum_open_orders: parseInt(mdMaxOpenOrders, 10) || 20,
+        tick_size: mdTickSize ? parseFloat(mdTickSize) : undefined,
+        lot_size: mdLotSize
+      });
+      if (res) {
+        setIsMovementDepthModalOpen(false);
+        setActiveTab('MOVEMENT_DEPTH');
+      }
+    } catch (e) {}
+  };
+
   const handleQhftPairChange = (newPair: string) => {
     setQhftPairId(newPair);
     if (newPair === 'BTC-USDT' || newPair === 'BTC-IDR') {
@@ -1220,7 +1416,7 @@ export const MMConsoleView: React.FC<Props> = ({
               </span>
             </div>
             <span className="text-[10px] text-slate-400 mt-1 block">
-              Smart HFT: {instances.filter(b => b.botType === 'SMART_HFT_LADDER' && b.status === 'RUNNING').length} · Quant HFT: {instances.filter(b => b.botType === 'QUANT_HFT_MM' && b.status === 'RUNNING').length} · Depth: {instances.filter(b => b.botType === 'DEPTH_LIQUIDITY' && b.status === 'RUNNING').length} · Price Follower: {instances.filter(b => b.botType === 'PRICE_FOLLOWER' && b.status === 'RUNNING').length} · Order: {instances.filter(b => b.botType === 'ORDER_BOT' && b.status === 'RUNNING').length} · Volume: {instances.filter(b => b.botType === 'VOLUME_BOT' && b.status === 'RUNNING').length}
+              Smart HFT: {instances.filter(b => b.botType === 'SMART_HFT_LADDER' && b.status === 'RUNNING').length} · Quant HFT: {instances.filter(b => b.botType === 'QUANT_HFT_MM' && b.status === 'RUNNING').length} · Depth: {instances.filter(b => b.botType === 'DEPTH_LIQUIDITY' && b.status === 'RUNNING').length} · Depth Move (WS): {instances.filter(b => b.botType === 'MOVEMENT_DEPTH_LIQUIDITY' && b.status === 'RUNNING').length} · Order: {instances.filter(b => b.botType === 'ORDER_BOT' && b.status === 'RUNNING').length} · Volume: {instances.filter(b => b.botType === 'VOLUME_BOT' && b.status === 'RUNNING').length}
             </span>
           </div>
 
@@ -1332,6 +1528,7 @@ export const MMConsoleView: React.FC<Props> = ({
           { id: 'SMART_HFT_LADDER', label: '📐 Smart HFT Ladder' },
           { id: 'QUANT_HFT_MM', label: '⚡ Quant HFT MM' },
           { id: 'DEPTH_LIQUIDITY', label: '📊 Depth & Liquidity' },
+          { id: 'MOVEMENT_DEPTH', label: '📡 Depth Movement (WS)' },
           { id: 'PRICE_FOLLOWER', label: '🎯 Price Follower' },
           { id: 'EXTERNAL_FEEDS', label: '🌐 External Feeds' },
           { id: 'FX_RATES', label: '💵 USDT/IDR FX Engine' },
@@ -1423,6 +1620,12 @@ export const MMConsoleView: React.FC<Props> = ({
                 className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-lg shadow transition-colors"
               >
                 + Depth & Liquidity
+              </button>
+              <button
+                onClick={() => setIsMovementDepthModalOpen(true)}
+                className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold rounded-lg shadow transition-colors"
+              >
+                + Depth Movement (WS)
               </button>
             </div>
             <div className="flex items-center gap-2">
@@ -2546,6 +2749,195 @@ export const MMConsoleView: React.FC<Props> = ({
                                 onClick={() => handleOpenDeleteModal(b)}
                                 className="px-2 py-1 bg-red-600/20 text-red-400 hover:bg-red-600/40 rounded text-xs"
                               >
+                                Hapus
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB: MOVEMENT DEPTH LIQUIDITY BOTS (RELATIVE WS FOLLOWER) */}
+      {activeTab === 'MOVEMENT_DEPTH' && (
+        <div className="flex flex-col gap-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <span>📡</span> Depth Movement Bots (Pengikut Pergerakan WS Binance/Bybit)
+              </h2>
+              <p className="text-xs text-slate-400">
+                Cocok untuk token baru listing / harga mandiri: Bot menjaga harga lokal token Anda sendiri dan memproyeksikan <strong>% pergerakan relatif</strong> dari pair acuan WebSocket yang dikurasi Admin (bukan meniru nominal harganya).
+              </p>
+            </div>
+            <button
+              onClick={() => setIsMovementDepthModalOpen(true)}
+              className="px-4 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-bold rounded-lg shadow-lg transition-all flex items-center gap-2 border border-cyan-400/40"
+            >
+              <span className="text-sm">📡</span>
+              <span>+ Konfigurasi Bot Depth Movement (WS)</span>
+            </button>
+          </div>
+
+          {/* Admin Curated WS Whitelist Live Strip */}
+          <div className="p-3.5 bg-[#090d14] border border-cyan-500/20 rounded-xl space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="font-bold text-cyan-300">
+                Pair Acuan WebSocket Aktif (Kurasi Whitelist Admin): {wsWhitelist.length} pair
+              </span>
+              <div className="flex items-center gap-2 font-mono text-[11px]">
+                <span className={`px-2 py-0.5 rounded ${wsFeedConnStatus.binance === 'CONNECTED' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>
+                  Binance WS: {wsFeedConnStatus.binance || 'CONNECTING'}
+                </span>
+                <span className={`px-2 py-0.5 rounded ${wsFeedConnStatus.bybit === 'CONNECTED' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>
+                  Bybit WS: {wsFeedConnStatus.bybit || 'CONNECTING'}
+                </span>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {wsWhitelist.length === 0 ? (
+                <span className="text-xs text-amber-400">
+                  Belum ada pair aktif di whitelist Admin. Minta Admin mengaktifkan pair acuan di Admin Console &rarr; FX Engine &amp; WS Pairs.
+                </span>
+              ) : (
+                wsWhitelist.map(w => (
+                  <div key={w.symbol} className="px-2.5 py-1.5 rounded-lg bg-[#131b2a] border border-white/10 text-[11px] font-mono flex items-center gap-2">
+                    <span className="font-bold text-white">{w.symbol}</span>
+                    {w.binancePrice && <span className="text-amber-300">BN: {w.binancePrice}</span>}
+                    {w.bybitPrice && <span className="text-cyan-300">BY: {w.bybitPrice}</span>}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Table of Movement Depth Bots */}
+          <div className="bg-[#090d14] border border-[#1e293b] rounded-xl overflow-hidden shadow-lg">
+            <div className="px-5 py-3 border-b border-[#1e293b] flex items-center justify-between">
+              <h3 className="text-sm font-bold text-white">Daftar Bot Depth Movement (WS) ({currentEnv})</h3>
+              <span className="text-xs text-slate-400">
+                {instances.filter(b => b.botType === 'MOVEMENT_DEPTH_LIQUIDITY').length} bot terdaftar
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-[#0f172a] text-slate-400 uppercase font-mono text-[11px] border-b border-[#1e293b]">
+                  <tr>
+                    <th className="py-2.5 px-4">Bot ID / Name</th>
+                    <th className="py-2.5 px-4">Target Pair</th>
+                    <th className="py-2.5 px-4">Acuan WS &amp; Move %</th>
+                    <th className="py-2.5 px-4">Anchor &rarr; Proyeksi</th>
+                    <th className="py-2.5 px-4">Beta &amp; Mode</th>
+                    <th className="py-2.5 px-4">Active Orders</th>
+                    <th className="py-2.5 px-4">Status</th>
+                    <th className="py-2.5 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#1e293b] text-slate-300 font-mono">
+                  {instances.filter(b => b.botType === 'MOVEMENT_DEPTH_LIQUIDITY').length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="text-center py-8 text-slate-500 font-sans">
+                        Belum ada bot Depth Movement (WS). Klik "+ Konfigurasi Bot Depth Movement (WS)" untuk menghubungkan token Anda dengan pergerakan % BTC/SOL/ETH di Binance &amp; Bybit.
+                      </td>
+                    </tr>
+                  ) : (
+                    instances.filter(b => b.botType === 'MOVEMENT_DEPTH_LIQUIDITY').map(b => {
+                      const cfg = b.movementDepthConfig;
+                      const retPct = cfg?.last_leader_return_pct ?? 0;
+                      return (
+                        <tr key={b.id} className="hover:bg-[#131b26] transition-colors">
+                          <td className="py-3 px-4 font-sans">
+                            <strong className="text-white block">{b.name}</strong>
+                            <span className="text-[10px] text-slate-500 font-mono">{b.id}</span>
+                          </td>
+                          <td className="py-3 px-4 font-bold text-white">{b.pairId}</td>
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-1.5">
+                              <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold text-[10px]">
+                                {cfg?.leader_symbol || 'BTCUSDT'}
+                              </span>
+                              <span className="text-[10px] text-slate-400">({cfg?.leader_provider || 'AGG'})</span>
+                            </div>
+                            <div className={`text-[11px] font-bold mt-1 ${retPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                              {retPct >= 0 ? '+' : ''}{retPct.toFixed(3)}%
+                              {cfg?.last_leader_price ? ` (${cfg.last_leader_price})` : ''}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="text-[10px] text-slate-400">Anchor: {cfg?.anchor_local_price || '-'}</div>
+                            <div className="text-xs font-bold text-amber-300 mt-0.5">
+                              &rarr; {cfg?.last_projected_local_price ?? cfg?.anchor_local_price}
+                            </div>
+                            <div className="text-[10px] text-slate-500">
+                              Base WS: {cfg?.leader_baseline_price ? cfg.leader_baseline_price : 'Auto on Start'}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-[11px]">
+                            <span className="px-1.5 py-0.5 rounded bg-slate-800 text-cyan-300 border border-cyan-500/30 font-bold">
+                              Beta {cfg?.movement_sensitivity ?? 1.0}x
+                            </span>
+                            <div className="text-[10px] text-slate-400 mt-1">
+                              {cfg?.spacing_mode || 'PERCENT_BPS'} · {cfg?.number_of_bid_levels || 5}B/{cfg?.number_of_ask_levels || 5}A
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 font-bold text-sky-400">
+                            {cfg?.activeOrderIds?.length || 0} level aktif
+                          </td>
+                          <td className="py-3 px-4">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              b.status === 'RUNNING'
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 animate-pulse'
+                                : b.status === 'PAUSED'
+                                ? 'bg-amber-500/20 text-amber-400'
+                                : 'bg-slate-700 text-slate-300'
+                            }`}>
+                              {b.status}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <div className="flex flex-wrap items-center justify-end gap-1.5 font-sans">
+                              {b.status === 'RUNNING' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRefreshLiquidity(b.id)}
+                                  className="px-2 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-bold"
+                                >
+                                  ⚡ Segarkan
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleResetAnchor(b.id)}
+                                title="Kunci ulang harga acuan WS saat ini sebagai 0% terhadap Anchor Lokal"
+                                className="px-2 py-1 bg-blue-600/20 text-blue-300 hover:bg-blue-600/40 rounded text-xs"
+                              >
+                                🔄 Reset Anchor
+                              </button>
+                              {b.status === 'RUNNING' ? (
+                                <button onClick={() => handlePauseBot(b.id)} className="px-2 py-1 bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 rounded text-xs">
+                                  Pause
+                                </button>
+                              ) : (
+                                <button onClick={() => handleStartBot(b.id)} className="px-2 py-1 bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 rounded text-xs">
+                                  Start
+                                </button>
+                              )}
+                              <button onClick={() => handleOpenEditModal(b)} className="px-2 py-1 bg-[#1e293b] text-amber-400 hover:bg-[#283548] rounded text-xs">
+                                Edit
+                              </button>
+                              <button onClick={() => handleStopBot(b.id)} className="px-2 py-1 bg-red-600/20 text-red-400 hover:bg-red-600/30 rounded text-xs">
+                                Stop
+                              </button>
+                              <button onClick={() => setSelectedBotId(b.id)} className="px-2 py-1 bg-[#1e293b] text-slate-400 hover:text-white rounded text-xs">
+                                Logs
+                              </button>
+                              <button onClick={() => handleOpenDeleteModal(b)} className="px-2 py-1 bg-red-600/20 text-red-400 hover:bg-red-600/40 rounded text-xs">
                                 Hapus
                               </button>
                             </div>
@@ -4902,6 +5294,449 @@ export const MMConsoleView: React.FC<Props> = ({
         </div>
       )}
 
+      {/* MODAL: MOVEMENT DEPTH BOT CONFIGURATION (RELATIVE WS MOVEMENT FOLLOWER) */}
+      {isMovementDepthModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 overflow-y-auto">
+          <div className="bg-[#0f172a] border border-cyan-500/30 rounded-xl max-w-3xl w-full p-6 text-slate-300 max-h-[92vh] overflow-y-auto shadow-2xl">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#1e293b]">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-white flex items-center gap-1.5">
+                    <span className="text-cyan-400">📡</span> Konfigurasi Bot Depth Movement (WS Binance &amp; Bybit)
+                  </h2>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                    {currentEnv}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Bot likuiditas multi-level yang mengikuti <strong>% pergerakan pasar</strong> dari pair WS acuan (kiblat market), sambil mempertahankan skala harga lokal token Anda sendiri.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsMovementDepthModalOpen(false)}
+                className="text-slate-400 hover:text-white text-lg font-bold p-1 rounded hover:bg-slate-800"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateMovementDepth} className="space-y-4 text-xs font-sans">
+              {/* SECTION 1: IDENTITY & TARGET PAIR */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-slate-300 block mb-1 font-semibold">Bot Instance Name</label>
+                  <input
+                    type="text"
+                    value={mdName}
+                    onChange={e => setMdName(e.target.value)}
+                    required
+                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] focus:border-cyan-400 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-slate-300 block mb-1 font-semibold">Trading Pair (Target Market Token Anda)</label>
+                  <select
+                    value={mdPairId}
+                    onChange={e => handleMdPairChange(e.target.value)}
+                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] focus:border-cyan-400 outline-none"
+                  >
+                    {tradingPairs.map(p => (
+                      <option key={p.id} value={p.id}>{p.id} ({p.baseCurrency}/{p.quoteCurrency})</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* SECTION 2: KIBLAT WEBSOCKET WHITELIST & RELATIVE PROJECTION */}
+              <div className="p-3.5 bg-[#0b1322] border border-cyan-500/40 rounded-xl space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800">
+                  <span className="text-xs font-bold text-cyan-300">
+                    🧭 Kiblat Pergerakan WebSocket (Admin Whitelist) &amp; Anchor Harga Lokal
+                  </span>
+                  <span className="text-[10px] font-mono text-emerald-400">
+                    Rumus: Anchor × (1 + %Move_WS × Beta)
+                  </span>
+                </div>
+
+                {wsWhitelist.length === 0 ? (
+                  <div className="p-3 rounded-lg bg-amber-950/40 border border-amber-500/40 text-amber-200 text-xs">
+                    Belum ada pair WebSocket aktif di Whitelist Admin. Hubungi Admin untuk menambahkan pair (misal BTCUSDT / SOLUSDT) di Admin Console &rarr; FX Engine &amp; WS Pairs.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-cyan-200 block mb-1 font-semibold">Pair Acuan WebSocket (Whitelist Admin)</label>
+                      <select
+                        value={mdLeaderSymbol}
+                        onChange={e => setMdLeaderSymbol(e.target.value)}
+                        className="w-full bg-[#1e293b] text-white font-mono p-2 rounded border border-cyan-500/40 text-xs"
+                      >
+                        {wsWhitelist.map(w => (
+                          <option key={w.symbol} value={w.symbol}>
+                            {w.symbol} — BN: {w.binancePrice ?? '-'} | BY: {w.bybitPrice ?? '-'}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="text-[10px] text-slate-400 mt-0.5 block">
+                        Hanya daftar minimal yang diizinkan Admin pada stream WS Binance/Bybit.
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="text-cyan-200 block mb-1 font-semibold">Sumber Stream WebSocket</label>
+                      <select
+                        value={mdLeaderProvider}
+                        onChange={e => setMdLeaderProvider(e.target.value as any)}
+                        className="w-full bg-[#1e293b] text-white p-2 rounded border border-cyan-500/40 text-xs"
+                      >
+                        <option value="AGGREGATED">AGGREGATED (Konsensus Binance + Bybit)</option>
+                        <option value="BINANCE">BINANCE Spot WS</option>
+                        <option value="BYBIT">BYBIT Spot WS</option>
+                      </select>
+                      {(() => {
+                        const wl = wsWhitelist.find(x => x.symbol === mdLeaderSymbol);
+                        return (
+                          <span className="text-[10px] font-mono text-emerald-400 mt-0.5 block">
+                            Live {mdLeaderSymbol}: Binance {wl?.binancePrice ?? '-'} · Bybit {wl?.bybitPrice ?? '-'}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-emerald-300 font-semibold">Anchor Harga Lokal Target</label>
+                      <button
+                        type="button"
+                        onClick={() => handleMdPairChange(mdPairId)}
+                        className="text-[10px] text-cyan-300 hover:underline"
+                      >
+                        Ambil Harga Market
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={mdAnchorLocalPrice}
+                      onChange={e => setMdAnchorLocalPrice(e.target.value)}
+                      required
+                      placeholder="Misal 1000 atau 0.05"
+                      className="w-full bg-[#1e293b] text-emerald-300 font-mono p-2 rounded border border-emerald-500/40 text-xs"
+                    />
+                    <span className="text-[9px] text-slate-400 mt-0.5 block">
+                      Patokan harga awal token lokal Anda ({mdPairId.split('-')[1] || 'IDR'}).
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="text-cyan-200 block mb-1 font-semibold">Sensitivitas Pergerakan (Beta)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={mdSensitivity}
+                      onChange={e => setMdSensitivity(e.target.value)}
+                      required
+                      className="w-full bg-[#1e293b] text-cyan-300 font-mono p-2 rounded border border-cyan-500/40 text-xs"
+                    />
+                    <span className="text-[9px] text-slate-400 mt-0.5 block">
+                      1.0 = ikut 1:1 | 1.5 = lebih agresif | -1.0 = berlawanan
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Threshold Trigger (bps) &amp; Spread (bps)</label>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="number"
+                        value={mdThresholdBps}
+                        onChange={e => setMdThresholdBps(e.target.value)}
+                        min="1"
+                        title="Threshold Move (bps)"
+                        className="w-1/2 bg-[#1e293b] text-white font-mono p-2 rounded border border-[#334155] text-xs"
+                      />
+                      <input
+                        type="number"
+                        value={mdSpreadBps}
+                        onChange={e => setMdSpreadBps(e.target.value)}
+                        min="2"
+                        title="Half Spread (bps)"
+                        className="w-1/2 bg-[#1e293b] text-amber-300 font-mono p-2 rounded border border-[#334155] text-xs"
+                      />
+                    </div>
+                    <span className="text-[9px] text-slate-400 mt-0.5 block">
+                      Kiri: Trigger rotasi ({mdThresholdBps} bps) · Kanan: Spread ({mdSpreadBps} bps)
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Min Price Guard / Floor (Opsional)</label>
+                    <input
+                      type="text"
+                      value={mdMinPriceGuard}
+                      onChange={e => setMdMinPriceGuard(e.target.value)}
+                      placeholder="Kosongkan jika bebas"
+                      className="w-full bg-[#1e293b] text-white font-mono p-2 rounded border border-[#334155] text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Max Price Guard / Ceiling (Opsional)</label>
+                    <input
+                      type="text"
+                      value={mdMaxPriceGuard}
+                      onChange={e => setMdMaxPriceGuard(e.target.value)}
+                      placeholder="Kosongkan jika bebas"
+                      className="w-full bg-[#1e293b] text-white font-mono p-2 rounded border border-[#334155] text-xs"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* SECTION 3: DEPTH & LADDER CONFIGURATION */}
+              <div className="p-3 bg-purple-950/25 border border-purple-500/30 rounded-lg space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-purple-300 uppercase tracking-wide flex items-center gap-1.5">
+                    <span>⚡</span> Mode Distribusi Tangga Likuiditas &amp; Anti-Stacking
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="mdAntiStacking"
+                      checked={mdAntiStacking}
+                      onChange={e => setMdAntiStacking(e.target.checked)}
+                      className="rounded bg-[#1e293b] border-[#334155]"
+                    />
+                    <label htmlFor="mdAntiStacking" className="text-[11px] text-emerald-400 font-semibold cursor-pointer">
+                      ✓ Anti-Stacking Aktif
+                    </label>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-purple-200 block mb-1 font-semibold">Mode Distribusi Level</label>
+                    <select
+                      value={mdSpacingMode}
+                      onChange={e => setMdSpacingMode(e.target.value as any)}
+                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-purple-500/40 text-xs"
+                    >
+                      <option value="PERCENT_BPS">PERCENT_BPS (Persentase BPS Dinamis)</option>
+                      <option value="LINEAR">LINEAR (Jarak Tangga Proporsional)</option>
+                      <option value="GEOMETRIC">GEOMETRIC (Makin Lebar ke Luar)</option>
+                      <option value="CONCENTRATED">CONCENTRATED (Padat Dekat Spread)</option>
+                      <option value="FIXED_IDR">FIXED_STEP (Nominal Step Tetap)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-purple-200 block mb-1 font-semibold">Nominal Step (Khusus LINEAR / FIXED_STEP)</label>
+                    <input
+                      type="text"
+                      value={mdLevelSpacing}
+                      onChange={e => setMdLevelSpacing(e.target.value)}
+                      className="w-full bg-[#1e293b] text-purple-300 font-mono p-2 rounded border border-purple-500/40 text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Number of Bid Levels</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="20"
+                      value={mdNumBids}
+                      onChange={e => setMdNumBids(e.target.value)}
+                      className="w-full bg-[#1e293b] text-emerald-400 font-mono p-2 rounded border border-[#334155] text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Number of Ask Levels</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="20"
+                      value={mdNumAsks}
+                      onChange={e => setMdNumAsks(e.target.value)}
+                      className="w-full bg-[#1e293b] text-red-400 font-mono p-2 rounded border border-[#334155] text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Bid Quantities ({mdPairId.split('-')[0]})</label>
+                    <input
+                      type="text"
+                      value={mdBidQuantities}
+                      onChange={e => setMdBidQuantities(e.target.value)}
+                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-300 block mb-1 font-semibold">Ask Quantities ({mdPairId.split('-')[0]})</label>
+                    <input
+                      type="text"
+                      value={mdAskQuantities}
+                      onChange={e => setMdAskQuantities(e.target.value)}
+                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* SECTION 4: PRECISION, COOLDOWN & RISK CAPS */}
+              <div className="p-3 bg-[#0a101d] border border-blue-500/30 rounded-lg space-y-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div>
+                    <label className="text-[11px] text-slate-300 block mb-1 font-semibold">Cooldown Refresh (dtk)</label>
+                    <input
+                      type="number"
+                      min="2"
+                      max="300"
+                      value={mdRefreshCooldownSec}
+                      onChange={e => setMdRefreshCooldownSec(e.target.value)}
+                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-300 block mb-1 font-semibold">Max Open Orders</label>
+                    <input
+                      type="number"
+                      min="2"
+                      max="100"
+                      value={mdMaxOpenOrders}
+                      onChange={e => setMdMaxOpenOrders(e.target.value)}
+                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-slate-300 block mb-1 font-semibold">Custom Tick Size (Opsional)</label>
+                    <input
+                      type="text"
+                      value={mdTickSize}
+                      onChange={e => setMdTickSize(e.target.value)}
+                      placeholder="Auto sesuai harga"
+                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                    />
+                  </div>
+                  <div className="flex flex-col justify-end">
+                    <label className="flex items-center gap-2 text-xs text-slate-200 cursor-pointer pb-2">
+                      <input
+                        type="checkbox"
+                        checked={mdDryRun}
+                        onChange={e => setMdDryRun(e.target.checked)}
+                        className="rounded bg-[#1e293b] border-[#334155]"
+                      />
+                      <span>Dry Run (Log saja)</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* SECTION 5: SIMULATED WS MOVEMENT PREVIEW */}
+              {(() => {
+                const anchor = parseFloat(mdAnchorLocalPrice) || 1000;
+                const beta = parseFloat(mdSensitivity) || 1.0;
+                const spreadBpsNum = Math.max(2, parseFloat(mdSpreadBps) || 20);
+                let projected = anchor * (1 + (mdSimMovePct / 100) * beta);
+                const minG = mdMinPriceGuard ? parseFloat(mdMinPriceGuard) : 0;
+                const maxG = mdMaxPriceGuard ? parseFloat(mdMaxPriceGuard) : 0;
+                if (minG > 0 && projected < minG) projected = minG;
+                if (maxG > 0 && projected > maxG) projected = maxG;
+
+                const activePair = tradingPairs.find(p => p.id === mdPairId);
+                const isUsdtQ = activePair?.quoteCurrency === 'USDT' || mdPairId.endsWith('-USDT');
+                const autoTick = isUsdtQ ? (projected < 0.01 ? 0.00001 : projected < 1 ? 0.0001 : 0.01) : (projected < 500 ? 1 : projected < 5000 ? 10 : 100);
+                const tick = mdTickSize ? (parseFloat(mdTickSize) || autoTick) : autoTick;
+                const fmt = (v: number) => isUsdtQ ? `$${v.toFixed(tick < 0.001 ? 5 : tick < 0.01 ? 4 : 2)}` : `Rp ${Math.round(v).toLocaleString('id-ID')}`;
+
+                const nB = Math.min(8, Math.max(1, parseInt(mdNumBids, 10) || 5));
+                const nA = Math.min(8, Math.max(1, parseInt(mdNumAsks, 10) || 5));
+                const bidLevels = Array.from({ length: nB }, (_, i) => {
+                  const bps = spreadBpsNum + i * 25;
+                  return Math.round((projected * (1 - bps / 10000)) / tick) * tick;
+                });
+                const askLevels = Array.from({ length: nA }, (_, i) => {
+                  const bps = spreadBpsNum + i * 25;
+                  return Math.round((projected * (1 + bps / 10000)) / tick) * tick;
+                });
+
+                return (
+                  <div className="p-3 bg-[#0b111e] rounded-xl border border-cyan-500/40 text-[11px] font-mono space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800">
+                      <span className="font-sans font-bold text-cyan-300">
+                        🔬 Simulasi Proyeksi Pergerakan ({mdLeaderSymbol} &rarr; {mdPairId})
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-400">Simulasi {mdLeaderSymbol}:</span>
+                        <input
+                          type="range"
+                          min="-5"
+                          max="5"
+                          step="0.5"
+                          value={mdSimMovePct}
+                          onChange={e => setMdSimMovePct(parseFloat(e.target.value))}
+                          className="w-28 accent-cyan-400"
+                        />
+                        <span className={`font-bold ${mdSimMovePct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {mdSimMovePct >= 0 ? '+' : ''}{mdSimMovePct.toFixed(1)}%
+                        </span>
+                      </div>
+                    </div>
+                    <div className="text-xs text-slate-300 flex flex-wrap gap-4">
+                      <span>Anchor Lokal: <strong className="text-white">{fmt(anchor)}</strong></span>
+                      <span>&rarr; Proyeksi Mid ({beta}x): <strong className="text-amber-300">{fmt(projected)}</strong></span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 text-[11px]">
+                      <div className="space-y-1">
+                        <div className="text-emerald-400 font-bold">BID LADDER (Preview {nB} level)</div>
+                        {bidLevels.map((p, idx) => (
+                          <div key={idx} className="flex justify-between bg-[#131b2a] px-2 py-1 rounded">
+                            <span className="text-slate-400">Lvl {idx + 1}</span>
+                            <span className="text-emerald-300 font-bold">{fmt(p)}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-red-400 font-bold">ASK LADDER (Preview {nA} level)</div>
+                        {askLevels.map((p, idx) => (
+                          <div key={idx} className="flex justify-between bg-[#131b2a] px-2 py-1 rounded">
+                            <span className="text-slate-400">Lvl {idx + 1}</span>
+                            <span className="text-red-300 font-bold">{fmt(p)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#1e293b]">
+                <button
+                  type="button"
+                  onClick={() => setIsMovementDepthModalOpen(false)}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded text-xs transition-colors"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isLoading || wsWhitelist.length === 0}
+                  className="px-6 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 text-white font-bold rounded text-xs shadow-lg transition-all"
+                >
+                  Simpan &amp; Deploy Bot Depth Movement (WS)
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* MODAL: QUANTITATIVE HIGH-FREQUENCY MARKET MAKER (HFT-MM) */}
       {isQuantHftModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 overflow-y-auto">
@@ -5818,6 +6653,131 @@ export const MMConsoleView: React.FC<Props> = ({
                     </div>
                   </div>
                 </>
+              )}
+
+              {/* MOVEMENT DEPTH LIQUIDITY SPECIFIC FIELDS */}
+              {editingBot.botType === 'MOVEMENT_DEPTH_LIQUIDITY' && (
+                <div className="p-3 bg-cyan-950/25 border border-cyan-500/30 rounded-lg space-y-3">
+                  <span className="text-xs font-bold text-cyan-300 block uppercase tracking-wide flex items-center gap-1.5">
+                    <span>📡</span> Pengaturan Depth Movement (WS Acuan &amp; Anchor Lokal)
+                  </span>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-cyan-200 block mb-1 font-semibold">Pair Acuan WS (Whitelist Admin)</label>
+                      <select
+                        value={editMdLeaderSymbol}
+                        onChange={e => setEditMdLeaderSymbol(e.target.value)}
+                        className="w-full bg-[#1e293b] text-white font-mono p-2 rounded border border-cyan-500/40 text-xs"
+                      >
+                        {wsWhitelist.map(w => (
+                          <option key={w.symbol} value={w.symbol}>{w.symbol}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-cyan-200 block mb-1 font-semibold">Provider WebSocket</label>
+                      <select
+                        value={editMdLeaderProvider}
+                        onChange={e => setEditMdLeaderProvider(e.target.value as any)}
+                        className="w-full bg-[#1e293b] text-white p-2 rounded border border-cyan-500/40 text-xs"
+                      >
+                        <option value="AGGREGATED">AGGREGATED (Binance + Bybit)</option>
+                        <option value="BINANCE">BINANCE Spot WS</option>
+                        <option value="BYBIT">BYBIT Spot WS</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-emerald-300 block mb-1 font-semibold">Anchor Harga Lokal</label>
+                      <input
+                        type="text"
+                        value={editMdAnchorLocalPrice}
+                        onChange={e => setEditMdAnchorLocalPrice(e.target.value)}
+                        className="w-full bg-[#1e293b] text-emerald-300 font-mono p-2 rounded border border-emerald-500/40 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-cyan-200 block mb-1 font-semibold">Sensitivitas Beta</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={editMdSensitivity}
+                        onChange={e => setEditMdSensitivity(e.target.value)}
+                        className="w-full bg-[#1e293b] text-cyan-300 font-mono p-2 rounded border border-cyan-500/40 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-slate-300 block mb-1 font-semibold">Spread / Threshold (bps)</label>
+                      <div className="flex gap-1.5">
+                        <input
+                          type="number"
+                          value={editMdSpreadBps}
+                          onChange={e => setEditMdSpreadBps(e.target.value)}
+                          placeholder="Spread"
+                          className="w-1/2 bg-[#1e293b] text-white font-mono p-2 rounded border border-[#334155] text-xs"
+                        />
+                        <input
+                          type="number"
+                          value={editMdThresholdBps}
+                          onChange={e => setEditMdThresholdBps(e.target.value)}
+                          placeholder="Move"
+                          className="w-1/2 bg-[#1e293b] text-amber-300 font-mono p-2 rounded border border-[#334155] text-xs"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-slate-300 block mb-1">Mode Spacing</label>
+                      <select
+                        value={editMdSpacingMode}
+                        onChange={e => setEditMdSpacingMode(e.target.value as any)}
+                        className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] text-xs"
+                      >
+                        <option value="PERCENT_BPS">PERCENT_BPS</option>
+                        <option value="LINEAR">LINEAR</option>
+                        <option value="GEOMETRIC">GEOMETRIC</option>
+                        <option value="CONCENTRATED">CONCENTRATED</option>
+                        <option value="FIXED_IDR">FIXED_STEP</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-slate-300 block mb-1">Cooldown (dtk)</label>
+                      <input
+                        type="number"
+                        min="2"
+                        value={editMdRefreshCooldown}
+                        onChange={e => setEditMdRefreshCooldown(e.target.value)}
+                        className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-slate-300 block mb-1">Levels (Bid / Ask)</label>
+                      <div className="flex gap-1.5">
+                        <input
+                          type="number"
+                          min="1"
+                          max="20"
+                          value={editMdNumBids}
+                          onChange={e => setEditMdNumBids(e.target.value)}
+                          className="w-1/2 bg-[#1e293b] text-emerald-400 p-2 rounded border border-[#334155] text-xs"
+                        />
+                        <input
+                          type="number"
+                          min="1"
+                          max="20"
+                          value={editMdNumAsks}
+                          onChange={e => setEditMdNumAsks(e.target.value)}
+                          className="w-1/2 bg-[#1e293b] text-red-400 p-2 rounded border border-[#334155] text-xs"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
               )}
 
               {/* QUANT HFT MM SPECIFIC FIELDS */}

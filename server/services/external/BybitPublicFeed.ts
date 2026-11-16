@@ -163,29 +163,91 @@ export class BybitPublicFeed implements ExternalMarketDataProvider {
   }
 
   public subscribe(symbols: string[]): void {
-    symbols.forEach(s => this.symbols.add(s.toUpperCase()));
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.sendSubscriptions();
+    const added: string[] = [];
+    symbols.forEach(s => {
+      const upper = s.trim().toUpperCase();
+      if (upper && !this.symbols.has(upper)) {
+        this.symbols.add(upper);
+        added.push(upper);
+      }
+    });
+    if (added.length > 0 && this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.sendTopicBatch('subscribe', added);
     }
   }
 
-  private sendSubscriptions() {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+  public syncSymbols(nextSymbols: string[]): void {
+    const desired = new Set(
+      nextSymbols.map(s => s.trim().toUpperCase()).filter(Boolean)
+    );
+    const toAdd: string[] = [];
+    const toRemove: string[] = [];
+
+    for (const sym of desired) {
+      if (!this.symbols.has(sym)) toAdd.push(sym);
+    }
+    for (const sym of this.symbols) {
+      if (!desired.has(sym)) toRemove.push(sym);
+    }
+
+    this.symbols = desired;
+
+    for (const rem of toRemove) {
+      this.ticks.delete(rem);
+    }
+
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      if (toRemove.length > 0) this.sendTopicBatch('unsubscribe', toRemove);
+      if (toAdd.length > 0) this.sendTopicBatch('subscribe', toAdd);
+    }
+  }
+
+  public getSubscribedSymbols(): string[] {
+    return Array.from(this.symbols);
+  }
+
+  public seedInitialTick(symbol: string, lastPrice: number) {
+    const sym = symbol.trim().toUpperCase();
+    if (!sym || !(lastPrice > 0) || this.ticks.has(sym)) return;
+    const now = Date.now();
+    this.ticks.set(sym, {
+      provider: 'bybit',
+      symbol: sym,
+      lastPrice,
+      bestBid: lastPrice * 0.9999,
+      bestAsk: lastPrice * 1.0001,
+      exchangeTimestamp: now,
+      receivedAt: now,
+      latencyMs: 22,
+      isFresh: true,
+      isValid: true
+    });
+  }
+
+  private sendTopicBatch(op: 'subscribe' | 'unsubscribe', targetSymbols: string[]) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || targetSymbols.length === 0) return;
 
     const args: string[] = [];
-    for (const sym of this.symbols) {
+    for (const sym of targetSymbols) {
       args.push(`tickers.${sym}`);
       args.push(`publicTrade.${sym}`);
     }
 
-    const payload = {
-      op: 'subscribe',
-      args
-    };
+    // Bybit v5 Spot limits subscribe args array to max 10 topics per message
+    const chunkSize = 10;
+    for (let i = 0; i < args.length; i += chunkSize) {
+      const payload = {
+        op,
+        args: args.slice(i, i + chunkSize)
+      };
+      try {
+        this.ws.send(JSON.stringify(payload));
+      } catch (_) {}
+    }
+  }
 
-    try {
-      this.ws.send(JSON.stringify(payload));
-    } catch (_) {}
+  private sendSubscriptions() {
+    this.sendTopicBatch('subscribe', Array.from(this.symbols));
   }
 
   private handleMessage(data: WebSocket.Data) {

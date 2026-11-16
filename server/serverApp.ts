@@ -28,6 +28,8 @@ import { mmConsoleRouter } from './routes/mmConsole.js';
 import { observabilityRouter } from './routes/observability.js';
 import { marketWsService } from './websocket/MarketDataWs.js';
 import { fxConversionService } from './services/external/FxConversionService.js';
+import { db } from './db/database.js';
+import { priceAggregatorService } from './services/external/PriceAggregatorService.js';
 
 export async function startServer() {
   const app = express();
@@ -137,7 +139,12 @@ export async function startServer() {
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[DIMONEX] Full-Stack Exchange Engine listening on http://0.0.0.0:${PORT} (Mode: ${distExists ? 'PRODUCTION / STATIC' : 'DEVELOPMENT / VITE'})`);
 
-    // Defer external FX sync slightly so port binding & initial health/page loads remain instant
+    // Sync curated Admin WebSocket whitelist into Binance & Bybit feeds
+    const binanceWsSymbols = db.getEnabledExternalWsSymbols('binance');
+    const bybitWsSymbols = db.getEnabledExternalWsSymbols('bybit');
+    priceAggregatorService.syncWhitelistSymbols(binanceWsSymbols, bybitWsSymbols);
+
+    // Defer external FX sync and WS catalog initial tick seeding slightly so port binding stays instant
     setTimeout(() => {
       fxConversionService.fetchAndSyncLiveRate('system@dimonex.id', 12).then(res => {
         if (res.success && res.rateRecord) {
@@ -146,6 +153,12 @@ export async function startServer() {
       }).catch(err => {
         console.warn('[DIMONEX FX Engine] Initial FX rate sync failed:', err.message);
       });
+
+      for (const entry of db.externalWsWhitelist.values()) {
+        if (entry.enabled) {
+          priceAggregatorService.seedSymbolFromCatalog(entry.symbol, entry.providers).catch(() => {});
+        }
+      }
     }, 1500);
 
     // Background periodic live rate sync every 60 seconds

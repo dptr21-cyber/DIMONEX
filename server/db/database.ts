@@ -15,7 +15,8 @@ import {
   TradingPair, Order, Trade, FiatTransaction, CryptoTransaction, ApiKey, AuditLog,
   BotInstance, RiskControlsConfig,
   Asset, ListingRequest, ListingApproval, Market, ListingAuditEvent,
-  TransactionalOutboxEvent, IdempotencyRecord, PortfolioRebalanceConfig
+  TransactionalOutboxEvent, IdempotencyRecord, PortfolioRebalanceConfig,
+  ExternalWsWhitelistEntry
 } from './types.js';
 import { PrecisionMath } from '../ledger/PrecisionMath.js';
 
@@ -98,6 +99,7 @@ export interface PersistedExchangeState {
   outboxEvents?: [string, TransactionalOutboxEvent][];
   idempotencyRecords?: [string, IdempotencyRecord][];
   portfolioRebalanceConfigs?: [string, PortfolioRebalanceConfig][];
+  externalWsWhitelist?: [string, ExternalWsWhitelistEntry][];
 }
 
 class DatabaseStore {
@@ -126,6 +128,7 @@ class DatabaseStore {
   outboxEvents: Map<string, TransactionalOutboxEvent> = new Map();
   idempotencyRecords: Map<string, IdempotencyRecord> = new Map();
   portfolioRebalanceConfigs: Map<string, PortfolioRebalanceConfig> = new Map();
+  externalWsWhitelist: Map<string, ExternalWsWhitelistEntry> = new Map();
   
   private saveTimer: NodeJS.Timeout | null = null;
   private isSaving = false;
@@ -136,6 +139,7 @@ class DatabaseStore {
       console.log('[DIMONEX Database] Menginisialisasi data awal (seed bootstrap)...');
       this.seedInitialData();
       this.ensureInitialListingData();
+      this.ensureExternalWsWhitelist();
       this.ensureHistoricalTrades();
       this.recalculatePair24hStats();
       this.saveToDisk();
@@ -143,6 +147,7 @@ class DatabaseStore {
       this.ensureTradingPairs();
       this.ensureRequiredAccounts();
       this.ensureInitialListingData();
+      this.ensureExternalWsWhitelist();
       this.cleanExpiredSessions();
       this.ensureHistoricalTrades();
       this.recalculatePair24hStats();
@@ -1220,7 +1225,8 @@ class DatabaseStore {
         listingAuditEvents: this.listingAuditEvents,
         outboxEvents: Array.from(this.outboxEvents.entries()),
         idempotencyRecords: Array.from(this.idempotencyRecords.entries()),
-        portfolioRebalanceConfigs: Array.from(this.portfolioRebalanceConfigs.entries())
+        portfolioRebalanceConfigs: Array.from(this.portfolioRebalanceConfigs.entries()),
+        externalWsWhitelist: Array.from(this.externalWsWhitelist.entries())
       };
 
       const jsonStr = JSON.stringify(state, (key, value) =>
@@ -1344,6 +1350,7 @@ class DatabaseStore {
             if (data.outboxEvents) this.outboxEvents = new Map(data.outboxEvents);
             if (data.idempotencyRecords) this.idempotencyRecords = new Map(data.idempotencyRecords);
             if (data.portfolioRebalanceConfigs) this.portfolioRebalanceConfigs = new Map(data.portfolioRebalanceConfigs);
+            if (data.externalWsWhitelist) this.externalWsWhitelist = new Map(data.externalWsWhitelist);
 
             this.lastLoadedMtime = fs.statSync(p).mtimeMs;
             console.log(`[DIMONEX Database] Berhasil memuat snapshot disk (${p}): ${this.users.size} pengguna, ${this.orders.size} order, ${this.trades.length} transaksi, ${this.sessions.size} sesi login aktif.`);
@@ -1671,6 +1678,33 @@ class DatabaseStore {
         updatedAt: Date.now() - 3600000 * 5
       });
     }
+  }
+
+  public ensureExternalWsWhitelist() {
+    if (this.externalWsWhitelist.size > 0) return;
+
+    const defaults: ExternalWsWhitelistEntry[] = [
+      { symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', label: 'Bitcoin / USDT (Benchmark Utama)', providers: ['binance', 'bybit'], enabled: true, addedBy: 'SYSTEM', addedAt: Date.now() },
+      { symbol: 'ETHUSDT', baseAsset: 'ETH', quoteAsset: 'USDT', label: 'Ethereum / USDT', providers: ['binance', 'bybit'], enabled: true, addedBy: 'SYSTEM', addedAt: Date.now() },
+      { symbol: 'SOLUSDT', baseAsset: 'SOL', quoteAsset: 'USDT', label: 'Solana / USDT', providers: ['binance', 'bybit'], enabled: true, addedBy: 'SYSTEM', addedAt: Date.now() },
+      { symbol: 'BNBUSDT', baseAsset: 'BNB', quoteAsset: 'USDT', label: 'BNB / USDT', providers: ['binance', 'bybit'], enabled: true, addedBy: 'SYSTEM', addedAt: Date.now() },
+      { symbol: 'XRPUSDT', baseAsset: 'XRP', quoteAsset: 'USDT', label: 'Ripple / USDT', providers: ['binance', 'bybit'], enabled: true, addedBy: 'SYSTEM', addedAt: Date.now() },
+      { symbol: 'DOGEUSDT', baseAsset: 'DOGE', quoteAsset: 'USDT', label: 'Dogecoin / USDT', providers: ['binance', 'bybit'], enabled: true, addedBy: 'SYSTEM', addedAt: Date.now() }
+    ];
+
+    for (const item of defaults) {
+      this.externalWsWhitelist.set(item.symbol, item);
+    }
+  }
+
+  public getEnabledExternalWsSymbols(provider?: 'binance' | 'bybit'): string[] {
+    const out: string[] = [];
+    for (const entry of this.externalWsWhitelist.values()) {
+      if (!entry.enabled) continue;
+      if (provider && !entry.providers.includes(provider)) continue;
+      out.push(entry.symbol.toUpperCase());
+    }
+    return out;
   }
 }
 
