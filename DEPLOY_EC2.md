@@ -97,22 +97,23 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 ## 5. Langkah 3 — Deploy Aplikasi DIMONEX
 
 ```bash
-# Buat direktori aplikasi
+# Buat direktori induk & clone repository resmi DIMONEX
 sudo mkdir -p /var/www/dimonex
 sudo chown -R ubuntu:ubuntu /var/www/dimonex
 cd /var/www/dimonex
 
-# Clone repository DIMONEX Anda
-git clone <URL_REPOSITORY_GIT_ANDA> .
+git clone https://github.com/dptr21-cyber/DIMONEX.git
+cd DIMONEX
+# Direktori kerja Anda sekarang: /var/www/dimonex/DIMONEX
 
 # Install seluruh dependencies produksi & dev untuk build frontend
 npm ci
 ```
 
-Konfigurasi environment variables di file `.env` (jangan pernah commit `.env` ke Git):
+Konfigurasi environment variables di file `/var/www/dimonex/DIMONEX/.env` (jangan pernah commit `.env` ke Git):
 
 ```bash
-cat << 'EOF' > /var/www/dimonex/.env
+cat << 'EOF' > /var/www/dimonex/DIMONEX/.env
 NODE_ENV=production
 PORT=3000
 JWT_SECRET=<GANTI_DENGAN_SECRET_ACAK_MINIMAL_64_KARAKTER>
@@ -121,39 +122,46 @@ APP_URL=https://exchange.domain-anda.com
 EOF
 ```
 
+*(Jika belum memakai domain dan masih mengakses via IP publik EC2 sementara, gunakan `http://<PUBLIC_IP_EC2>` pada `CORS_ORIGINS` dan `APP_URL`)*
+
 Generate `JWT_SECRET` kriptografis yang kuat dengan:
 ```bash
 openssl rand -hex 32
 ```
 
-Build frontend & server produksi, lalu jalankan suite verifikasi finansial:
+Build frontend & server produksi, lalu jalankan suite verifikasi finansial dari dalam `/var/www/dimonex/DIMONEX`:
 
 ```bash
+cd /var/www/dimonex/DIMONEX
 npm run build
 npx tsx server/tests/run_tests.ts
 ```
 
-Pastikan output suite berakhir dengan `17 Passed, 0 Failed`.
+Pastikan output suite berakhir dengan `24 PASSED, 0 FAILED` dan seluruh fase listing test lolos.
 
 ---
 
 ## 6. Langkah 4 — Jalankan 24/7 dengan PM2 (Wajib Single-Instance Fork Mode)
 
-Buat file `/var/www/dimonex/ecosystem.config.cjs`:
+Buat file `/var/www/dimonex/DIMONEX/ecosystem.config.cjs`:
+
+> ⚠️ **Penting:** Jalankan `node server.ts` **secara langsung** via `script: 'server.ts'` (jangan memakai `script: 'npm', args: 'start'`), karena wrapper `npm` membuat PM2 hanya memantau proses `npm` (~20 MB) sementara proses `node` sebenarnya tidak terpantau oleh `max_memory_restart` dan terkena `SIGKILL` saat restart.
 
 ```javascript
 module.exports = {
   apps: [
     {
       name: 'dimonex-exchange',
-      script: 'npm',
-      args: 'start',
-      cwd: '/var/www/dimonex',
+      script: 'server.ts',
+      interpreter: 'node',
+      node_args: '--max-old-space-size=1024', // Gunakan 768 untuk RAM 1GB, 1024 untuk 2GB, 1536-2048 untuk 4GB+
+      cwd: '/var/www/dimonex/DIMONEX',
       instances: 1,          // WAJIB 1: In-memory OrderBook & Ledger bersifat single-process
       exec_mode: 'fork',     // JANGAN pakai 'cluster' agar tidak split-brain
       autorestart: true,
       watch: false,
-      max_memory_restart: '1500M',
+      max_memory_restart: '950M', // Sesuaikan sedikit di bawah --max-old-space-size agar restart mulus sebelum OOM
+      kill_timeout: 5000,         // Beri waktu 5 detik bagi SIGINT untuk flushSync() database ke disk
       env: {
         NODE_ENV: 'production',
         PORT: 3000
@@ -163,18 +171,40 @@ module.exports = {
 };
 ```
 
-Pastikan di `package.json` script `"start"` menjalankan entrypoint production (`node server.js` atau `tsx server.ts` sesuai output build Anda). Kemudian aktifkan PM2:
+Pastikan `npm run build` sudah dijalankan terlebih dahulu sehingga bundle `server.js` tersedia (dan dimuat otomatis oleh `server.ts`). Kemudian aktifkan PM2:
 
 ```bash
+cd /var/www/dimonex/DIMONEX
+pm2 delete dimonex-exchange 2>/dev/null || true
 pm2 start ecosystem.config.cjs
 pm2 save
 pm2 startup systemd
 # Jalankan perintah 'sudo env PATH=...' yang muncul dari output pm2 startup
 ```
 
-Pantau log secara real-time:
+Pantau log dan konsumsi memori asli proses Node.js:
 ```bash
+pm2 status
 pm2 logs dimonex-exchange
+```
+
+### Mengatasi `JavaScript heap out of memory` di EC2
+Jika Anda melihat error `FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory`:
+1. **Pastikan tidak memakai wrapper `npm start`** di `ecosystem.config.cjs` (pakai konfigurasi `script: 'server.ts'` di atas lalu `pm2 delete dimonex-exchange && pm2 start ecosystem.config.cjs`).
+2. **Aktifkan Swap 2 GB** jika instance memiliki RAM <= 4 GB (`t3.small` / `t3.medium`):
+   ```bash
+   free -h   # pastikan Swap tidak 0B
+   ```
+   (Jika `0B`, jalankan perintah `fallocate`/`mkswap`/`swapon` pada Langkah 2).
+3. **Kurangi jumlah bot aktif berinterval cepat** jika tidak diperlukan (pada instance kecil dengan 40+ bot ter-load, hentikan bot yang tidak terpakai via MM Console).
+
+### Update Kode Terbaru dari GitHub di EC2
+```bash
+cd /var/www/dimonex/DIMONEX
+git pull origin main
+npm ci
+npm run build
+pm2 restart dimonex-exchange
 ```
 
 ---

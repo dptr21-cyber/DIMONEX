@@ -444,7 +444,8 @@ export interface RiskControlsConfig {
   maxRuntimeMinutes: number;
   maxConsecutiveErrors: number;
   maxAllowedSlippagePct: number;
-  selfTradePreventionPolicy: 'CANCEL_MAKER' | 'CANCEL_TAKER' | 'REJECT_BOTH';
+  selfTradePreventionPolicy: 'ALLOW_WASH' | 'CANCEL_MAKER' | 'CANCEL_TAKER' | 'REJECT_BOTH';
+  riskControlsPolicyVersion?: number;
   isKillSwitchActive: boolean;
 }
 

@@ -48,6 +48,9 @@ export async function startServer() {
 
   // WebSocket Server for High-Speed Market Data
   const wss = new WebSocketServer({ server, path: '/ws' });
+  wss.on('error', (err: any) => {
+    console.error('[DIMONEX] WebSocket Server error:', err?.message || err);
+  });
   marketWsService.initialize(wss);
 
   // Mount API Endpoints
@@ -100,9 +103,9 @@ export async function startServer() {
       }
     });
   } else {
-    // Dynamically mount Vite middleware if dist has not been generated or in development
+    // Dynamically initialize Vite middleware in parallel so HTTP port binds immediately without startup timeouts
     console.log('[DIMONEX] dist/index.html not found, initializing Vite middleware...');
-    const vite = await createViteServer({
+    const vitePromise = createViteServer({
       server: {
         middlewareMode: true,
         hmr: false,
@@ -110,7 +113,14 @@ export async function startServer() {
       },
       appType: 'spa',
     });
-    app.use(vite.middlewares);
+    vitePromise.catch(err => {
+      console.error('[DIMONEX] Vite middleware initialization failed:', err);
+    });
+    app.use((req, res, next) => {
+      vitePromise
+        .then(vite => vite.middlewares(req, res, next))
+        .catch(next);
+    });
   }
 
   // Global Error Handler to catch any file/route issues gracefully
@@ -127,14 +137,16 @@ export async function startServer() {
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[DIMONEX] Full-Stack Exchange Engine listening on http://0.0.0.0:${PORT} (Mode: ${distExists ? 'PRODUCTION / STATIC' : 'DEVELOPMENT / VITE'})`);
 
-    // Fetch real live market FX rate from external API on startup - NO MOCK OR FAKE PRICES
-    fxConversionService.fetchAndSyncLiveRate('system@dimonex.id', 12).then(res => {
-      if (res.success && res.rateRecord) {
-        console.log(`[DIMONEX FX Engine] Real live USDT/IDR FX rate loaded from ${res.source}: Rp ${res.rateRecord.rate.toLocaleString()}`);
-      }
-    }).catch(err => {
-      console.warn('[DIMONEX FX Engine] Initial FX rate sync failed:', err.message);
-    });
+    // Defer external FX sync slightly so port binding & initial health/page loads remain instant
+    setTimeout(() => {
+      fxConversionService.fetchAndSyncLiveRate('system@dimonex.id', 12).then(res => {
+        if (res.success && res.rateRecord) {
+          console.log(`[DIMONEX FX Engine] Real live USDT/IDR FX rate loaded from ${res.source}: Rp ${res.rateRecord.rate.toLocaleString()}`);
+        }
+      }).catch(err => {
+        console.warn('[DIMONEX FX Engine] Initial FX rate sync failed:', err.message);
+      });
+    }, 1500);
 
     // Background periodic live rate sync every 60 seconds
     setInterval(() => {

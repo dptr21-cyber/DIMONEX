@@ -84,7 +84,7 @@ export function scheduleSaveBots() {
   saveBotsTimer = setTimeout(() => {
     saveBotsToDisk();
     saveBotsTimer = null;
-  }, 400);
+  }, 5000);
 }
 
 export function saveBotsToDisk() {
@@ -775,19 +775,31 @@ export function loadBotsFromDisk() {
           if (raw && raw.trim().length > 0) {
             const botsArray: ActiveBot[] = JSON.parse(raw);
             if (Array.isArray(botsArray)) {
+              let volIdx = 0;
+              let wasPruned = false;
               for (const bot of botsArray) {
                 if (bot.deployedOrderIds && bot.deployedOrderIds.length > 80) {
                   bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
+                  wasPruned = true;
+                }
+                if (bot.logs && bot.logs.length > 80) {
+                  bot.logs = bot.logs.slice(0, 80);
+                  wasPruned = true;
                 }
                 activeBots.set(bot.id, bot);
                 if (bot.status === 'RUNNING' && bot.strategy === 'VOLUME_BOT') {
-                  startVolumeBotRunner(bot.id);
+                  const delay = 2500 + volIdx * 250;
+                  volIdx++;
+                  setTimeout(() => {
+                    startVolumeBotRunner(bot.id);
+                  }, delay);
                 }
               }
               console.log(`[DIMONEX Bot Engine] Berhasil memuat ${activeBots.size} bot dari disk (${p}).`);
               loaded = true;
-              // Synchronize and write back immediately to disk so files are instantly pruned and kept in sync
-              saveBotsToDisk();
+              if (wasPruned) {
+                scheduleSaveBots();
+              }
               break;
             }
           }

@@ -115,9 +115,28 @@ Seluruh akun di bawah telah di-*pre-seed* ke dalam basis data transaksional ACID
 
 ***
 
-## 🚀 Panduan Deployment
+## ⚡ Quick Start (Clone & Jalankan Lokal)
 
-* **Amazon EC2 (Direkomendasikan untuk Production Stateful Engine, WebSocket & HFT Bot):** Lihat [DEPLOY_EC2.md](./DEPLOY_EC2.md) untuk analisis kelayakan arsitektur serta langkah lengkap *Launch an instance using EC2*, setup Nginx + WebSocket `/ws`, PM2 single-instance, dan SSL/TLS.
-* **Vercel Serverless (Hanya Preview / Terbatas):** Lihat [DEPLOY_VERCEL.md](./DEPLOY_VERCEL.md) untuk catatan keterbatasan environment serverless terhadap in-memory order book dan WebSocket persisten.
+```bash
+git clone https://github.com/dptr21-cyber/DIMONEX.git
+cd DIMONEX
+npm install
+npm run dev
+```
+Aplikasi berjalan pada `http://localhost:3000` (Frontend + API + WebSocket `/ws`).
 
+Untuk build production:
+```bash
+npm run build
+npm start
+```
+
+***
+
+## 🚀 Panduan Deployment (AWS EC2 & Lainnya)
+
+* **Amazon EC2 (Direkomendasikan untuk Production Stateful Engine, WebSocket & HFT Bot):**
+  * **Cocok & Direkomendasikan**: Arsitektur stateful *in-memory* matching engine, WebSocket `/ws`, dan worker Market Maker DIMONEX membutuhkan runtime persisten 24/7 serta disk EBS untuk snapshot `server/data/*.json`.
+  * Lihat **[DEPLOY_EC2.md](./DEPLOY_EC2.md)** untuk panduan lengkap *Launch an instance using EC2*, clone ke `/var/www/dimonex/DIMONEX`, konfigurasi `.env`, PM2 single-instance (`instances: 1`, `exec_mode: 'fork'`), Nginx reverse proxy (`/ws`), serta SSL Certbot.
+* **Vercel Serverless (Hanya Preview / Terbatas):** Lihat **[DEPLOY_VERCEL.md](./DEPLOY_VERCEL.md)** untuk catatan keterbatasan environment serverless terhadap *in-memory order book* dan WebSocket persisten.
 

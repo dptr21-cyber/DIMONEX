@@ -501,6 +501,9 @@ export class AdvancedMarketMakerBotExecutor {
     }
 
     cfg.activeOrderIds = newOrderIds;
+    if (bot.deployedOrderIds.length > 100) {
+      bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
+    }
     cfg.lastRepriceTimestamp = Date.now();
     bot.lastHeartbeat = Date.now();
 

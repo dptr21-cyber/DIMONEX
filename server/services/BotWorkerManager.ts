@@ -39,16 +39,21 @@ export class BotWorkerManager {
   private workers: Map<string, WorkerRuntime> = new Map();
 
   constructor() {
-    // Re-hydrate any RUNNING bot instances on server start
+    // Re-hydrate any RUNNING bot instances after HTTP & Vite startup complete
     setTimeout(() => {
       this.rehydrateRunningBots();
-    }, 1000);
+    }, 2500);
   }
 
   private rehydrateRunningBots() {
+    let idx = 0;
     for (const [id, bot] of db.botInstances.entries()) {
       if (bot.status === 'RUNNING') {
-        this.startWorker(id);
+        const offsetMs = idx * 150;
+        idx++;
+        setTimeout(() => {
+          this.startWorker(id);
+        }, offsetMs);
       }
     }
   }
@@ -703,6 +708,9 @@ export class BotWorkerManager {
         bot.stats.ordersSubmitted++;
         bot.stats.ordersAccepted++;
         bot.deployedOrderIds.push(result.takerOrder.id);
+        if (bot.deployedOrderIds.length > 100) {
+          bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
+        }
         runtime.ordersPlacedInWindow++;
 
         if (result.trades.length > 0) {
@@ -888,6 +896,9 @@ export class BotWorkerManager {
       bot.stats.ordersSubmitted++;
       bot.stats.ordersAccepted++;
       bot.deployedOrderIds.push(result.takerOrder.id);
+      if (bot.deployedOrderIds.length > 100) {
+        bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
+      }
 
       if (result.trades.length > 0) {
         bot.stats.ordersFilled += result.trades.length;

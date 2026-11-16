@@ -16,6 +16,23 @@ const BASE32_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 // Persistent HMAC Secret for stateless serverless sessions across Vercel instances
 const SESSION_SECRET = process.env.SESSION_SECRET || 'dimonex-stateless-hmac-secret-v1-production-2026';
 
+// Blocked disposable / spam / bot email domains for registration
+export const BLOCKED_REGISTRATION_DOMAINS: readonly string[] = [
+  'forexzig.com',
+  ...(process.env.BLOCKED_EMAIL_DOMAINS
+    ? process.env.BLOCKED_EMAIL_DOMAINS.split(',').map(d => d.trim().toLowerCase()).filter(Boolean)
+    : [])
+];
+
+export class BlockedEmailDomainError extends Error {
+  public readonly domain: string;
+  constructor(domain: string, message: string) {
+    super(message);
+    this.name = 'BlockedEmailDomainError';
+    this.domain = domain;
+  }
+}
+
 export interface SessionTokenPayload {
   userId: string;
   email: string;
@@ -25,6 +42,24 @@ export interface SessionTokenPayload {
 }
 
 export class AuthService {
+  /**
+   * Check whether an email belongs to a blocked domain or its subdomains.
+   */
+  static getBlockedDomain(email: string): string | null {
+    const cleanEmail = email.trim().toLowerCase();
+    const atIdx = cleanEmail.lastIndexOf('@');
+    if (atIdx === -1) return null;
+    const domain = cleanEmail.slice(atIdx + 1).replace(/\.+$/, '');
+    if (!domain) return null;
+
+    for (const blocked of BLOCKED_REGISTRATION_DOMAINS) {
+      if (domain === blocked || domain.endsWith(`.${blocked}`)) {
+        return blocked;
+      }
+    }
+    return null;
+  }
+
   /**
    * Issues a cryptographically signed HMAC-SHA256 token.
    * Self-contained and verifiable across all stateless Vercel Serverless Lambda instances.
@@ -120,9 +155,30 @@ export class AuthService {
   /**
    * Register a new user with default role 'user' and pending KYC.
    */
-  static register(email: string, password: string): { user: Omit<User, 'passwordHash' | 'passwordSalt'>; token: string } {
+  static register(email: string, password: string, ip = '127.0.0.1'): { user: Omit<User, 'passwordHash' | 'passwordSalt'>; token: string } {
     const cleanEmail = email.trim().toLowerCase();
-    
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      throw new Error('Format alamat email tidak valid.');
+    }
+
+    const blockedDomain = this.getBlockedDomain(cleanEmail);
+    if (blockedDomain) {
+      db.auditLogs.push({
+        id: crypto.randomUUID(),
+        actorId: cleanEmail,
+        action: 'REGISTRATION_BLOCKED_DOMAIN',
+        resource: blockedDomain,
+        details: `Pendaftaran ditolak untuk domain terblokir ${blockedDomain} (IP: ${ip}) guna mencegah spam/bot.`,
+        createdAt: Date.now()
+      });
+      db.scheduleSave();
+      throw new BlockedEmailDomainError(
+        blockedDomain,
+        `Pendaftaran dari domain ${blockedDomain} diblokir untuk mencegah spam dan akun bot.`
+      );
+    }
+
     // Check existing
     for (const [_, u] of db.users.entries()) {
       if (u.email === cleanEmail) {

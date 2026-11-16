@@ -797,10 +797,17 @@ mmConsoleRouter.get('/risk-controls', requireMMOrAdmin, (req, res) => {
 
 mmConsoleRouter.post('/risk-controls/update', requireAdmin, (req, res) => {
   try {
-    const updates = req.body;
+    const updates = { ...(req.body || {}) };
+    if (updates.selfTradePreventionPolicy !== undefined) {
+      const allowedPolicies = ['ALLOW_WASH', 'CANCEL_MAKER', 'CANCEL_TAKER', 'REJECT_BOTH'];
+      if (!allowedPolicies.includes(updates.selfTradePreventionPolicy)) {
+        return res.status(400).json({ error: `Kebijakan STP tidak valid: ${updates.selfTradePreventionPolicy}` });
+      }
+    }
     db.riskControls = {
       ...db.riskControls,
-      ...updates
+      ...updates,
+      riskControlsPolicyVersion: 2
     };
     db.scheduleSave();
     res.json({ success: true, message: 'Risk controls berhasil diperbarui', riskControls: db.riskControls });

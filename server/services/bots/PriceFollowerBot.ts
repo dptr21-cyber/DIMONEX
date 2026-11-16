@@ -193,6 +193,9 @@ export class PriceFollowerBotExecutor {
         }
 
         bot.deployedOrderIds.push(placedOrder.id);
+        if (bot.deployedOrderIds.length > 100) {
+          bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
+        }
         bot.stats.ordersSubmitted += 1;
         bot.stats.ordersAccepted += 1;
 

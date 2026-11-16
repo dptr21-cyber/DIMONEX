@@ -3337,8 +3337,35 @@ export const MMConsoleView: React.FC<Props> = ({
               <strong className="text-amber-400 text-base">{riskControls?.maxAllowedSlippagePct ?? 2.5}%</strong>
             </div>
             <div className="p-3 bg-[#0f172a] rounded-lg border border-[#1e293b]">
-              <span className="text-slate-400 block mb-1">Self-Trade Prevention (STP)</span>
-              <strong className="text-emerald-400 text-base">{riskControls?.selfTradePreventionPolicy ?? 'CANCEL_MAKER'}</strong>
+              <span className="text-slate-400 block mb-1">Self-Trade Policy (STP)</span>
+              <div className="flex items-center justify-between gap-2">
+                <strong className={`text-sm ${(riskControls?.selfTradePreventionPolicy ?? 'ALLOW_WASH') === 'ALLOW_WASH' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  {riskControls?.selfTradePreventionPolicy ?? 'ALLOW_WASH'}
+                </strong>
+                <select
+                  value={riskControls?.selfTradePreventionPolicy ?? 'ALLOW_WASH'}
+                  onChange={async (e) => {
+                    const nextPolicy = e.target.value;
+                    try {
+                      const res = await handleAction('/api/mm/risk-controls/update', 'POST', {
+                        selfTradePreventionPolicy: nextPolicy
+                      });
+                      if (res?.riskControls) setRiskControls(res.riskControls);
+                    } catch {}
+                  }}
+                  className="bg-[#1e293b] text-slate-200 text-[11px] px-2 py-1 rounded border border-[#334155] focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="ALLOW_WASH">ALLOW_WASH (Match Langsung)</option>
+                  <option value="CANCEL_MAKER">CANCEL_MAKER (Tolak Wash)</option>
+                  <option value="CANCEL_TAKER">CANCEL_TAKER</option>
+                  <option value="REJECT_BOTH">REJECT_BOTH</option>
+                </select>
+              </div>
+              <span className="text-[10px] text-slate-500 mt-1 block">
+                {(riskControls?.selfTradePreventionPolicy ?? 'ALLOW_WASH') === 'ALLOW_WASH'
+                  ? 'Order BUY/SELL milik sendiri langsung match tanpa lompat level.'
+                  : 'Order akun sama dibatalkan sesuai kebijakan STP.'}
+              </span>
             </div>
           </div>
         </div>

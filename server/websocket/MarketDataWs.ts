@@ -143,7 +143,11 @@ export class MarketDataWebSocketService {
     }
     const message = JSON.stringify({ channel, ...payload });
     for (const client of this.clients) {
-      if ((client.channels.has(channel) || channel === 'ticker') && client.ws.readyState === WebSocket.OPEN) {
+      if (
+        (client.channels.has(channel) || channel === 'ticker') &&
+        client.ws.readyState === WebSocket.OPEN &&
+        client.ws.bufferedAmount < 1024 * 1024
+      ) {
         client.ws.send(message);
       }
     }

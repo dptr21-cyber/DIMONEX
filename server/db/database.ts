@@ -36,7 +36,8 @@ export const DEFAULT_RISK_CONTROLS: RiskControlsConfig = {
   maxRuntimeMinutes: 1440,
   maxConsecutiveErrors: 10,
   maxAllowedSlippagePct: 2.5,
-  selfTradePreventionPolicy: 'CANCEL_MAKER',
+  selfTradePreventionPolicy: 'ALLOW_WASH',
+  riskControlsPolicyVersion: 2,
   isKillSwitchActive: false
 };
 
@@ -145,7 +146,7 @@ class DatabaseStore {
       this.cleanExpiredSessions();
       this.ensureHistoricalTrades();
       this.recalculatePair24hStats();
-      this.saveToDisk();
+      this.scheduleSave();
     }
 
     // Register exit handlers to ensure state is flushed to disk
@@ -714,7 +715,7 @@ class DatabaseStore {
     this.saveTimer = setTimeout(() => {
       this.saveToDisk();
       this.saveTimer = null;
-    }, 2000);
+    }, 5000);
   }
 
   public flushSync() {
@@ -1155,6 +1156,39 @@ class DatabaseStore {
         }
       }
 
+      // Keep recent ledger entries (last 2,000) to avoid unbounded memory growth
+      if (this.ledgerEntries.length > 2500) {
+        this.ledgerEntries = this.ledgerEntries.slice(-2000);
+      }
+
+      // Remove expired sessions continuously
+      const nowMs = Date.now();
+      for (const [tokenKey, sess] of this.sessions.entries()) {
+        if (sess.expiresAt <= nowMs) {
+          this.sessions.delete(tokenKey);
+        }
+      }
+
+      // Bound per-bot deployedOrderIds and logs in memory & snapshots
+      for (const bot of this.botInstances.values()) {
+        if (bot.deployedOrderIds && bot.deployedOrderIds.length > 100) {
+          bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
+        }
+        if (bot.logs && bot.logs.length > 100) {
+          bot.logs = bot.logs.slice(0, 80);
+        }
+      }
+
+      // Bound outbox and idempotency records
+      if (this.outboxEvents.size > 1500) {
+        const entries = Array.from(this.outboxEvents.entries()).slice(-1000);
+        this.outboxEvents = new Map(entries);
+      }
+      if (this.idempotencyRecords.size > 1500) {
+        const entries = Array.from(this.idempotencyRecords.entries()).slice(-1000);
+        this.idempotencyRecords = new Map(entries);
+      }
+
       const state: PersistedExchangeState = {
         version: 1,
         savedAt: Date.now(),
@@ -1264,7 +1298,14 @@ class DatabaseStore {
             const closedOrders: [string, Order][] = [];
             for (const [id, order] of rawOrders) {
               if (order.status === 'NEW' || order.status === 'PARTIALLY_FILLED') {
-                openOrders.push([id, order]);
+                // Expired IOC / MARKET orders from legacy snapshots should never stay open in the book
+                if (order.status === 'PARTIALLY_FILLED' && (order.timeInForce === 'IOC' || order.orderType === 'MARKET')) {
+                  order.status = 'CANCELLED';
+                  order.lockedAmount = '0';
+                  closedOrders.push([id, order]);
+                } else {
+                  openOrders.push([id, order]);
+                }
               } else {
                 closedOrders.push([id, order]);
               }
@@ -1284,6 +1325,12 @@ class DatabaseStore {
             this.botInstances = new Map(data.botInstances || []);
             if (data.riskControls) {
               this.riskControls = { ...DEFAULT_RISK_CONTROLS, ...data.riskControls };
+              if (!data.riskControls.riskControlsPolicyVersion || data.riskControls.riskControlsPolicyVersion < 2) {
+                if (this.riskControls.selfTradePreventionPolicy === 'CANCEL_MAKER') {
+                  this.riskControls.selfTradePreventionPolicy = 'ALLOW_WASH';
+                }
+                this.riskControls.riskControlsPolicyVersion = 2;
+              }
             }
             if (data.assets) this.assets = new Map(data.assets);
             if (data.listingRequests) this.listingRequests = new Map(data.listingRequests);

@@ -7,7 +7,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { AuthService } from '../auth/AuthService.js';
+import { AuthService, BlockedEmailDomainError } from '../auth/AuthService.js';
 import { db } from '../db/database.js';
 
 export const authRouter = Router();
@@ -58,9 +58,17 @@ authRouter.post('/register', (req, res) => {
     if (!email || !password) {
       return res.status(400).json({ error: 'Email dan kata sandi wajib diisi' });
     }
-    const result = AuthService.register(email, password);
+    const ip = req.ip || '127.0.0.1';
+    const result = AuthService.register(email, password, ip);
     res.json(result);
   } catch (err: any) {
+    if (err instanceof BlockedEmailDomainError) {
+      return res.status(403).json({
+        error: err.message,
+        code: 'BLOCKED_EMAIL_DOMAIN',
+        domain: err.domain
+      });
+    }
     res.status(400).json({ error: err.message });
   }
 });

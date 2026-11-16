@@ -25,9 +25,21 @@ export const AuthModal: React.FC<Props> = ({ isOpen, onClose, onAuthSuccess }) =
 
   if (!isOpen) return null;
 
+  const BLOCKED_DOMAINS = ['forexzig.com'];
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+
+    if (tab === 'REGISTER') {
+      const domain = email.trim().toLowerCase().split('@')[1]?.replace(/\.+$/, '') || '';
+      const matchedBlocked = BLOCKED_DOMAINS.find(b => domain === b || domain.endsWith(`.${b}`));
+      if (matchedBlocked) {
+        setErrorMessage(`Pendaftaran dari domain ${matchedBlocked} diblokir untuk mencegah spam dan akun bot.`);
+        return;
+      }
+    }
+
     setIsLoading(true);
 
     const endpoint = tab === 'LOGIN' ? '/api/auth/login' : '/api/auth/register';

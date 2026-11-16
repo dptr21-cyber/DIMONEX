@@ -216,6 +216,17 @@ export class LedgerService {
     db.scheduleSave();
   }
 
+  static unlockBalanceUpToLocked(userId: string, currency: string, amountUnits: bigint): bigint {
+    if (amountUnits <= 0n) return 0n;
+    const userAcc = db.createOrGetAccount(userId, currency);
+    const locked = BigInt(userAcc.balanceLocked);
+    const toUnlock = amountUnits > locked ? locked : amountUnits;
+    if (toUnlock > 0n) {
+      this.unlockBalance(userId, currency, toUnlock);
+    }
+    return toUnlock;
+  }
+
   /**
    * Settle a trade match between Maker and Taker atomically.
    */
@@ -232,6 +243,8 @@ export class LedgerService {
     quoteVolumeUnits: bigint;
     makerFeeUnits: bigint;
     takerFeeUnits: bigint;
+    makerLockedSliceUnits?: bigint;
+    takerLockedSliceUnits?: bigint;
   }): void {
     const {
       tradeId,
@@ -243,7 +256,9 @@ export class LedgerService {
       matchQuantityUnits,
       quoteVolumeUnits,
       makerFeeUnits,
-      takerFeeUnits
+      takerFeeUnits,
+      makerLockedSliceUnits,
+      takerLockedSliceUnits
     } = params;
 
     // Accounts involved
@@ -254,50 +269,81 @@ export class LedgerService {
     const feeQuoteAcc = db.createOrGetAccount(SYSTEM_FEE_ID, quoteCurrency);
 
     if (makerSide === 'BUY') {
-      // Maker was buying Base, paying Quote (already locked quote)
-      // Taker is selling Base, receiving Quote (locks/pays base)
+      // Maker was buying Base, paying Quote (already locked quote + est takerFee)
+      // Taker is selling Base, receiving Quote (already locked base)
 
-      // 1. Release Maker's locked quote:
+      // 1. Release Maker's locked quote slice & settle exact Maker cost (quoteVolume + makerFee):
       const makerQuoteLocked = BigInt(makerQuoteAcc.balanceLocked);
-      if (makerQuoteLocked < quoteVolumeUnits) {
-        throw new Error('Maker locked quote balance underflow during trade settlement');
-      }
-      makerQuoteAcc.balanceLocked = (makerQuoteLocked - quoteVolumeUnits).toString();
+      const totalMakerCost = quoteVolumeUnits + makerFeeUnits;
 
-      // 2. Transfer Base: Taker -> Maker
-      // Taker base comes from Taker's available or locked:
-      const takerBaseAvail = BigInt(takerBaseAcc.balanceAvailable);
-      if (takerBaseAvail >= matchQuantityUnits) {
-        takerBaseAcc.balanceAvailable = (takerBaseAvail - matchQuantityUnits).toString();
+      if (makerLockedSliceUnits !== undefined) {
+        const releaseFromLocked = makerLockedSliceUnits <= makerQuoteLocked ? makerLockedSliceUnits : makerQuoteLocked;
+        makerQuoteAcc.balanceLocked = (makerQuoteLocked - releaseFromLocked).toString();
+
+        if (releaseFromLocked >= totalMakerCost) {
+          const refund = releaseFromLocked - totalMakerCost;
+          if (refund > 0n) {
+            makerQuoteAcc.balanceAvailable = (BigInt(makerQuoteAcc.balanceAvailable) + refund).toString();
+          }
+        } else {
+          const shortfall = totalMakerCost - releaseFromLocked;
+          const makerAvail = BigInt(makerQuoteAcc.balanceAvailable);
+          if (makerAvail >= shortfall) {
+            makerQuoteAcc.balanceAvailable = (makerAvail - shortfall).toString();
+          } else {
+            const remLocked = BigInt(makerQuoteAcc.balanceLocked);
+            if (makerAvail + remLocked >= shortfall) {
+              makerQuoteAcc.balanceAvailable = '0';
+              makerQuoteAcc.balanceLocked = (remLocked - (shortfall - makerAvail)).toString();
+            } else {
+              throw new Error('Maker insufficient quote balance during trade settlement');
+            }
+          }
+        }
       } else {
-        const takerBaseLocked = BigInt(takerBaseAcc.balanceLocked);
-        if (takerBaseLocked < matchQuantityUnits) {
+        if (makerQuoteLocked < quoteVolumeUnits) {
+          throw new Error('Maker locked quote balance underflow during trade settlement');
+        }
+        makerQuoteAcc.balanceLocked = (makerQuoteLocked - quoteVolumeUnits).toString();
+        if (makerFeeUnits > 0n) {
+          const makerAvail = BigInt(makerQuoteAcc.balanceAvailable);
+          if (makerAvail >= makerFeeUnits) {
+            makerQuoteAcc.balanceAvailable = (makerAvail - makerFeeUnits).toString();
+          }
+        }
+      }
+
+      // 2. Transfer Base: Taker -> Maker (deduct from Taker's LOCKED balance FIRST)
+      const takerBaseLocked = BigInt(takerBaseAcc.balanceLocked);
+      if (takerBaseLocked >= matchQuantityUnits) {
+        takerBaseAcc.balanceLocked = (takerBaseLocked - matchQuantityUnits).toString();
+      } else {
+        const rem = matchQuantityUnits - takerBaseLocked;
+        const takerBaseAvail = BigInt(takerBaseAcc.balanceAvailable);
+        if (takerBaseAvail < rem) {
           throw new Error('Taker insufficient base balance');
         }
-        takerBaseAcc.balanceLocked = (takerBaseLocked - matchQuantityUnits).toString();
+        takerBaseAcc.balanceLocked = '0';
+        takerBaseAcc.balanceAvailable = (takerBaseAvail - rem).toString();
       }
       // Credit Maker Base:
       makerBaseAcc.balanceAvailable = (BigInt(makerBaseAcc.balanceAvailable) + matchQuantityUnits).toString();
 
       // 3. Transfer Quote: Maker -> Taker (minus taker fee) & Fee Collector
       const netTakerQuote = quoteVolumeUnits > takerFeeUnits ? quoteVolumeUnits - takerFeeUnits : 0n;
-      takerQuoteAcc.balanceAvailable = (BigInt(takerQuoteAcc.balanceAvailable) + netTakerQuote).toString();
-
-      // Maker fee deduction from Maker's quote or base
-      if (makerFeeUnits > 0n) {
-        const makerAvail = BigInt(makerQuoteAcc.balanceAvailable);
-        if (makerAvail >= makerFeeUnits) {
-          makerQuoteAcc.balanceAvailable = (makerAvail - makerFeeUnits).toString();
-        }
+      if (netTakerQuote > 0n) {
+        takerQuoteAcc.balanceAvailable = (BigInt(takerQuoteAcc.balanceAvailable) + netTakerQuote).toString();
       }
 
       // Collect fees into exchange revenue account
       const totalFee = makerFeeUnits + takerFeeUnits;
-      feeQuoteAcc.balanceAvailable = (BigInt(feeQuoteAcc.balanceAvailable) + totalFee).toString();
+      if (totalFee > 0n) {
+        feeQuoteAcc.balanceAvailable = (BigInt(feeQuoteAcc.balanceAvailable) + totalFee).toString();
+      }
 
     } else {
       // Maker was SELLING Base (already locked base)
-      // Taker is BUYING Base, paying Quote
+      // Taker is BUYING Base, paying Quote (already locked quote + est takerFee)
 
       // 1. Release Maker's locked Base:
       const makerBaseLocked = BigInt(makerBaseAcc.balanceLocked);
@@ -309,35 +355,65 @@ export class LedgerService {
       // 2. Transfer Base to Taker:
       takerBaseAcc.balanceAvailable = (BigInt(takerBaseAcc.balanceAvailable) + matchQuantityUnits).toString();
 
-      // 3. Deduct Quote from Taker:
-      const takerQuoteAvail = BigInt(takerQuoteAcc.balanceAvailable);
+      // 3. Deduct Quote from Taker (deduct from LOCKED balance FIRST, refund unused fee/price improvement):
       const totalTakerCost = quoteVolumeUnits + takerFeeUnits;
-      if (takerQuoteAvail >= totalTakerCost) {
-        takerQuoteAcc.balanceAvailable = (takerQuoteAvail - totalTakerCost).toString();
+      const takerLocked = BigInt(takerQuoteAcc.balanceLocked);
+
+      if (takerLockedSliceUnits !== undefined) {
+        const releaseFromLocked = takerLockedSliceUnits <= takerLocked ? takerLockedSliceUnits : takerLocked;
+        takerQuoteAcc.balanceLocked = (takerLocked - releaseFromLocked).toString();
+
+        if (releaseFromLocked >= totalTakerCost) {
+          const refund = releaseFromLocked - totalTakerCost;
+          if (refund > 0n) {
+            takerQuoteAcc.balanceAvailable = (BigInt(takerQuoteAcc.balanceAvailable) + refund).toString();
+          }
+        } else {
+          const shortfall = totalTakerCost - releaseFromLocked;
+          const takerQuoteAvail = BigInt(takerQuoteAcc.balanceAvailable);
+          if (takerQuoteAvail >= shortfall) {
+            takerQuoteAcc.balanceAvailable = (takerQuoteAvail - shortfall).toString();
+          } else {
+            const remLocked = BigInt(takerQuoteAcc.balanceLocked);
+            if (takerQuoteAvail + remLocked >= shortfall) {
+              takerQuoteAcc.balanceAvailable = '0';
+              takerQuoteAcc.balanceLocked = (remLocked - (shortfall - takerQuoteAvail)).toString();
+            } else {
+              throw new Error('Taker insufficient quote balance during settlement');
+            }
+          }
+        }
       } else {
-        const takerLocked = BigInt(takerQuoteAcc.balanceLocked);
         if (takerLocked >= totalTakerCost) {
           takerQuoteAcc.balanceLocked = (takerLocked - totalTakerCost).toString();
         } else {
-          // Combination
           const rem = totalTakerCost - takerLocked;
+          const takerQuoteAvail = BigInt(takerQuoteAcc.balanceAvailable);
+          if (takerQuoteAvail < rem) {
+            throw new Error('Taker insufficient quote balance during settlement');
+          }
           takerQuoteAcc.balanceLocked = '0';
-          takerQuoteAcc.balanceAvailable = (BigInt(takerQuoteAcc.balanceAvailable) - rem).toString();
+          takerQuoteAcc.balanceAvailable = (takerQuoteAvail - rem).toString();
         }
       }
 
       // 4. Credit Quote to Maker (minus maker fee):
       const netMakerQuote = quoteVolumeUnits > makerFeeUnits ? quoteVolumeUnits - makerFeeUnits : 0n;
-      makerQuoteAcc.balanceAvailable = (BigInt(makerQuoteAcc.balanceAvailable) + netMakerQuote).toString();
+      if (netMakerQuote > 0n) {
+        makerQuoteAcc.balanceAvailable = (BigInt(makerQuoteAcc.balanceAvailable) + netMakerQuote).toString();
+      }
 
       // Collect fees
       const totalFee = makerFeeUnits + takerFeeUnits;
-      feeQuoteAcc.balanceAvailable = (BigInt(feeQuoteAcc.balanceAvailable) + totalFee).toString();
+      if (totalFee > 0n) {
+        feeQuoteAcc.balanceAvailable = (BigInt(feeQuoteAcc.balanceAvailable) + totalFee).toString();
+      }
     }
 
-    // Update timestamps & versions
+    // Update timestamps & versions (deduplicate accounts for self-trades)
     const now = Date.now();
-    [makerBaseAcc, makerQuoteAcc, takerBaseAcc, takerQuoteAcc, feeQuoteAcc].forEach(acc => {
+    const uniqueAccounts = new Set([makerBaseAcc, makerQuoteAcc, takerBaseAcc, takerQuoteAcc, feeQuoteAcc]);
+    uniqueAccounts.forEach(acc => {
       acc.version += 1;
       acc.updatedAt = now;
     });

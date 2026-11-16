@@ -359,6 +359,9 @@ export class QuantHftBotExecutor {
         bot.stats.ordersSubmitted++;
         bot.stats.ordersAccepted++;
         bot.deployedOrderIds.push(res.takerOrder.id);
+        if (bot.deployedOrderIds.length > 100) {
+          bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
+        }
         newActiveOrderIds.push(res.takerOrder.id);
         placedCount++;
 

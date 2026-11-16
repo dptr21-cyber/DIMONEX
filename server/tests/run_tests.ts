@@ -361,9 +361,9 @@ async function runAll20MandatoryTests() {
   botWorkerManager.stopWorker(clonedBotId, true);
 
   // -------------------------------------------------------------
-  // TEST 15: Self-trade prevention follows the configured policy
+  // TEST 15: Self-trade policy (Default ALLOW_WASH matches without jumping & 0 locked drift; CANCEL_MAKER when configured)
   // -------------------------------------------------------------
-  console.log('\n--- Test 15: Self-Trade Prevention (STP) ---');
+  console.log('\n--- Test 15: Self-Trade Policy (ALLOW_WASH Default & Configurable STP) ---');
   // Clear any existing orders in ETH-IDR book for user1 to prevent interference
   for (const order of db.orders.values()) {
     if (order.userId === user1Id && order.pairId === 'ETH-IDR' && (order.status === 'NEW' || order.status === 'PARTIALLY_FILLED')) {
@@ -371,7 +371,7 @@ async function runAll20MandatoryTests() {
     }
   }
 
-  // Ensure safe bid price strictly between highest bid and lowest ask so BUY rests at top of bids
+  // Ensure safe price strictly between highest bid and lowest ask so resting order sits at top of book
   const ethBook = matchingEngine.getOrderBook('ETH-IDR');
   const ethBestBid = ethBook.bids.length > 0 ? BigInt(ethBook.bids[0].price) : 4000000000n;
   const ethBestAsk = ethBook.asks.length > 0 ? BigInt(ethBook.asks[0].price) : 6000000000n;
@@ -380,8 +380,17 @@ async function runAll20MandatoryTests() {
   if (safePriceBigInt >= ethBestAsk) safePriceBigInt = ethBestAsk - 1000000n;
   const safePrice = safePriceBigInt.toString();
 
-  // User 1 places limit BUY that rests on top of bids
-  matchingEngine.placeOrder({
+  // Verify default policy is ALLOW_WASH
+  const prevPolicy = db.riskControls.selfTradePreventionPolicy;
+  db.riskControls.selfTradePreventionPolicy = 'ALLOW_WASH';
+
+  const idrBeforeSelf = BigInt(db.createOrGetAccount(user1Id, 'IDR').balanceLocked);
+  const ethBeforeSelf = BigInt(db.createOrGetAccount(user1Id, 'ETH').balanceLocked);
+  const idrTotalBefore = BigInt(db.createOrGetAccount(user1Id, 'IDR').balanceAvailable) + idrBeforeSelf;
+  const ethTotalBefore = BigInt(db.createOrGetAccount(user1Id, 'ETH').balanceAvailable) + ethBeforeSelf;
+
+  // 15a: Same user BUY rests on book, then SELL crosses it -> matches directly without jumping
+  const washBuyMaker = matchingEngine.placeOrder({
     userId: user1Id,
     pairId: 'ETH-IDR',
     side: 'BUY',
@@ -389,17 +398,74 @@ async function runAll20MandatoryTests() {
     price: safePrice,
     quantity: '10000000' // 0.1 ETH
   });
-  // User 1 places limit SELL at same price -> must trigger STP against own BUY
-  const stpResult = matchingEngine.placeOrder({
-    userId: user1Id, // Same user!
+  const washSellTaker = matchingEngine.placeOrder({
+    userId: user1Id,
     pairId: 'ETH-IDR',
     side: 'SELL',
     orderType: 'LIMIT',
     price: safePrice,
     quantity: '10000000'
   });
-  const stpWorked = stpResult.cancelledOrders.length > 0 && stpResult.trades.length === 0;
-  assert(stpWorked, '15. Self-trade prevention follows configured policy (Cancels maker, 0 wash trades)');
+
+  // 15b: Same user SELL rests on book, then BUY crosses it at higher limit -> matches at maker price & unlocks fee/improvement
+  const higherPrice = (safePriceBigInt + 500000n).toString();
+  matchingEngine.placeOrder({
+    userId: user1Id,
+    pairId: 'ETH-IDR',
+    side: 'SELL',
+    orderType: 'LIMIT',
+    price: safePrice,
+    quantity: '10000000'
+  });
+  const washBuyTaker = matchingEngine.placeOrder({
+    userId: user1Id,
+    pairId: 'ETH-IDR',
+    side: 'BUY',
+    orderType: 'LIMIT',
+    price: higherPrice,
+    quantity: '10000000'
+  });
+
+  const idrAfterSelf = BigInt(db.createOrGetAccount(user1Id, 'IDR').balanceLocked);
+  const ethAfterSelf = BigInt(db.createOrGetAccount(user1Id, 'ETH').balanceLocked);
+  const idrTotalAfter = BigInt(db.createOrGetAccount(user1Id, 'IDR').balanceAvailable) + idrAfterSelf;
+  const ethTotalAfter = BigInt(db.createOrGetAccount(user1Id, 'ETH').balanceAvailable) + ethAfterSelf;
+
+  const washAllowedOk =
+    washBuyMaker.takerOrder.id !== '' &&
+    washSellTaker.trades.length === 1 &&
+    washSellTaker.cancelledOrders.length === 0 &&
+    washBuyTaker.trades.length === 1 &&
+    washBuyTaker.trades[0].price === safePrice &&
+    idrAfterSelf === idrBeforeSelf &&
+    ethAfterSelf === ethBeforeSelf &&
+    idrTotalAfter === idrTotalBefore &&
+    ethTotalAfter === ethTotalBefore;
+
+  // 15c: When policy explicitly set to CANCEL_MAKER, STP cancels maker
+  db.riskControls.selfTradePreventionPolicy = 'CANCEL_MAKER';
+  matchingEngine.placeOrder({
+    userId: user1Id,
+    pairId: 'ETH-IDR',
+    side: 'BUY',
+    orderType: 'LIMIT',
+    price: safePrice,
+    quantity: '10000000'
+  });
+  const stpResult = matchingEngine.placeOrder({
+    userId: user1Id,
+    pairId: 'ETH-IDR',
+    side: 'SELL',
+    orderType: 'LIMIT',
+    price: safePrice,
+    quantity: '10000000'
+  });
+  // Cancel resting taker SELL from CANCEL_MAKER test to keep book clean
+  try { matchingEngine.cancelOrder(stpResult.takerOrder.id, user1Id, 'ETH-IDR'); } catch {}
+  db.riskControls.selfTradePreventionPolicy = prevPolicy || 'ALLOW_WASH';
+
+  const stpCancelOk = stpResult.cancelledOrders.length > 0 && stpResult.trades.length === 0;
+  assert(washAllowedOk && stpCancelOk, '15. Self-trade policy allows wash matching by default (0 locked drift) & supports CANCEL_MAKER');
 
   // -------------------------------------------------------------
   // TEST 16: Insufficient balances prevent order acceptance
