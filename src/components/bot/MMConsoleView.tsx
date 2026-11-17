@@ -17,9 +17,10 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { UserProfile, TradingPairItem, BotInstance, OrderItem, TradeItem, Environment, BotStatus, BotType, ExternalWsWhitelistEntry } from '../../types/index.js';
+import { UserProfile, TradingPairItem, BotInstance, OrderItem, TradeItem, Environment, BotStatus, BotType, ExternalWsWhitelistEntry, BacktestRequest } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
 import { SmartHftLadderSection } from './SmartHftLadderSection.js';
+import { HftBacktestSection } from './HftBacktestSection.js';
 import { AdvancedMarketMakerSection } from './AdvancedMarketMakerSection.js';
 import { PerformanceDashboardSection } from './PerformanceDashboardSection.js';
 import { PortfolioRebalanceSection } from './PortfolioRebalanceSection.js';
@@ -39,6 +40,7 @@ type MMTab =
   | 'PORTFOLIO_REBALANCE'
   | 'ADVANCED_MM'
   | 'SMART_HFT_LADDER'
+  | 'HFT_BACKTEST'
   | 'QUANT_HFT_MM'
   | 'DEPTH_LIQUIDITY'
   | 'MOVEMENT_DEPTH'
@@ -107,6 +109,8 @@ export const MMConsoleView: React.FC<Props> = ({
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [botToDelete, setBotToDelete] = useState<BotInstance | null>(null);
   const [isKillSwitchConfirmOpen, setIsKillSwitchConfirmOpen] = useState(false);
+  const [backtestPreset, setBacktestPreset] = useState<Partial<BacktestRequest> | null>(null);
+  const [deployPresetFromBacktest, setDeployPresetFromBacktest] = useState<BacktestRequest | null>(null);
 
   // External Feeds & FX Rate State
   const [externalFeeds, setExternalFeeds] = useState<any>(null);
@@ -1526,6 +1530,7 @@ export const MMConsoleView: React.FC<Props> = ({
           { id: 'PORTFOLIO_REBALANCE', label: '⚖️ Rebalancing Portofolio' },
           { id: 'ADVANCED_MM', label: '🛡️ Advanced MM Engine' },
           { id: 'SMART_HFT_LADDER', label: '📐 Smart HFT Ladder' },
+          { id: 'HFT_BACKTEST', label: '🧪 Backtest Engine' },
           { id: 'QUANT_HFT_MM', label: '⚡ Quant HFT MM' },
           { id: 'DEPTH_LIQUIDITY', label: '📊 Depth & Liquidity' },
           { id: 'MOVEMENT_DEPTH', label: '📡 Depth Movement (WS)' },
@@ -1596,6 +1601,13 @@ export const MMConsoleView: React.FC<Props> = ({
               >
                 <span>📐</span>
                 <span>Smart HFT Ladder</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('HFT_BACKTEST')}
+                className="px-3 py-1.5 bg-sky-700 hover:bg-sky-600 text-white text-xs font-semibold rounded-lg shadow transition-colors flex items-center gap-1"
+              >
+                <span>🧪</span>
+                <span>Ledger Backtest</span>
               </button>
               <button
                 onClick={() => setIsOrderBotModalOpen(true)}
@@ -2993,6 +3005,29 @@ export const MMConsoleView: React.FC<Props> = ({
           instances={instances}
           tradingPairs={tradingPairs}
           onRefresh={loadData}
+          onSetFeedback={setFeedbackMsg}
+          initialBacktestPreset={deployPresetFromBacktest}
+          onOpenBacktestWithConfig={(preset) => {
+            setBacktestPreset(preset);
+            setActiveTab('HFT_BACKTEST');
+          }}
+        />
+      )}
+
+      {/* TAB: IMMUTABLE LEDGER HFT BACKTESTING ENGINE */}
+      {activeTab === 'HFT_BACKTEST' && (
+        <HftBacktestSection
+          tradingPairs={tradingPairs}
+          instances={instances}
+          initialPreset={backtestPreset}
+          onApplyPresetToDeploy={(preset) => {
+            setDeployPresetFromBacktest(preset);
+            setActiveTab('SMART_HFT_LADDER');
+            setFeedbackMsg({
+              type: 'success',
+              text: `Konfigurasi terverifikasi (${preset.pairId} · ${preset.pattern}) siap di-deploy di Smart HFT Ladder.`
+            });
+          }}
           onSetFeedback={setFeedbackMsg}
         />
       )}

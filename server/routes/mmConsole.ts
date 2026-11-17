@@ -15,13 +15,14 @@ import { requireAuth, requireMM, requireAdmin } from './auth.js';
 import { AuthService } from '../auth/AuthService.js';
 import { db } from '../db/database.js';
 import { botWorkerManager } from '../services/BotWorkerManager.js';
-import { BotInstance, OrderBotConfig, VolumeBotConfig, PriceFollowerConfig, DepthLiquidityConfig, MovementDepthLiquidityConfig, QuantHftConfig, SmartHftLadderConfig, AdvancedMarketMakerConfig, PatternFormationType, PatternTimeframe, Environment } from '../db/types.js';
+import { BotInstance, OrderBotConfig, VolumeBotConfig, PriceFollowerConfig, DepthLiquidityConfig, MovementDepthLiquidityConfig, QuantHftConfig, SmartHftLadderConfig, AdvancedMarketMakerConfig, PatternFormationType, PatternTimeframe, Environment, BacktestDataSourceMode, BacktestRequest } from '../db/types.js';
 import { priceAggregatorService } from '../services/external/PriceAggregatorService.js';
 import { fxConversionService } from '../services/external/FxConversionService.js';
 import { DepthLiquidityBotExecutor } from '../services/bots/DepthLiquidityBot.js';
 import { MovementDepthLiquidityBotExecutor } from '../services/bots/MovementDepthLiquidityBot.js';
 import { PriceFollowerBotExecutor } from '../services/bots/PriceFollowerBot.js';
 import { SmartHftLadderBotExecutor } from '../services/bots/SmartHftLadderBot.js';
+import { HftBacktestEngine } from '../services/backtest/HftBacktestEngine.js';
 import { AdvancedMarketMakerBotExecutor } from '../services/bots/AdvancedMarketMakerBot.js';
 import { timeframeAnalyticsService } from '../services/analytics/TimeframeAnalyticsService.js';
 import { portfolioRebalanceService } from '../services/rebalance/PortfolioRebalanceService.js';
@@ -2193,6 +2194,76 @@ mmConsoleRouter.get('/smart-hft/python-script', (req, res) => {
       return res.send(code);
     }
     res.json({ code, filename: 'smart_hft_ladder_bot.py' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// E. Immutable Ledger Historical Backtesting Engine (Non-Mutating)
+mmConsoleRouter.get('/smart-hft/backtest/datasets', requireMMOrAdmin, (req, res) => {
+  try {
+    const pairId = typeof req.query.pairId === 'string' ? req.query.pairId : undefined;
+    const datasets = HftBacktestEngine.getAvailableDatasets(pairId);
+    res.json({ success: true, ...datasets });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+mmConsoleRouter.post('/smart-hft/backtest/run', requireMMOrAdmin, (req, res) => {
+  try {
+    const body = req.body || {};
+    const pairId = String(body.pairId || 'BTC-IDR');
+    if (!db.tradingPairs.has(pairId)) {
+      return res.status(400).json({ error: `Pair trading '${pairId}' tidak ditemukan.` });
+    }
+
+    const allowedModes: BacktestDataSourceMode[] = [
+      'LEDGER_SETTLED_TRADES',
+      'ALL_HISTORICAL_TRADES',
+      'KLINE_OHLCV_REPLAY'
+    ];
+    const dataSourceMode: BacktestDataSourceMode = allowedModes.includes(body.dataSourceMode)
+      ? body.dataSourceMode
+      : 'LEDGER_SETTLED_TRADES';
+
+    const requestPayload: BacktestRequest = {
+      pairId,
+      dataSourceMode,
+      startTime: body.startTime !== undefined && body.startTime !== null && body.startTime !== '' ? Number(body.startTime) : undefined,
+      endTime: body.endTime !== undefined && body.endTime !== null && body.endTime !== '' ? Number(body.endTime) : undefined,
+      initialBaseBalance: String(body.initialBaseBalance ?? '1'),
+      initialQuoteBalance: String(body.initialQuoteBalance ?? '150000000'),
+      makerFeeBps: body.makerFeeBps !== undefined ? Number(body.makerFeeBps) : -2,
+      takerFeeBps: body.takerFeeBps !== undefined ? Number(body.takerFeeBps) : 10,
+      slippageBps: body.slippageBps !== undefined ? Number(body.slippageBps) : 0,
+      timeframe: (body.timeframe || '15m') as PatternTimeframe,
+      pattern: (body.pattern || 'HEAD_AND_SHOULDERS') as PatternFormationType,
+      total_orders: Math.max(2, Math.min(100, Number(body.total_orders ?? 40))),
+      bound_percentage: body.bound_percentage !== undefined ? Number(body.bound_percentage) : 3,
+      min_price_bound: body.min_price_bound ? String(body.min_price_bound) : undefined,
+      max_price_bound: body.max_price_bound ? String(body.max_price_bound) : undefined,
+      min_buy_lot: String(body.min_buy_lot ?? '0.02'),
+      max_buy_lot: String(body.max_buy_lot ?? '0.50'),
+      min_sell_lot: String(body.min_sell_lot ?? '0.02'),
+      max_sell_lot: String(body.max_sell_lot ?? '0.50'),
+      min_spread_bps: body.min_spread_bps !== undefined ? Number(body.min_spread_bps) : 25,
+      spread_percentage: body.spread_percentage !== undefined ? Number(body.spread_percentage) : undefined,
+      reprice_interval_ms: Math.max(500, Math.min(3600_000, Number(body.reprice_interval_ms ?? 4000))),
+      klineTimeframe: body.klineTimeframe ? String(body.klineTimeframe) : undefined,
+      label: body.label ? String(body.label).slice(0, 64) : undefined
+    };
+
+    const result = HftBacktestEngine.runBacktest(requestPayload);
+    res.json({ success: true, result });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+mmConsoleRouter.get('/smart-hft/backtest/history', requireMMOrAdmin, (_req, res) => {
+  try {
+    res.json({ success: true, history: HftBacktestEngine.getHistory() });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

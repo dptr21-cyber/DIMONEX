@@ -693,3 +693,155 @@ export const I18N = {
     adminConsole: 'Operator & Risk Console'
   }
 };
+
+export type BacktestDataSourceMode =
+  | 'LEDGER_SETTLED_TRADES'
+  | 'ALL_HISTORICAL_TRADES'
+  | 'KLINE_OHLCV_REPLAY';
+
+export interface BacktestRequest {
+  pairId: string;
+  dataSourceMode?: BacktestDataSourceMode;
+  startTime?: number;
+  endTime?: number;
+  initialBaseBalance: string;
+  initialQuoteBalance: string;
+  makerFeeBps?: number;
+  takerFeeBps?: number;
+  slippageBps?: number;
+  timeframe: PatternTimeframe;
+  pattern: PatternFormationType;
+  total_orders: number;
+  bound_percentage?: number;
+  min_price_bound?: string;
+  max_price_bound?: string;
+  min_buy_lot: string;
+  max_buy_lot: string;
+  min_sell_lot: string;
+  max_sell_lot: string;
+  min_spread_bps?: number;
+  spread_percentage?: number;
+  reprice_interval_ms: number;
+  klineTimeframe?: string;
+  label?: string;
+}
+
+export interface SimulatedFillEvent {
+  index: number;
+  timestamp: number;
+  side: 'BUY' | 'SELL';
+  ladderLevel: number;
+  fillPrice: number;
+  quantity: number;
+  quoteVolume: number;
+  feeQuote: number;
+  sourceTradeId: string;
+  journalId?: string;
+  ledgerVerified: boolean;
+  realizedPnl: number;
+  equityAfter: number;
+  inventoryBaseAfter: number;
+}
+
+export interface EquityCurvePoint {
+  index: number;
+  timestamp: number;
+  marketPrice: number;
+  anchorPrice: number;
+  minBound: number;
+  maxBound: number;
+  equityQuote: number;
+  realizedPnlQuote: number;
+  unrealizedPnlQuote: number;
+  drawdownPct: number;
+  inventoryBase: number;
+  inventoryQuote: number;
+  cumulativeFeesQuote: number;
+  fillsCount: number;
+}
+
+export interface RungHitStat {
+  level: number;
+  side: 'BUY' | 'SELL';
+  hits: number;
+  volumeBase: number;
+  volumeQuote: number;
+}
+
+export interface BacktestDatasetPairInfo {
+  pairId: string;
+  baseCurrency: string;
+  quoteCurrency: string;
+  baseDecimals: number;
+  quoteDecimals: number;
+  lastPriceFloat: number;
+  totalTrades: number;
+  journalVerifiedTrades: number;
+  ledgerEntriesLinked: number;
+  klineCandles15m: number;
+  earliestTradeTs: number | null;
+  latestTradeTs: number | null;
+  suggestedInitialBase: string;
+  suggestedInitialQuote: string;
+}
+
+export interface BacktestResult {
+  runId: string;
+  label?: string;
+  createdAt: number;
+  pairId: string;
+  baseCurrency: string;
+  quoteCurrency: string;
+  baseDecimals: number;
+  quoteDecimals: number;
+  dataSourceMode: BacktestDataSourceMode;
+  config: SmartHftLadderConfig & {
+    makerFeeBps: number;
+    takerFeeBps: number;
+    slippageBps: number;
+    initialBaseBalance: string;
+    initialQuoteBalance: string;
+  };
+  ledgerAudit: {
+    totalPairTradesInDb: number;
+    journalVerifiedTradesCount: number;
+    replayedEventsCount: number;
+    ledgerEntriesExamined: number;
+    timeRangeStart: number;
+    timeRangeEnd: number;
+    datasetIntegrityHash: string;
+    nonMutatingVerified: true;
+  };
+  summary: {
+    initialEquityQuote: number;
+    finalEquityQuote: number;
+    netPnlQuote: number;
+    netReturnPct: number;
+    realizedPnlQuote: number;
+    unrealizedPnlQuote: number;
+    totalFeesPaidQuote: number;
+    grossTradingProfitQuote: number;
+    maxDrawdownQuote: number;
+    maxDrawdownPct: number;
+    sharpeRatio: number;
+    winRatePct: number;
+    profitFactor: number;
+    totalBuyFills: number;
+    totalSellFills: number;
+    totalFills: number;
+    totalRepriceCycles: number;
+    totalOrdersSimulated: number;
+    fillRatePct: number;
+    totalTurnoverQuote: number;
+    outOfBoundsSkippedTicks: number;
+    insufficientBalanceSkips: number;
+    endingBaseInventory: number;
+    endingQuoteBalance: number;
+    avgEntryCostQuote: number;
+  };
+  equityCurve: EquityCurvePoint[];
+  fills: SimulatedFillEvent[];
+  rungHitDistribution: RungHitStat[];
+  executionTimeMs: number;
+}
+

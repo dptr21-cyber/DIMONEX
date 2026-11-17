@@ -16,7 +16,7 @@
  */
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { BotInstance, SmartHftLadderConfig, PatternFormationType, PatternTimeframe, TradingPairItem, UserProfile } from '../../types/index.js';
+import { BacktestRequest, BotInstance, SmartHftLadderConfig, PatternFormationType, PatternTimeframe, TradingPairItem, UserProfile } from '../../types/index.js';
 import { safeFetchJson } from '../../lib/safeFetch.js';
 
 interface Props {
@@ -25,6 +25,8 @@ interface Props {
   tradingPairs: TradingPairItem[];
   onRefresh: () => void;
   onSetFeedback: (msg: { type: 'success' | 'error'; text: string } | null) => void;
+  initialBacktestPreset?: BacktestRequest | null;
+  onOpenBacktestWithConfig?: (preset: Partial<BacktestRequest>) => void;
 }
 
 export const SmartHftLadderSection: React.FC<Props> = ({
@@ -32,7 +34,9 @@ export const SmartHftLadderSection: React.FC<Props> = ({
   instances,
   tradingPairs,
   onRefresh,
-  onSetFeedback
+  onSetFeedback,
+  initialBacktestPreset,
+  onOpenBacktestWithConfig
 }) => {
   const [isDeployModalOpen, setIsDeployModalOpen] = useState(false);
   const [isPythonModalOpen, setIsPythonModalOpen] = useState(false);
@@ -104,6 +108,25 @@ export const SmartHftLadderSection: React.FC<Props> = ({
     const downSpread = Math.abs((currentPriceNum - minB) / currentPriceNum) * 100;
     return Number(((upSpread + downSpread) / 2).toFixed(2));
   }, [currentPriceNum, simMinBound, simMaxBound, simBoundPct]);
+
+  // Apply verified backtest preset into Smart HFT simulator/deploy form
+  useEffect(() => {
+    if (!initialBacktestPreset) return;
+    if (initialBacktestPreset.pairId) setSimPairId(initialBacktestPreset.pairId);
+    if (initialBacktestPreset.timeframe) setSimTimeframe(initialBacktestPreset.timeframe);
+    if (initialBacktestPreset.pattern) setSimPattern(initialBacktestPreset.pattern);
+    if (initialBacktestPreset.total_orders) setSimTotalOrders(initialBacktestPreset.total_orders);
+    if (initialBacktestPreset.bound_percentage !== undefined) setSimBoundPct(initialBacktestPreset.bound_percentage);
+    if (initialBacktestPreset.min_buy_lot) setSimMinBuyLot(initialBacktestPreset.min_buy_lot);
+    if (initialBacktestPreset.max_buy_lot) setSimMaxBuyLot(initialBacktestPreset.max_buy_lot);
+    if (initialBacktestPreset.min_sell_lot) setSimMinSellLot(initialBacktestPreset.min_sell_lot);
+    if (initialBacktestPreset.max_sell_lot) setSimMaxSellLot(initialBacktestPreset.max_sell_lot);
+    if (initialBacktestPreset.min_spread_bps !== undefined) setSimSpreadBps(initialBacktestPreset.min_spread_bps);
+    if (initialBacktestPreset.reprice_interval_ms) setRepriceIntervalMs(initialBacktestPreset.reprice_interval_ms);
+    if (initialBacktestPreset.min_price_bound) setSimMinBound(initialBacktestPreset.min_price_bound);
+    if (initialBacktestPreset.max_price_bound) setSimMaxBound(initialBacktestPreset.max_price_bound);
+    setIsDeployModalOpen(true);
+  }, [initialBacktestPreset]);
 
   // Set default bounds when pair changes (tight ±3% so it is never too far from current market price)
   useEffect(() => {
@@ -417,17 +440,43 @@ export const SmartHftLadderSection: React.FC<Props> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {onOpenBacktestWithConfig && (
+            <button
+              onClick={() =>
+                onOpenBacktestWithConfig({
+                  pairId: simPairId,
+                  timeframe: simTimeframe,
+                  pattern: simPattern,
+                  total_orders: simTotalOrders,
+                  bound_percentage: simBoundPct,
+                  min_price_bound: simMinBound || undefined,
+                  max_price_bound: simMaxBound || undefined,
+                  min_buy_lot: simMinBuyLot,
+                  max_buy_lot: simMaxBuyLot,
+                  min_sell_lot: simMinSellLot,
+                  max_sell_lot: simMaxSellLot,
+                  min_spread_bps: simSpreadBps,
+                  reprice_interval_ms: repriceIntervalMs,
+                  label: `Sim ${simPairId} · ${simPattern}`
+                })
+              }
+              className="px-3.5 py-2 bg-[#141c2f] hover:bg-[#1e293b] text-cyan-300 text-xs font-semibold rounded-xl border border-cyan-500/40 flex items-center gap-1.5 transition-all whitespace-nowrap shrink-0"
+            >
+              <span>🧪</span>
+              <span>Uji Backtest di Ledger</span>
+            </button>
+          )}
           <button
             onClick={handleOpenPythonCode}
-            className="px-3.5 py-2 bg-[#1e293b] hover:bg-[#334155] text-slate-200 text-xs font-semibold rounded-xl border border-slate-700 flex items-center gap-2 transition-all shadow-md"
+            className="px-3.5 py-2 bg-[#1e293b] hover:bg-[#334155] text-slate-200 text-xs font-semibold rounded-xl border border-slate-700 flex items-center gap-2 transition-all shadow-md whitespace-nowrap shrink-0"
           >
             <span>🐍</span>
             <span>Lihat Python Script</span>
           </button>
           <button
             onClick={() => setIsDeployModalOpen(true)}
-            className="px-4 py-2 bg-gradient-to-r from-cyan-600 via-sky-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-bold rounded-xl shadow-lg border border-cyan-400/40 flex items-center gap-2 transition-all"
+            className="px-4 py-2 bg-gradient-to-r from-cyan-600 via-sky-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-bold rounded-xl shadow-lg border border-cyan-400/40 flex items-center gap-2 transition-all whitespace-nowrap shrink-0"
           >
             <span>⚡</span>
             <span>+ Deploy Smart HFT Ladder</span>
