@@ -1,9 +1,9 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * src/components/ui/Modal.tsx
- * Reusable modal dialog with backdrop blur, keyboard ESC, and focus isolation.
+ * Institutional matte modal dialog with 12px radius, ESC isolation, and #141C24 surface.
  */
 
 import React, { useEffect } from 'react';
@@ -48,32 +48,35 @@ export const Modal: React.FC<ModalProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-[#08090D]/80 backdrop-blur-sm transition-opacity"
+        className="fixed inset-0 bg-[#090D12]/80 backdrop-blur-[2px] transition-opacity"
         onClick={onClose}
         aria-hidden="true"
       />
 
       {/* Modal Surface */}
       <div
-        className={`relative w-full ${maxWidth} rounded-xl bg-[#15171F] border border-[#292C38] shadow-2xl p-5 text-[#F5F5F7] z-10 animate-in fade-in zoom-in-95 duration-150`}
+        className={`relative w-full ${maxWidth} rounded-[12px] bg-[#141C24] border border-[#2B3944] shadow-2xl p-5 text-[#E4EBEF] z-10`}
         role="dialog"
         aria-modal="true"
       >
-        <div className="flex items-start justify-between gap-4 mb-4 pb-3 border-b border-[#292C38]/60">
-          <div>
-            {title && <h3 className="text-base font-bold tracking-tight text-[#F5F5F7]">{title}</h3>}
-            {subtitle && <p className="text-xs text-[#969BA8] mt-0.5">{subtitle}</p>}
+        {(title || subtitle) && (
+          <div className="flex items-start justify-between gap-4 mb-4 pb-3 border-b border-[#202B34]">
+            <div>
+              {title && <h3 className="text-base font-semibold tracking-tight text-[#E4EBEF]">{title}</h3>}
+              {subtitle && <p className="text-xs text-[#A1AFB8] mt-0.5">{subtitle}</p>}
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-[7px] text-[#71818B] hover:text-[#E4EBEF] hover:bg-[#1D2832] transition-colors cursor-pointer"
+              aria-label="Close dialog"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 rounded-lg text-[#686D7A] hover:text-[#F5F5F7] hover:bg-[#1C1F29] transition-colors"
-            aria-label="Close dialog"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+        )}
 
-        <div className="max-h-[80vh] overflow-y-auto pr-1">
+        <div className="max-h-[82vh] overflow-y-auto pr-0.5">
           {children}
         </div>
       </div>

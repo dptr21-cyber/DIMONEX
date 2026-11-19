@@ -1,24 +1,12 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * DimonexChart.tsx
- * DIMONEX Pro Professional Candlestick & Volume Terminal powered by Lightweight Charts v5.
- * 
- * Guarantees:
- * - Real OHLCV Kline aggregation connected to backend persistent database
- * - Strict lifecycle guard preventing "Object is disposed" errors on unmount/re-render
- * - Zero-Intrusion Seamless Fetching: Chart is NEVER blocked by full-screen loading modals or blurs
- * - Dual Real-time Trade Pipeline: WebSocket streaming + REST sync & recentTrades listener
- * - Sub-panel volume histogram matching Binance / TradingView UX
- * - Dynamic Moving Averages (MA 7 & MA 25) with live updates on new ticks
- * - Live Hover/Crosshair Inspector (Open, High, Low, Close, Change, Volume)
- * - Multi-currency support (IDR, USDT) with precision-safe decimal scaling
- * - Timeframe selector: 1m, 5m, 15m, 1h, 4h, 1d, 1w
- * - Fit Content & Zoom reset tools
+ * DIMONEX Pro Candlestick & Volume Terminal powered by Lightweight Charts v5.
  */
 
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   createChart,
   ColorType,
@@ -29,9 +17,10 @@ import {
   ISeriesApi,
   Time
 } from 'lightweight-charts';
+import { CandlestickChart } from 'lucide-react';
 import { TradingPairItem, TradeItem, CandleItem } from '../../types/index.js';
 import { isWebSocketSupported, reportWebSocketSuccess, reportWebSocketFailure } from '../../utils/wsHelper.js';
-import { safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
+import { safeBigInt } from '../../lib/formatters.js';
 import { Timeframe, ChartHoverInfo } from './chartTypes.js';
 
 interface DimonexChartProps {
@@ -69,11 +58,8 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
   pair,
   recentTrades,
   timeframe,
-  setTimeframe,
   showMAs,
-  setShowMAs,
   showRefBenchmark,
-  setShowRefBenchmark,
   refPriceData,
   onHoverInfoChange
 }) => {
@@ -85,11 +71,9 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
   const ma25SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
   const refLineRef = useRef<any>(null);
 
-  // Strict lifecycle guard to prevent "Object is disposed" error
   const isDisposedRef = useRef<boolean>(false);
   const loadRequestIdRef = useRef<number>(0);
 
-  // Non-intrusive fetching indicator (only a slim subtle 2px bar at the top, NEVER blocking the screen)
   const [isFetching, setIsFetching] = useState(false);
   const [hoverInfo, setHoverInfo] = useState<ChartHoverInfo | null>(null);
 
@@ -98,7 +82,6 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
   const processedTradesRef = useRef<Set<string>>(new Set());
   const isFirstLoadRef = useRef(true);
 
-  // Quote currency properties
   const isUSDT = (pair.quoteCurrency || '').toUpperCase() === 'USDT';
   const quoteDec = pair.quoteDecimals !== undefined && pair.quoteDecimals !== null
     ? pair.quoteDecimals
@@ -121,7 +104,6 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
   const refFloatPrice = Number(safeBigInt(pair.lastPrice)) / (10 ** Math.max(0, quoteDec));
   const displayPrecision = getPrecisionForPrice(refFloatPrice);
 
-  // Calculate Simple Moving Average for candle array
   const calculateSMA = useCallback((data: CandleItem[], period: number, prec = displayPrecision) => {
     const result: { time: Time; value: number }[] = [];
     for (let i = 0; i < data.length; i++) {
@@ -138,9 +120,6 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     return result;
   }, [displayPrecision]);
 
-  /**
-   * Process a single trade execution and update the live candlestick & volume series safely.
-   */
   const processSingleTrade = useCallback((trade: TradeItem) => {
     if (!trade || trade.pairId !== pair.id) return;
     if (isDisposedRef.current || !chartRef.current || !candleSeriesRef.current) return;
@@ -163,7 +142,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       const intervalSec = TF_SECONDS[timeframe] || 900;
       const currentCandleTime = Math.floor(tradeSec / intervalSec) * intervalSec;
 
-      let last = lastBarRef.current;
+      const last = lastBarRef.current;
       if (!last || currentCandleTime > last.time) {
         const newBar: CandleItem = {
           time: currentCandleTime,
@@ -188,7 +167,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
           volumeSeriesRef.current.update({
             time: newBar.time as Time,
             value: newBar.volume,
-            color: newBar.close >= newBar.open ? 'rgba(22, 199, 132, 0.45)' : 'rgba(234, 57, 67, 0.45)'
+            color: newBar.close >= newBar.open ? 'rgba(22, 168, 121, 0.42)' : 'rgba(234, 91, 101, 0.42)'
           });
         }
       } else if (currentCandleTime === last.time) {
@@ -209,12 +188,11 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
           volumeSeriesRef.current.update({
             time: last.time as Time,
             value: last.volume,
-            color: last.close >= last.open ? 'rgba(22, 199, 132, 0.45)' : 'rgba(234, 57, 67, 0.45)'
+            color: last.close >= last.open ? 'rgba(22, 168, 121, 0.42)' : 'rgba(234, 91, 101, 0.42)'
           });
         }
       }
 
-      // Update Moving Averages on active bar
       if (!isDisposedRef.current && showMAs) {
         const activePrec = getPrecisionForPrice(tradePrice);
         if (candlesRef.current.length >= 7 && ma7SeriesRef.current) {
@@ -238,7 +216,6 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     }
   }, [pair.id, quoteDec, baseDec, timeframe, showMAs, getPrecisionForPrice]);
 
-  // Fetch Authoritative OHLCV Historical Candles from Backend (Seamless & non-blocking)
   const loadCandles = useCallback(async (isInitial = false) => {
     const reqId = ++loadRequestIdRef.current;
     if (isInitial) setIsFetching(true);
@@ -248,11 +225,9 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       if (!res.ok) return;
       let data: CandleItem[] = await res.json();
 
-      // Check if cancelled or chart disposed while fetching
       if (isDisposedRef.current || reqId !== loadRequestIdRef.current) return;
       if (!chartRef.current || !candleSeriesRef.current || !volumeSeriesRef.current) return;
 
-      // If pair has no trade candles yet, construct an anchor candle from pair.lastPrice
       if ((!data || data.length === 0) && pair.lastPrice) {
         const divisor = 10n ** BigInt(quoteDec);
         const pNum = Number(safeBigInt(pair.lastPrice)) / Number(divisor);
@@ -279,7 +254,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
         const volumeData = data.map(c => ({
           time: c.time as Time,
           value: c.volume,
-          color: c.close >= c.open ? 'rgba(22, 199, 132, 0.45)' : 'rgba(234, 57, 67, 0.45)'
+          color: c.close >= c.open ? 'rgba(22, 168, 121, 0.42)' : 'rgba(234, 91, 101, 0.42)'
         }));
 
         try {
@@ -320,21 +295,19 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       }
     } catch (err: any) {
       if (isDisposedRef.current || reqId !== loadRequestIdRef.current) return;
-      console.warn('[DimonexChart] Gagal memuat candles:', err);
+      console.warn('[DimonexChart] Failed to load candles:', err);
     } finally {
       if (reqId === loadRequestIdRef.current && !isDisposedRef.current) {
         if (isInitial) setIsFetching(false);
       }
     }
-  }, [pair.id, pair.lastPrice, quoteDec, timeframe, calculateSMA]);
+  }, [pair.id, pair.lastPrice, quoteDec, timeframe, calculateSMA, getPrecisionForPrice, refFloatPrice]);
 
-  // Reset processed trades ref on pair switch
   useEffect(() => {
     processedTradesRef.current.clear();
     isFirstLoadRef.current = true;
   }, [pair.id]);
 
-  // Listen to incoming recentTrades prop (vital live pipeline regardless of WebSocket state)
   useEffect(() => {
     if (!recentTrades || recentTrades.length === 0 || isDisposedRef.current) return;
     const sorted = [...recentTrades].sort((a, b) => a.createdAt - b.createdAt);
@@ -345,12 +318,10 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     }
   }, [recentTrades, pair.id, processSingleTrade]);
 
-  // When timeframe changes, load new candles without tearing down chart DOM
   useEffect(() => {
     loadCandles(true);
   }, [timeframe, loadCandles]);
 
-  // Background candle synchronizer (polls every 2.5s to ensure zero stale candles)
   useEffect(() => {
     const interval = setInterval(() => {
       if (!isDisposedRef.current) {
@@ -360,7 +331,6 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     return () => clearInterval(interval);
   }, [loadCandles]);
 
-  // Initialize Lightweight Charts v5 (Tied ONLY to pair.id and chartContainerRef)
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
@@ -369,32 +339,32 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
 
     const chart = createChart(chartContainerRef.current, {
       layout: {
-        background: { type: ColorType.Solid, color: '#08090D' },
-        textColor: '#9298A6',
+        background: { type: ColorType.Solid, color: '#090D12' },
+        textColor: '#A1AFB8',
         fontSize: 11,
-        fontFamily: 'Inter, -apple-system, sans-serif'
+        fontFamily: 'IBM Plex Mono, Inter, sans-serif'
       },
       grid: {
-        vertLines: { color: 'rgba(255, 255, 255, 0.04)' },
-        horzLines: { color: 'rgba(255, 255, 255, 0.04)' }
+        vertLines: { color: '#202B34' },
+        horzLines: { color: '#202B34' }
       },
       crosshair: {
         mode: 1,
         vertLine: {
-          color: 'rgba(255, 255, 255, 0.2)',
+          color: '#40515D',
           width: 1,
           style: 3,
-          labelBackgroundColor: '#171923'
+          labelBackgroundColor: '#1D2832'
         },
         horzLine: {
-          color: 'rgba(255, 255, 255, 0.2)',
+          color: '#40515D',
           width: 1,
           style: 3,
-          labelBackgroundColor: '#171923'
+          labelBackgroundColor: '#1D2832'
         }
       },
       timeScale: {
-        borderColor: 'rgba(255, 255, 255, 0.08)',
+        borderColor: '#202B34',
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 6,
@@ -402,7 +372,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
         minBarSpacing: 4
       },
       rightPriceScale: {
-        borderColor: 'rgba(255, 255, 255, 0.08)',
+        borderColor: '#202B34',
         autoScale: true,
         scaleMargins: {
           top: 0.1,
@@ -418,20 +388,18 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       minMove: initMinMove
     };
 
-    // 1. Candlestick Series
     const candleSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#16C784',
-      downColor: '#EA3943',
+      upColor: '#16A879',
+      downColor: '#EA5B65',
       borderVisible: false,
-      wickUpColor: '#16C784',
-      wickDownColor: '#EA3943',
+      wickUpColor: '#16A879',
+      wickDownColor: '#EA5B65',
       priceFormat: initPriceFormat
     });
 
-    // 2. Volume Histogram Series (Sub-panel bottom)
     const volumeSeries = chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
-      priceScaleId: '' // overlay
+      priceScaleId: ''
     });
     volumeSeries.priceScale().applyOptions({
       scaleMargins: {
@@ -440,9 +408,8 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       }
     });
 
-    // 3. Technical Indicators: MA 7 (Amber) & MA 25 (Sky)
     const ma7Series = chart.addSeries(LineSeries, {
-      color: '#F59E0B',
+      color: '#D6A85C',
       lineWidth: 1,
       priceLineVisible: false,
       lastValueVisible: showMAs,
@@ -450,7 +417,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     });
 
     const ma25Series = chart.addSeries(LineSeries, {
-      color: '#38BDF8',
+      color: '#6D9FE8',
       lineWidth: 1,
       priceLineVisible: false,
       lastValueVisible: showMAs,
@@ -463,7 +430,6 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     ma7SeriesRef.current = ma7Series;
     ma25SeriesRef.current = ma25Series;
 
-    // Crosshair move inspector
     chart.subscribeCrosshairMove(param => {
       if (isDisposedRef.current) return;
       if (
@@ -505,7 +471,6 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       }
     });
 
-    // Resize observer
     const handleResize = () => {
       if (!isDisposedRef.current && chartContainerRef.current && chartRef.current) {
         try {
@@ -530,7 +495,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       if (chartRef.current) {
         try {
           chartRef.current.remove();
-        } catch (e: any) {}
+        } catch {}
         chartRef.current = null;
       }
       candleSeriesRef.current = null;
@@ -539,9 +504,8 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       ma25SeriesRef.current = null;
       refLineRef.current = null;
     };
-  }, [pair.id]); // ONLY recreated when switching pairs
+  }, [pair.id]);
 
-  // Toggle MA visibility safely without recreating the chart
   useEffect(() => {
     if (isDisposedRef.current) return;
     try {
@@ -556,14 +520,13 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     }
   }, [showMAs]);
 
-  // Update External Reference Benchmark Price line safely
   useEffect(() => {
     if (isDisposedRef.current || !candleSeriesRef.current) return;
 
     if (refLineRef.current) {
       try {
         candleSeriesRef.current.removePriceLine(refLineRef.current);
-      } catch (e) {}
+      } catch {}
       refLineRef.current = null;
     }
 
@@ -573,9 +536,9 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
         if (benchmarkVal > 0 && !isDisposedRef.current && candleSeriesRef.current) {
           refLineRef.current = candleSeriesRef.current.createPriceLine({
             price: benchmarkVal,
-            color: '#38bdf8',
+            color: '#8DA5B1',
             lineWidth: 1,
-            lineStyle: 2, // Dashed
+            lineStyle: 2,
             axisLabelVisible: true,
             title: `EXT REF (${refPriceData.activeProvider?.toUpperCase()})`
           });
@@ -587,7 +550,6 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     }
   }, [showRefBenchmark, refPriceData, isUSDT]);
 
-  // WebSocket Live Trade Execution Handler with Safe Disconnect
   useEffect(() => {
     if (!isWebSocketSupported()) return;
     let ws: WebSocket | null = null;
@@ -610,14 +572,14 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
           reportWebSocketFailure();
         };
 
-        ws.onmessage = (event) => {
+        ws.onmessage = event => {
           if (isDisposed || isDisposedRef.current) return;
           try {
             const payload = JSON.parse(event.data);
             if (payload.type === 'trade' && payload.data) {
               processSingleTrade(payload.data);
             }
-          } catch (err) {}
+          } catch {}
         };
 
         ws.onclose = () => {
@@ -625,7 +587,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
             setTimeout(connectWs, 3000);
           }
         };
-      } catch (e) {}
+      } catch {}
     };
 
     connectWs();
@@ -637,82 +599,93 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
   }, [pair.id, processSingleTrade]);
 
   return (
-    <div className="relative w-full h-full flex flex-col">
-      {/* Discreet 2px Progress Bar during fetch (NEVER blocks the chart or clicks) */}
+    <div className="relative w-full h-full flex flex-col bg-[#090D12]">
       {isFetching && (
-        <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-[#FF087F] to-transparent animate-pulse pointer-events-none z-30" />
+        <div className="absolute top-0 left-0 right-0 h-[2px] bg-[#8DA5B1]/60 animate-pulse pointer-events-none z-30" />
       )}
 
       {/* Subheader: Hover Inspection Bar & Active Indicators */}
-      <div className="flex flex-wrap items-center justify-between px-4 py-1.5 bg-[#08090D] border-b border-white/5 text-[11px] font-mono">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center justify-between px-4 py-1.5 bg-[#111820] border-b border-[#202B34] text-[11px] font-mono tabular-nums">
+        <div className="flex items-center gap-3 flex-wrap">
           {showMAs && (
             <div className="flex items-center gap-2">
-              <span className="text-amber-400 font-semibold">MA(7)</span>
-              <span className="text-white/20">·</span>
-              <span className="text-sky-400 font-semibold">MA(25)</span>
-              <span className="text-white/20">·</span>
-              <span className="text-[#9298A6]">Vol({pair.baseCurrency})</span>
+              <span className="text-[#D6A85C] font-medium">MA(7)</span>
+              <span className="text-[#40515D]">·</span>
+              <span className="text-[#6D9FE8] font-medium">MA(25)</span>
+              <span className="text-[#40515D]">·</span>
+              <span className="text-[#71818B]">Vol({pair.baseCurrency})</span>
             </div>
           )}
 
           {hoverInfo ? (
-            <div className="flex items-center gap-3 text-[#F5F5F7] flex-wrap">
-              <span className="text-[#9298A6]">{hoverInfo.timeStr}</span>
+            <div className="flex items-center gap-3 text-[#E4EBEF] flex-wrap">
+              <span className="text-[#71818B]">{hoverInfo.timeStr}</span>
               <span>
-                O: <strong className="text-white">
-                  {hoverInfo.open.toLocaleString(isUSDT ? 'en-US' : 'id-ID', { maximumFractionDigits: getPrecisionForPrice(hoverInfo.open) })}
+                O:{' '}
+                <strong className="text-[#E4EBEF]">
+                  {hoverInfo.open.toLocaleString(isUSDT ? 'en-US' : 'id-ID', {
+                    maximumFractionDigits: getPrecisionForPrice(hoverInfo.open)
+                  })}
                 </strong>
               </span>
               <span>
-                H: <strong className="text-[#16C784]">
-                  {hoverInfo.high.toLocaleString(isUSDT ? 'en-US' : 'id-ID', { maximumFractionDigits: getPrecisionForPrice(hoverInfo.high) })}
+                H:{' '}
+                <strong className="text-[#16A879]">
+                  {hoverInfo.high.toLocaleString(isUSDT ? 'en-US' : 'id-ID', {
+                    maximumFractionDigits: getPrecisionForPrice(hoverInfo.high)
+                  })}
                 </strong>
               </span>
               <span>
-                L: <strong className="text-[#EA3943]">
-                  {hoverInfo.low.toLocaleString(isUSDT ? 'en-US' : 'id-ID', { maximumFractionDigits: getPrecisionForPrice(hoverInfo.low) })}
+                L:{' '}
+                <strong className="text-[#EA5B65]">
+                  {hoverInfo.low.toLocaleString(isUSDT ? 'en-US' : 'id-ID', {
+                    maximumFractionDigits: getPrecisionForPrice(hoverInfo.low)
+                  })}
                 </strong>
               </span>
               <span>
-                C: <strong className={hoverInfo.close >= hoverInfo.open ? 'text-[#16C784]' : 'text-[#EA3943]'}>
-                  {hoverInfo.close.toLocaleString(isUSDT ? 'en-US' : 'id-ID', { maximumFractionDigits: getPrecisionForPrice(hoverInfo.close) })}
+                C:{' '}
+                <strong className={hoverInfo.close >= hoverInfo.open ? 'text-[#16A879]' : 'text-[#EA5B65]'}>
+                  {hoverInfo.close.toLocaleString(isUSDT ? 'en-US' : 'id-ID', {
+                    maximumFractionDigits: getPrecisionForPrice(hoverInfo.close)
+                  })}
                 </strong>
               </span>
               <span>
-                Chg: <strong className={hoverInfo.changePercent >= 0 ? 'text-[#16C784]' : 'text-[#EA3943]'}>
-                  {hoverInfo.changePercent >= 0 ? '+' : ''}{hoverInfo.changePercent.toFixed(2)}%
+                Chg:{' '}
+                <strong className={hoverInfo.changePercent >= 0 ? 'text-[#16A879]' : 'text-[#EA5B65]'}>
+                  {hoverInfo.changePercent >= 0 ? '+' : ''}
+                  {hoverInfo.changePercent.toFixed(2)}%
                 </strong>
               </span>
-              <span>Vol: <strong className="text-[#C5C9D4]">{hoverInfo.volume.toFixed(4)}</strong></span>
+              <span>
+                Vol: <strong className="text-[#A1AFB8]">{hoverInfo.volume.toFixed(4)}</strong>
+              </span>
             </div>
           ) : (
-            <span className="text-[#9298A6]/60 text-xs">
-              Arahkan kursor ke chart untuk melihat detail Open, High, Low, Close & Volume.
+            <span className="text-[#71818B] text-[11px] font-sans">
+              Hover over chart candles to inspect Open, High, Low, Close &amp; Volume.
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-2 text-[#9298A6] text-[10px]">
-          <span className={`w-1.5 h-1.5 rounded-full ${isFetching ? 'bg-amber-400 animate-ping' : 'bg-[#16C784] animate-pulse'}`} />
-          <span className="font-mono">{isFetching ? 'Syncing...' : 'DIMONEX Pro Engine (Live)'}</span>
+        <div className="flex items-center gap-2 text-[#71818B] text-[10px]">
+          <span className={`w-1.5 h-1.5 rounded-full ${isFetching ? 'bg-[#D6A85C]' : 'bg-[#16A879]'}`} />
+          <span>{isFetching ? 'Syncing...' : 'DIMONEX Pro Engine'}</span>
         </div>
       </div>
 
       {/* Main Canvas */}
       <div className="relative flex-1 w-full min-h-[420px]">
-        {/* Empty state only when genuinely no candles and no price */}
         {!isFetching && candlesRef.current.length === 0 && !pair.lastPrice && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center p-6 text-center bg-[#08090D]/80 backdrop-blur-xs">
-            <div className="w-12 h-12 rounded-xl bg-[#171923] border border-white/10 flex items-center justify-center text-[#9298A6] mb-3 shadow-inner">
-              <svg className="w-6 h-6 text-[#FF087F]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
-              </svg>
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center p-6 text-center bg-[#090D12]/95">
+            <div className="w-11 h-11 rounded-[10px] bg-[#141C24] border border-[#2B3944] flex items-center justify-center text-[#8DA5B1] mb-3">
+              <CandlestickChart className="w-5 h-5" />
             </div>
-            <h4 className="text-sm font-semibold text-white mb-1">Belum Ada Transaksi Riil ({pair.id})</h4>
-            <p className="text-xs text-[#9298A6] max-w-sm leading-relaxed">
-              Chart ini dibangun secara murni dari hasil matching order nyata di DIMONEX.
-              Candle akan langsung terbentuk begitu order dieksekusi oleh matching engine.
+            <h4 className="text-sm font-semibold text-[#E4EBEF] mb-1">No Executed Trades Yet ({pair.id})</h4>
+            <p className="text-xs text-[#71818B] max-w-sm leading-relaxed">
+              This chart renders strictly from authoritative matched order executions in DIMONEX.
             </p>
           </div>
         )}

@@ -1,38 +1,26 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * src/components/listing/ListingPortalPage.tsx
- * DIMONEX Centralized Cryptocurrency Spot Exchange — Master Listing Page / Portal.
- * Features:
- * 1. Explore Listed Tokens & Markets (Direct Spot trade CTA)
- * 2. Public Project Token Listing Application Wizard
- * 3. Application Tracker with 4-Stage Maker-Checker Progress Visualization
- * 4. Internal Admin & Maker-Checker Initial Listing Console (ListingManagementView)
- * 5. Quick Role Switcher (Trader, Maker Admin, Checker Admin) for testing governance
+ * DIMONEX Centralized Cryptocurrency Spot Exchange — Master Listing Portal.
  */
 
 import React, { useState, useEffect } from 'react';
 import {
-  Sparkles,
   Rocket,
   ShieldCheck,
   CheckCircle2,
   Clock,
-  Search,
-  ExternalLink,
   Layers,
   ArrowRight,
-  TrendingUp,
   AlertCircle,
-  FileCheck2,
   Users,
   Copy,
   Check,
   Cpu,
   Lock,
-  ChevronRight,
-  Info
+  Info,
 } from 'lucide-react';
 import { UserProfile, TradingPairItem } from '../../types/index.js';
 import { ListingManagementView } from '../admin/listing/ListingManagementView.js';
@@ -40,7 +28,9 @@ import { Button } from '../ui/Button.js';
 import { Input } from '../ui/Input.js';
 import { Modal } from '../ui/Modal.js';
 import { useToast } from '../ui/Toast.js';
-import { formatIDR } from '../../lib/formatters.js';
+import { StatusBadge } from '../ui/StatusBadge.js';
+import { AssetIcon } from '../ui/AssetIcon.js';
+import { SearchInput } from '../ui/Controls.js';
 
 interface Props {
   user: UserProfile | null;
@@ -57,10 +47,11 @@ export const ListingPortalPage: React.FC<Props> = ({
   onSelectPair,
   onSelectView,
   onQuickLogin,
-  onOpenAuthModal
 }) => {
   const { showToast } = useToast();
-  const [activeTab, setActiveTab] = useState<'EXPLORE' | 'APPLY' | 'TRACK' | 'ADMIN_CONSOLE'>('EXPLORE');
+  const [activeTab, setActiveTab] = useState<'EXPLORE' | 'APPLY' | 'TRACK' | 'ADMIN_CONSOLE'>(
+    'EXPLORE'
+  );
 
   // Explore tab state
   const [publicAssets, setPublicAssets] = useState<any[]>([]);
@@ -86,7 +77,7 @@ export const ListingPortalPage: React.FC<Props> = ({
     depositScheduleType: 'IMMEDIATE' as 'IMMEDIATE' | 'SCHEDULED',
     depositOpenedAtDate: '',
     withdrawalScheduleType: 'IMMEDIATE' as 'IMMEDIATE' | 'SCHEDULED',
-    withdrawalOpenedAtDate: ''
+    withdrawalOpenedAtDate: '',
   });
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [isSubmittingApp, setIsSubmittingApp] = useState(false);
@@ -99,7 +90,6 @@ export const ListingPortalPage: React.FC<Props> = ({
   const [trackingError, setTrackingError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState(false);
 
-  // Load public assets
   useEffect(() => {
     loadPublicAssets();
   }, []);
@@ -115,16 +105,20 @@ export const ListingPortalPage: React.FC<Props> = ({
         }
       }
     } catch {
-      // Fallback: populate from current trading pairs
       const fallback = tradingPairs.map(p => ({
         id: p.id,
         symbol: p.baseCurrency,
-        name: p.baseCurrency === 'BTC' ? 'Bitcoin' : p.baseCurrency === 'ETH' ? 'Ethereum' : p.baseCurrency,
+        name:
+          p.baseCurrency === 'BTC'
+            ? 'Bitcoin'
+            : p.baseCurrency === 'ETH'
+            ? 'Ethereum'
+            : p.baseCurrency,
         assetType: 'TOKEN',
         network: 'MAINNET',
         status: 'ACTIVE',
         hasActiveMarket: true,
-        marketSymbol: p.id
+        marketSymbol: p.id,
       }));
       setPublicAssets(fallback);
     } finally {
@@ -132,11 +126,16 @@ export const ListingPortalPage: React.FC<Props> = ({
     }
   };
 
-  // Address validation
   const validateAddress = (net: string, addr: string): boolean => {
     if (!addr) return false;
     const n = net.toUpperCase();
-    if (n.includes('ETHEREUM') || n.includes('ERC20') || n.includes('BSC') || n.includes('POLYGON') || n.includes('ARBITRUM')) {
+    if (
+      n.includes('ETHEREUM') ||
+      n.includes('ERC20') ||
+      n.includes('BSC') ||
+      n.includes('POLYGON') ||
+      n.includes('ARBITRUM')
+    ) {
       return /^0x[a-fA-F0-9]{40}$/.test(addr);
     }
     if (n.includes('SOLANA') || n.includes('SPL')) {
@@ -148,7 +147,6 @@ export const ListingPortalPage: React.FC<Props> = ({
     return addr.length >= 26;
   };
 
-  // Submit Application
   const handleSubmitApplication = async (e: React.FormEvent) => {
     e.preventDefault();
     const errors: Record<string, string> = {};
@@ -181,16 +179,22 @@ export const ListingPortalPage: React.FC<Props> = ({
     try {
       const payload = {
         ...formData,
-        depositOpenedAt: formData.depositScheduleType === 'SCHEDULED' && formData.depositOpenedAtDate ? new Date(formData.depositOpenedAtDate).getTime() : undefined,
-        withdrawalOpenedAt: formData.withdrawalScheduleType === 'SCHEDULED' && formData.withdrawalOpenedAtDate ? new Date(formData.withdrawalOpenedAtDate).getTime() : undefined,
+        depositOpenedAt:
+          formData.depositScheduleType === 'SCHEDULED' && formData.depositOpenedAtDate
+            ? new Date(formData.depositOpenedAtDate).getTime()
+            : undefined,
+        withdrawalOpenedAt:
+          formData.withdrawalScheduleType === 'SCHEDULED' && formData.withdrawalOpenedAtDate
+            ? new Date(formData.withdrawalOpenedAtDate).getTime()
+            : undefined,
         depositEnabled: true,
-        withdrawalEnabled: true
+        withdrawalEnabled: true,
       };
 
       const res = await fetch('/api/listing/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       });
 
       const json = await res.json();
@@ -199,7 +203,11 @@ export const ListingPortalPage: React.FC<Props> = ({
       }
 
       setSubmittedResult(json.data);
-      showToast('success', 'Pengajuan Terkirim', 'Pengajuan token listing berhasil dikirim ke Komite Listing DIMONEX!');
+      showToast(
+        'success',
+        'Pengajuan Terkirim',
+        'Pengajuan token listing berhasil dikirim ke Komite Listing DIMONEX!'
+      );
       loadPublicAssets();
     } catch (err: any) {
       showToast('error', 'Gagal Mengajukan', err.message);
@@ -208,7 +216,6 @@ export const ListingPortalPage: React.FC<Props> = ({
     }
   };
 
-  // Track Application
   const handleTrackApplication = async (queryToTrack?: string) => {
     const q = (queryToTrack || trackingQuery).trim();
     if (!q) {
@@ -241,112 +248,115 @@ export const ListingPortalPage: React.FC<Props> = ({
     setTimeout(() => setCopiedId(false), 2000);
   };
 
-  const isAdmin = user && (user.role === 'admin' || user.role === 'superadmin' || user.role === 'compliance');
+  const isAdmin =
+    user &&
+    (user.role === 'admin' || user.role === 'superadmin' || user.role === 'compliance');
 
   const filteredAssets = publicAssets.filter(a => {
     const q = exploreSearch.toLowerCase();
-    return a.symbol.toLowerCase().includes(q) || a.name.toLowerCase().includes(q) || a.network.toLowerCase().includes(q);
+    return (
+      a.symbol.toLowerCase().includes(q) ||
+      a.name.toLowerCase().includes(q) ||
+      a.network.toLowerCase().includes(q)
+    );
   });
 
   return (
-    <div className="flex-1 flex flex-col min-h-screen bg-[#08090D] text-[#F5F5F7] overflow-y-auto">
+    <div className="flex-1 flex flex-col min-h-screen bg-[#090D12] text-[#E4EBEF] overflow-y-auto">
       {/* Top Banner / Hero Section */}
-      <div className="border-b border-[#292C38] bg-gradient-to-b from-[#15171F] via-[#0E1016] to-[#08090D] px-4 lg:px-8 py-8">
+      <div className="border-b border-[#202B34] bg-[#111820] px-4 lg:px-8 pt-7 pb-0">
         <div className="max-w-7xl mx-auto">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
             <div>
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#EB3458]/10 border border-[#EB3458]/30 text-[#EB3458] text-xs font-semibold mb-3">
+              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-[5px] bg-[#17212B] border border-[#2B3944] text-[#8DA5B1] text-[11px] font-mono font-medium mb-3">
                 <Rocket className="w-3.5 h-3.5" />
-                <span>DIMONEX Initial Listing & Token Portal</span>
-                <span className="w-1.5 h-1.5 rounded-full bg-[#EB3458] animate-pulse" />
+                <span>DIMONEX INITIAL LISTING & TOKEN PORTAL</span>
               </div>
-              <h1 className="text-2xl lg:text-3xl font-extrabold tracking-tight text-[#F5F5F7]">
+              <h1 className="text-2xl lg:text-3xl font-semibold tracking-tight text-[#E4EBEF]">
                 Pusat Listing Aset Kripto & Pasar Spot (USDT / IDR)
               </h1>
-              <p className="text-xs lg:text-sm text-[#969BA8] mt-1.5 max-w-2xl leading-relaxed">
-                Platform listing resmi DIMONEX dengan dukungan kuotasi Global Tether (USDT) dan Rupiah (IDR). Dilengkapi mesin verifikasi matematis Zero-Float BigInt, tata kelola persetujuan berjenjang Maker-Checker, dan audit trail kriptografis sha256 anti-tamper.
+              <p className="text-xs lg:text-sm text-[#A1AFB8] mt-1.5 max-w-2xl leading-relaxed">
+                Platform listing resmi DIMONEX dengan dukungan kuotasi Global Tether (USDT) dan Rupiah (IDR), tata kelola persetujuan berjenjang Maker-Checker, dan audit trail kriptografis SHA-256.
               </p>
             </div>
 
-            {/* Quick Action Badges */}
+            {/* Architecture Specs */}
             <div className="flex flex-wrap md:flex-col gap-2 shrink-0">
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#15171F] border border-[#292C38] text-xs">
-                <ShieldCheck className="w-4 h-4 text-[#00C087]" />
-                <span className="text-[#969BA8]">Quote Currency:</span>
-                <span className="font-bold text-[#F5F5F7] font-mono">USDT & IDR</span>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-[7px] bg-[#141C24] border border-[#202B34] text-xs">
+                <ShieldCheck className="w-4 h-4 text-[#16A879]" />
+                <span className="text-[#71818B]">Quote Currency:</span>
+                <span className="font-semibold text-[#E4EBEF] font-mono">USDT & IDR</span>
               </div>
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#15171F] border border-[#292C38] text-xs">
-                <Users className="w-4 h-4 text-[#5B9DFF]" />
-                <span className="text-[#969BA8]">Governance:</span>
-                <span className="font-bold text-[#F5F5F7]">Maker-Checker</span>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-[7px] bg-[#141C24] border border-[#202B34] text-xs">
+                <Users className="w-4 h-4 text-[#6D9FE8]" />
+                <span className="text-[#71818B]">Governance:</span>
+                <span className="font-semibold text-[#E4EBEF]">Maker-Checker</span>
               </div>
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#15171F] border border-[#292C38] text-xs">
-                <Cpu className="w-4 h-4 text-[#EB3458]" />
-                <span className="text-[#969BA8]">Execution:</span>
-                <span className="font-bold text-[#EB3458]">Zero-Float Engine</span>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-[7px] bg-[#141C24] border border-[#202B34] text-xs">
+                <Cpu className="w-4 h-4 text-[#8DA5B1]" />
+                <span className="text-[#71818B]">Execution:</span>
+                <span className="font-semibold text-[#A5BAC4] font-mono">Zero-Float Engine</span>
               </div>
             </div>
           </div>
 
           {/* Navigation Sub-Tabs */}
-          <div className="flex items-center gap-2 mt-8 border-b border-[#292C38]/80 pb-px overflow-x-auto">
+          <div className="flex items-center gap-2 mt-7 pb-px overflow-x-auto">
             <button
+              type="button"
               onClick={() => setActiveTab('EXPLORE')}
-              className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-lg transition-colors whitespace-nowrap ${
+              className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-[7px] transition-colors whitespace-nowrap cursor-pointer ${
                 activeTab === 'EXPLORE'
-                  ? 'bg-[#15171F] text-[#EB3458] border-t-2 border-[#EB3458] border-x border-[#292C38]'
-                  : 'text-[#969BA8] hover:text-[#F5F5F7] hover:bg-[#15171F]/50'
+                  ? 'bg-[#090D12] text-[#E4EBEF] border-t-2 border-t-[#8DA5B1] border-x border-[#202B34]'
+                  : 'text-[#A1AFB8] hover:text-[#E4EBEF] hover:bg-[#141C24]'
               }`}
             >
-              <Layers className="w-4 h-4" />
+              <Layers className="w-4 h-4 text-[#8DA5B1]" />
               <span>Daftar Aset Terdaftar</span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#292C38] text-[#969BA8]">
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-[4px] bg-[#17212B] text-[#A1AFB8]">
                 {publicAssets.length}
               </span>
             </button>
 
             <button
+              type="button"
               onClick={() => setActiveTab('APPLY')}
-              className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-lg transition-colors whitespace-nowrap ${
+              className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-[7px] transition-colors whitespace-nowrap cursor-pointer ${
                 activeTab === 'APPLY'
-                  ? 'bg-[#15171F] text-[#EB3458] border-t-2 border-[#EB3458] border-x border-[#292C38]'
-                  : 'text-[#969BA8] hover:text-[#F5F5F7] hover:bg-[#15171F]/50'
+                  ? 'bg-[#090D12] text-[#E4EBEF] border-t-2 border-t-[#8DA5B1] border-x border-[#202B34]'
+                  : 'text-[#A1AFB8] hover:text-[#E4EBEF] hover:bg-[#141C24]'
               }`}
             >
-              <Rocket className="w-4 h-4" />
+              <Rocket className="w-4 h-4 text-[#8DA5B1]" />
               <span>Ajukan Listing Token</span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#EB3458]/20 text-[#EB3458] font-bold">
-                Project Portal
-              </span>
+              <StatusBadge tone="brand">Portal</StatusBadge>
             </button>
 
             <button
+              type="button"
               onClick={() => setActiveTab('TRACK')}
-              className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-lg transition-colors whitespace-nowrap ${
+              className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-[7px] transition-colors whitespace-nowrap cursor-pointer ${
                 activeTab === 'TRACK'
-                  ? 'bg-[#15171F] text-[#EB3458] border-t-2 border-[#EB3458] border-x border-[#292C38]'
-                  : 'text-[#969BA8] hover:text-[#F5F5F7] hover:bg-[#15171F]/50'
+                  ? 'bg-[#090D12] text-[#E4EBEF] border-t-2 border-t-[#8DA5B1] border-x border-[#202B34]'
+                  : 'text-[#A1AFB8] hover:text-[#E4EBEF] hover:bg-[#141C24]'
               }`}
             >
-              <Clock className="w-4 h-4" />
+              <Clock className="w-4 h-4 text-[#8DA5B1]" />
               <span>Lacak Status Pengajuan</span>
             </button>
 
             <button
+              type="button"
               onClick={() => setActiveTab('ADMIN_CONSOLE')}
-              className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-lg transition-colors whitespace-nowrap ml-auto ${
+              className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-[7px] transition-colors whitespace-nowrap ml-auto cursor-pointer ${
                 activeTab === 'ADMIN_CONSOLE'
-                  ? 'bg-[#15171F] text-[#EB3458] border-t-2 border-[#EB3458] border-x border-[#292C38]'
-                  : 'text-[#5B9DFF] hover:text-white hover:bg-[#15171F]/50 border border-transparent'
+                  ? 'bg-[#090D12] text-[#E4EBEF] border-t-2 border-t-[#8DA5B1] border-x border-[#202B34]'
+                  : 'text-[#8DA5B1] hover:text-[#E4EBEF] hover:bg-[#141C24]'
               }`}
             >
               <Lock className="w-3.5 h-3.5" />
               <span>Admin & Maker-Checker Console</span>
-              {isAdmin && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#00C087]/20 text-[#00C087] font-bold">
-                  {user?.role?.toUpperCase()}
-                </span>
-              )}
+              {isAdmin && <StatusBadge tone="success">{user?.role?.toUpperCase()}</StatusBadge>}
             </button>
           </div>
         </div>
@@ -354,151 +364,152 @@ export const ListingPortalPage: React.FC<Props> = ({
 
       {/* Main Content Area */}
       <div className="flex-1 max-w-7xl w-full mx-auto p-4 lg:p-8">
-        {/* ========================================================= */}
         {/* TAB 1: EXPLORE LISTED ASSETS */}
-        {/* ========================================================= */}
         {activeTab === 'EXPLORE' && (
-          <div className="space-y-6 animate-in fade-in duration-200">
-            {/* Top Bar Filter */}
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 rounded-xl bg-[#0E1016] border border-[#292C38]">
-              <div className="relative w-full sm:w-80">
-                <Search className="w-4 h-4 text-[#686D7A] absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder="Cari simbol, nama, atau jaringan..."
-                  value={exploreSearch}
-                  onChange={e => setExploreSearch(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2 rounded-lg bg-[#15171F] border border-[#292C38] text-xs text-[#F5F5F7] focus:outline-none focus:border-[#EB3458]"
-                />
-              </div>
+          <div className="space-y-5">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+              <SearchInput
+                value={exploreSearch}
+                onChange={setExploreSearch}
+                placeholder="Cari simbol, nama, atau jaringan..."
+                className="w-full sm:w-80"
+              />
 
-              <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+              <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
                 <Button
-                  variant="outline"
+                  variant="secondary"
                   size="sm"
                   onClick={loadPublicAssets}
-                  className="text-xs"
+                  isLoading={isLoadingAssets}
                 >
                   Refresh Data
                 </Button>
                 <Button
+                  variant="primary"
                   size="sm"
+                  icon={<Rocket className="w-3.5 h-3.5" />}
                   onClick={() => setActiveTab('APPLY')}
-                  className="text-xs bg-[#EB3458] hover:bg-[#FF496B] text-white"
                 >
-                  <Rocket className="w-3.5 h-3.5 mr-1.5" />
                   Ajukan Token Baru
                 </Button>
               </div>
             </div>
 
-            {/* Assets Table */}
-            <div className="rounded-xl border border-[#292C38] bg-[#0E1016] overflow-hidden">
+            <div className="rounded-[10px] border border-[#202B34] bg-[#141C24] overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-xs">
                   <thead>
-                    <tr className="border-b border-[#292C38] bg-[#15171F]/70 text-[#969BA8]">
-                      <th className="py-3 px-4 font-semibold">Aset / Koin</th>
-                      <th className="py-3 px-4 font-semibold">Jaringan</th>
-                      <th className="py-3 px-4 font-semibold">Tipe</th>
-                      <th className="py-3 px-4 font-semibold">Desimal</th>
-                      <th className="py-3 px-4 font-semibold">Status Listing</th>
-                      <th className="py-3 px-4 font-semibold">Deposit & WD</th>
-                      <th className="py-3 px-4 font-semibold">Pasar Spot</th>
-                      <th className="py-3 px-4 font-semibold text-right">Aksi</th>
+                    <tr className="border-b border-[#202B34] bg-[#111820] text-[#71818B] text-[11px] uppercase tracking-wider">
+                      <th className="py-3 px-4 font-medium">Aset / Koin</th>
+                      <th className="py-3 px-4 font-medium">Jaringan</th>
+                      <th className="py-3 px-4 font-medium">Tipe</th>
+                      <th className="py-3 px-4 font-medium">Desimal</th>
+                      <th className="py-3 px-4 font-medium">Status Listing</th>
+                      <th className="py-3 px-4 font-medium">Deposit & WD</th>
+                      <th className="py-3 px-4 font-medium">Pasar Spot</th>
+                      <th className="py-3 px-4 font-medium text-right">Aksi</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#292C38]/60">
+                  <tbody className="divide-y divide-[#202B34]">
                     {filteredAssets.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="py-12 text-center text-[#686D7A]">
+                        <td colSpan={8} className="py-12 text-center text-[#71818B]">
                           Tidak ada aset yang cocok dengan filter pencarian.
                         </td>
                       </tr>
                     ) : (
                       filteredAssets.map(asset => {
                         const isIdr = asset.symbol === 'IDR';
-                        const activeMarketsForBase = tradingPairs.filter(p => p.baseCurrency === asset.symbol);
+                        const activeMarketsForBase = tradingPairs.filter(
+                          p => p.baseCurrency === asset.symbol
+                        );
                         const preferredPair =
                           activeMarketsForBase.find(p => p.id === asset.marketSymbol) ||
                           activeMarketsForBase[0];
                         const pairId = preferredPair?.id || asset.marketSymbol || `${asset.symbol}-IDR`;
                         const marketLabels: string[] =
-                          Array.isArray(asset.activeMarketSymbols) && asset.activeMarketSymbols.length > 0
+                          Array.isArray(asset.activeMarketSymbols) &&
+                          asset.activeMarketSymbols.length > 0
                             ? asset.activeMarketSymbols
-                            : (activeMarketsForBase.length > 0 ? activeMarketsForBase.map(p => p.id) : []);
-                        const isPairExisting = activeMarketsForBase.length > 0 || marketLabels.length > 0;
+                            : activeMarketsForBase.length > 0
+                            ? activeMarketsForBase.map(p => p.id)
+                            : [];
+                        const isPairExisting =
+                          activeMarketsForBase.length > 0 || marketLabels.length > 0;
 
                         return (
-                          <tr key={asset.id} className="hover:bg-[#15171F]/50 transition-colors">
+                          <tr key={asset.id} className="hover:bg-[#17212B] transition-colors">
                             <td className="py-3 px-4">
                               <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 rounded-lg bg-[#1C1F29] border border-[#292C38] flex items-center justify-center font-bold text-xs text-[#EB3458]">
-                                  {asset.symbol.substring(0, 3)}
-                                </div>
+                                <AssetIcon symbol={asset.symbol} size="md" />
                                 <div>
-                                  <div className="font-bold text-[#F5F5F7] flex items-center gap-1.5">
+                                  <div className="font-semibold text-[#E4EBEF] flex items-center gap-1.5 font-mono">
                                     <span>{asset.symbol}</span>
                                     {(isIdr || asset.symbol === 'USDT') && (
-                                      <span className="text-[9px] px-1 py-0.2 rounded bg-[#00C087]/20 text-[#00C087] font-semibold">
-                                        {isIdr ? 'BASE QUOTE' : 'QUOTE ASSET'}
-                                      </span>
+                                      <StatusBadge tone="buy">
+                                        {isIdr ? 'BASE QUOTE' : 'QUOTE'}
+                                      </StatusBadge>
                                     )}
                                   </div>
-                                  <div className="text-[11px] text-[#686D7A]">{asset.name}</div>
+                                  <div className="text-[11px] text-[#71818B]">{asset.name}</div>
                                 </div>
                               </div>
                             </td>
-                            <td className="py-3 px-4 font-mono text-[#969BA8]">
-                              <span className="px-2 py-0.5 rounded bg-[#1C1F29] border border-[#292C38] text-[10px]">
+                            <td className="py-3 px-4 font-mono text-[#A1AFB8]">
+                              <span className="px-2 py-0.5 rounded-[5px] bg-[#17212B] border border-[#2B3944] text-[10px]">
                                 {asset.network}
                               </span>
                             </td>
-                            <td className="py-3 px-4">
-                              <span className="text-[11px] text-[#969BA8] font-mono">
-                                {asset.assetType}
-                              </span>
+                            <td className="py-3 px-4 font-mono text-[11px] text-[#A1AFB8]">
+                              {asset.assetType}
                             </td>
-                            <td className="py-3 px-4 font-mono text-[#969BA8]">
+                            <td className="py-3 px-4 font-mono tabular-nums text-[#A1AFB8]">
                               {asset.decimals}
                             </td>
                             <td className="py-3 px-4">
-                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold ${
-                                asset.status === 'ACTIVE'
-                                  ? 'bg-[#00C087]/15 text-[#00C087] border border-[#00C087]/30'
-                                  : 'bg-[#F5B942]/15 text-[#F5B942] border border-[#F5B942]/30'
-                              }`}>
-                                <span className={`w-1.5 h-1.5 rounded-full ${asset.status === 'ACTIVE' ? 'bg-[#00C087]' : 'bg-[#F5B942]'}`} />
+                              <StatusBadge
+                                tone={asset.status === 'ACTIVE' ? 'success' : 'warning'}
+                                dot
+                              >
                                 {asset.status}
-                              </span>
+                              </StatusBadge>
                             </td>
                             <td className="py-3 px-4">
                               <div className="flex flex-col gap-1">
                                 <div className="flex items-center gap-1.5">
-                                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold ${
-                                    asset.depositEnabled !== false
-                                      ? 'bg-[#00C087]/15 text-[#00C087] border border-[#00C087]/30'
-                                      : 'bg-[#686D7A]/15 text-[#686D7A] border border-[#686D7A]/30'
-                                  }`}>
+                                  <StatusBadge
+                                    tone={asset.depositEnabled !== false ? 'buy' : 'neutral'}
+                                  >
                                     DEP: {asset.depositEnabled !== false ? 'BUKA' : 'TUTUP'}
-                                  </span>
+                                  </StatusBadge>
                                   {asset.depositOpenedAt && (
-                                    <span className="text-[9px] text-[#969BA8] font-mono">
-                                      {new Date(asset.depositOpenedAt).toLocaleDateString('id-ID', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                    <span className="text-[9px] text-[#71818B] font-mono">
+                                      {new Date(asset.depositOpenedAt).toLocaleDateString('id-ID', {
+                                        month: 'numeric',
+                                        day: 'numeric',
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                      })}
                                     </span>
                                   )}
                                 </div>
                                 <div className="flex items-center gap-1.5">
-                                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold ${
-                                    asset.withdrawalEnabled !== false
-                                      ? 'bg-[#00C087]/15 text-[#00C087] border border-[#00C087]/30'
-                                      : 'bg-[#686D7A]/15 text-[#686D7A] border border-[#686D7A]/30'
-                                  }`}>
+                                  <StatusBadge
+                                    tone={asset.withdrawalEnabled !== false ? 'buy' : 'neutral'}
+                                  >
                                     WD: {asset.withdrawalEnabled !== false ? 'BUKA' : 'TUTUP'}
-                                  </span>
+                                  </StatusBadge>
                                   {asset.withdrawalOpenedAt && (
-                                    <span className="text-[9px] text-[#969BA8] font-mono">
-                                      {new Date(asset.withdrawalOpenedAt).toLocaleDateString('id-ID', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                    <span className="text-[9px] text-[#71818B] font-mono">
+                                      {new Date(asset.withdrawalOpenedAt).toLocaleDateString(
+                                        'id-ID',
+                                        {
+                                          month: 'numeric',
+                                          day: 'numeric',
+                                          hour: '2-digit',
+                                          minute: '2-digit',
+                                        }
+                                      )}
                                     </span>
                                   )}
                                 </div>
@@ -506,17 +517,22 @@ export const ListingPortalPage: React.FC<Props> = ({
                             </td>
                             <td className="py-3 px-4">
                               {isIdr ? (
-                                <span className="text-[11px] text-[#686D7A] italic">Quote Currency</span>
+                                <span className="text-[11px] text-[#71818B] italic">
+                                  Quote Currency
+                                </span>
                               ) : isPairExisting || asset.hasActiveMarket ? (
                                 <div className="flex flex-wrap items-center gap-1">
                                   {(marketLabels.length > 0 ? marketLabels : [pairId]).map(mSym => (
-                                    <span key={mSym} className="font-mono text-xs text-[#F5F5F7] font-semibold px-1.5 py-0.5 rounded bg-[#1C1F29] border border-[#292C38]">
+                                    <span
+                                      key={mSym}
+                                      className="font-mono text-[11px] text-[#E4EBEF] font-semibold px-1.5 py-0.5 rounded-[5px] bg-[#17212B] border border-[#2B3944]"
+                                    >
                                       {mSym}
                                     </span>
                                   ))}
                                 </div>
                               ) : (
-                                <span className="text-[10px] text-[#969BA8] px-2 py-0.5 rounded bg-[#1C1F29]">
+                                <span className="text-[10px] text-[#A1AFB8] px-2 py-0.5 rounded-[5px] bg-[#17212B]">
                                   Dalam Proses Listing ({pairId})
                                 </span>
                               )}
@@ -525,14 +541,13 @@ export const ListingPortalPage: React.FC<Props> = ({
                               {!isIdr && (
                                 <Button
                                   size="sm"
-                                  variant="outline"
+                                  variant="secondary"
                                   onClick={() => {
                                     onSelectPair(pairId);
                                     onSelectView('TRADE');
                                   }}
-                                  className="text-[11px] border-[#EB3458]/40 hover:bg-[#EB3458]/10 text-[#EB3458]"
                                 >
-                                  Trading Spot
+                                  <span>Trading Spot</span>
                                   <ArrowRight className="w-3 h-3 ml-1" />
                                 </Button>
                               )}
@@ -548,58 +563,62 @@ export const ListingPortalPage: React.FC<Props> = ({
           </div>
         )}
 
-        {/* ========================================================= */}
-        {/* TAB 2: APPLY FOR LISTING (PROJECT PORTAL) */}
-        {/* ========================================================= */}
+        {/* TAB 2: APPLY FOR LISTING */}
         {activeTab === 'APPLY' && (
-          <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in duration-200">
-            {/* Guidance card */}
-            <div className="p-4 rounded-xl bg-[#15171F] border border-[#EB3458]/30 flex items-start gap-4">
-              <div className="p-2.5 rounded-lg bg-[#EB3458]/15 text-[#EB3458] shrink-0 mt-0.5">
+          <div className="max-w-4xl mx-auto space-y-6">
+            <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#2B3944] flex items-start gap-4">
+              <div className="p-2.5 rounded-[7px] bg-[#1D2832] border border-[#40515D] text-[#8DA5B1] shrink-0 mt-0.5">
                 <Info className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="text-sm font-bold text-[#F5F5F7]">Ketentuan Pengajuan Token Baru DIMONEX</h4>
-                <p className="text-xs text-[#969BA8] mt-1 leading-relaxed">
+                <h4 className="text-sm font-semibold text-[#E4EBEF]">
+                  Ketentuan Pengajuan Token Baru DIMONEX
+                </h4>
+                <p className="text-xs text-[#A1AFB8] mt-1 leading-relaxed">
                   Semua token yang didaftarkan wajib memenuhi standar audit smart contract, kepatuhan AML/CFT Bappebti, dan likuiditas awal. Pengajuan akan ditinjau oleh tim Maker & Checker Listing Committee secara independen sebelum aktivasi pasar spot.
                 </p>
               </div>
             </div>
 
-            <form onSubmit={handleSubmitApplication} className="space-y-6 p-6 rounded-2xl bg-[#0E1016] border border-[#292C38]">
-              {/* Step 1: Asset Identity */}
+            <form
+              onSubmit={handleSubmitApplication}
+              className="space-y-6 p-6 rounded-[10px] bg-[#141C24] border border-[#202B34]"
+            >
+              {/* Step 1 */}
               <div>
-                <h3 className="text-sm font-bold text-[#F5F5F7] mb-3 flex items-center gap-2 border-b border-[#292C38] pb-2">
-                  <span className="w-5 h-5 rounded-full bg-[#EB3458] text-white flex items-center justify-center text-xs">1</span>
-                  Identitas Token & Kontrak Pintar
+                <h3 className="text-sm font-semibold text-[#E4EBEF] mb-3 flex items-center gap-2 border-b border-[#202B34] pb-2">
+                  <span className="w-5 h-5 rounded-full bg-[#8DA5B1] text-[#090D12] font-mono font-bold flex items-center justify-center text-xs">
+                    1
+                  </span>
+                  <span>Identitas Token & Kontrak Pintar</span>
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-medium text-[#969BA8] mb-1">Nama Lengkap Token *</label>
-                    <Input
-                      placeholder="e.g. Tether USD, Polkadot, Celestia"
-                      value={formData.tokenName}
-                      onChange={e => setFormData({ ...formData, tokenName: e.target.value })}
-                      error={formErrors.tokenName}
-                    />
-                  </div>
+                  <Input
+                    label="Nama Lengkap Token *"
+                    placeholder="e.g. Tether USD, Polkadot, Celestia"
+                    value={formData.tokenName}
+                    onChange={e => setFormData({ ...formData, tokenName: e.target.value })}
+                    error={formErrors.tokenName}
+                  />
+
+                  <Input
+                    label="Simbol Ticker *"
+                    placeholder="e.g. TIA, DOT, NEAR"
+                    value={formData.tokenSymbol}
+                    onChange={e =>
+                      setFormData({ ...formData, tokenSymbol: e.target.value.toUpperCase() })
+                    }
+                    error={formErrors.tokenSymbol}
+                  />
 
                   <div>
-                    <label className="block text-xs font-medium text-[#969BA8] mb-1">Simbol Ticker *</label>
-                    <Input
-                      placeholder="e.g. TIA, DOT, NEAR"
-                      value={formData.tokenSymbol}
-                      onChange={e => setFormData({ ...formData, tokenSymbol: e.target.value.toUpperCase() })}
-                      error={formErrors.tokenSymbol}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-[#969BA8] mb-1">Jaringan Blockchain *</label>
+                    <label className="block text-[11px] font-medium text-[#A1AFB8] mb-1.5">
+                      Jaringan Blockchain *
+                    </label>
                     <select
                       value={formData.network}
                       onChange={e => setFormData({ ...formData, network: e.target.value })}
-                      className="w-full px-3 py-2 rounded-lg bg-[#15171F] border border-[#292C38] text-xs text-[#F5F5F7] focus:outline-none focus:border-[#EB3458]"
+                      className="w-full px-3 py-2 rounded-[7px] bg-[#111820] border border-[#2B3944] text-xs text-[#E4EBEF] focus:outline-none focus:border-[#8DA5B1]"
                     >
                       <option value="ETHEREUM">Ethereum (ERC-20)</option>
                       <option value="BSC">BNB Smart Chain (BEP-20)</option>
@@ -610,139 +629,143 @@ export const ListingPortalPage: React.FC<Props> = ({
                     </select>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-medium text-[#969BA8] mb-1">Presisi Desimal (0-18) *</label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={18}
-                      value={formData.decimals}
-                      onChange={e => setFormData({ ...formData, decimals: parseInt(e.target.value, 10) || 18 })}
-                    />
-                  </div>
+                  <Input
+                    label="Presisi Desimal (0-18) *"
+                    type="number"
+                    min={0}
+                    max={18}
+                    value={formData.decimals}
+                    onChange={e =>
+                      setFormData({
+                        ...formData,
+                        decimals: parseInt(e.target.value, 10) || 18,
+                      })
+                    }
+                  />
 
                   <div className="md:col-span-2">
-                    <label className="block text-xs font-medium text-[#969BA8] mb-1">Alamat Smart Contract / Mint Address *</label>
                     <Input
+                      label="Alamat Smart Contract / Mint Address *"
                       placeholder="0x... atau Solana Base58 atau Tron Base58"
                       value={formData.contractAddress}
-                      onChange={e => setFormData({ ...formData, contractAddress: e.target.value.trim() })}
+                      onChange={e =>
+                        setFormData({ ...formData, contractAddress: e.target.value.trim() })
+                      }
                       error={formErrors.contractAddress}
                     />
-                    <p className="text-[10px] text-[#686D7A] mt-1">
+                    <p className="text-[10px] text-[#71818B] mt-1">
                       Wajib format valid sesuai jaringan yang dipilih. Sistem memverifikasi format sebelum memproses permohonan.
                     </p>
                   </div>
                 </div>
               </div>
 
-              {/* Step 2: Project Links & Contacts */}
+              {/* Step 2 */}
               <div>
-                <h3 className="text-sm font-bold text-[#F5F5F7] mb-3 flex items-center gap-2 border-b border-[#292C38] pb-2">
-                  <span className="w-5 h-5 rounded-full bg-[#EB3458] text-white flex items-center justify-center text-xs">2</span>
-                  Verifikasi Proyek & Kontak Resmi
+                <h3 className="text-sm font-semibold text-[#E4EBEF] mb-3 flex items-center gap-2 border-b border-[#202B34] pb-2">
+                  <span className="w-5 h-5 rounded-full bg-[#8DA5B1] text-[#090D12] font-mono font-bold flex items-center justify-center text-xs">
+                    2
+                  </span>
+                  <span>Verifikasi Proyek & Kontak Resmi</span>
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-medium text-[#969BA8] mb-1">Website Resmi</label>
-                    <Input
-                      placeholder="https://yourproject.io"
-                      value={formData.projectWebsite}
-                      onChange={e => setFormData({ ...formData, projectWebsite: e.target.value })}
-                    />
-                  </div>
+                  <Input
+                    label="Website Resmi"
+                    placeholder="https://yourproject.io"
+                    value={formData.projectWebsite}
+                    onChange={e => setFormData({ ...formData, projectWebsite: e.target.value })}
+                  />
 
-                  <div>
-                    <label className="block text-xs font-medium text-[#969BA8] mb-1">Link Whitepaper / Dokumen Audit</label>
-                    <Input
-                      placeholder="https://yourproject.io/whitepaper.pdf"
-                      value={formData.whitepaperUrl}
-                      onChange={e => setFormData({ ...formData, whitepaperUrl: e.target.value })}
-                    />
-                  </div>
+                  <Input
+                    label="Link Whitepaper / Dokumen Audit"
+                    placeholder="https://yourproject.io/whitepaper.pdf"
+                    value={formData.whitepaperUrl}
+                    onChange={e => setFormData({ ...formData, whitepaperUrl: e.target.value })}
+                  />
 
-                  <div>
-                    <label className="block text-xs font-medium text-[#969BA8] mb-1">Email Resmi Proyek *</label>
-                    <Input
-                      type="email"
-                      placeholder="listing@yourproject.io"
-                      value={formData.contactEmail}
-                      onChange={e => setFormData({ ...formData, contactEmail: e.target.value })}
-                      error={formErrors.contactEmail}
-                    />
-                  </div>
+                  <Input
+                    label="Email Resmi Proyek *"
+                    type="email"
+                    placeholder="listing@yourproject.io"
+                    value={formData.contactEmail}
+                    onChange={e => setFormData({ ...formData, contactEmail: e.target.value })}
+                    error={formErrors.contactEmail}
+                  />
 
-                  <div>
-                    <label className="block text-xs font-medium text-[#969BA8] mb-1">Handle Telegram Official</label>
-                    <Input
-                      placeholder="@ProjectFounder"
-                      value={formData.telegramHandle}
-                      onChange={e => setFormData({ ...formData, telegramHandle: e.target.value })}
-                    />
-                  </div>
+                  <Input
+                    label="Handle Telegram Official"
+                    placeholder="@ProjectFounder"
+                    value={formData.telegramHandle}
+                    onChange={e => setFormData({ ...formData, telegramHandle: e.target.value })}
+                  />
                 </div>
               </div>
 
-              {/* Step 3: Financial & Liquidity Parameters */}
+              {/* Step 3 */}
               <div>
-                <h3 className="text-sm font-bold text-[#F5F5F7] mb-3 flex items-center gap-2 border-b border-[#292C38] pb-2">
-                  <span className="w-5 h-5 rounded-full bg-[#EB3458] text-white flex items-center justify-center text-xs">3</span>
-                  Parameter Pasar & Kuotasi ({formData.quoteCurrency})
+                <h3 className="text-sm font-semibold text-[#E4EBEF] mb-3 flex items-center gap-2 border-b border-[#202B34] pb-2">
+                  <span className="w-5 h-5 rounded-full bg-[#8DA5B1] text-[#090D12] font-mono font-bold flex items-center justify-center text-xs">
+                    3
+                  </span>
+                  <span>Parameter Pasar & Kuotasi ({formData.quoteCurrency})</span>
                 </h3>
 
-                {/* Quote Currency Selector */}
-                <div className="mb-4 p-3.5 rounded-xl bg-[#15171F] border border-[#292C38]">
-                  <label className="block text-xs font-bold text-[#F5F5F7] mb-2">
+                <div className="mb-4 p-4 rounded-[10px] bg-[#111820] border border-[#202B34]">
+                  <label className="block text-xs font-semibold text-[#E4EBEF] mb-2.5">
                     Pilih Mata Uang Kuotasi (Quote Currency) *
                   </label>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <button
                       type="button"
-                      onClick={() => setFormData({
-                        ...formData,
-                        quoteCurrency: 'USDT',
-                        expectedInitialPriceIdr: '1.00',
-                        initialLiquidityCommitmentIdr: '25000'
-                      })}
-                      className={`p-3 rounded-lg border text-left transition-all ${
+                      onClick={() =>
+                        setFormData({
+                          ...formData,
+                          quoteCurrency: 'USDT',
+                          expectedInitialPriceIdr: '1.00',
+                          initialLiquidityCommitmentIdr: '25000',
+                        })
+                      }
+                      className={`p-3 rounded-[7px] border text-left transition-colors cursor-pointer ${
                         formData.quoteCurrency === 'USDT'
-                          ? 'bg-[#00C087]/15 border-[#00C087] text-[#F5F5F7]'
-                          : 'bg-[#0E1016] border-[#292C38] text-[#969BA8] hover:border-[#686D7A]'
+                          ? 'bg-[#12392F]/50 border-[#16A879] text-[#E4EBEF]'
+                          : 'bg-[#141C24] border-[#2B3944] text-[#A1AFB8] hover:border-[#40515D]'
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-bold font-mono text-sm text-[#00C087]">USDT (Tether USD)</span>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#00C087]/20 text-[#00C087] font-bold">
-                          Global Standard
+                        <span className="font-semibold font-mono text-sm text-[#16A879]">
+                          USDT (Tether USD)
                         </span>
+                        <StatusBadge tone="buy">Global Standard</StatusBadge>
                       </div>
-                      <p className="text-[11px] text-[#969BA8] mt-1">
-                        Pasar berpasangan USDT seperti {formData.tokenSymbol || 'TOKEN'}/USDT (e.g. BTC/USDT, ETH/USDT, SOL/USDT).
+                      <p className="text-[11px] text-[#71818B] mt-1">
+                        Pasar berpasangan USDT seperti {formData.tokenSymbol || 'TOKEN'}/USDT.
                       </p>
                     </button>
 
                     <button
                       type="button"
-                      onClick={() => setFormData({
-                        ...formData,
-                        quoteCurrency: 'IDR',
-                        expectedInitialPriceIdr: '1000',
-                        initialLiquidityCommitmentIdr: '50000000'
-                      })}
-                      className={`p-3 rounded-lg border text-left transition-all ${
+                      onClick={() =>
+                        setFormData({
+                          ...formData,
+                          quoteCurrency: 'IDR',
+                          expectedInitialPriceIdr: '1000',
+                          initialLiquidityCommitmentIdr: '50000000',
+                        })
+                      }
+                      className={`p-3 rounded-[7px] border text-left transition-colors cursor-pointer ${
                         formData.quoteCurrency === 'IDR'
-                          ? 'bg-[#EB3458]/15 border-[#EB3458] text-[#F5F5F7]'
-                          : 'bg-[#0E1016] border-[#292C38] text-[#969BA8] hover:border-[#686D7A]'
+                          ? 'bg-[#1D2832] border-[#8DA5B1] text-[#E4EBEF]'
+                          : 'bg-[#141C24] border-[#2B3944] text-[#A1AFB8] hover:border-[#40515D]'
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-bold font-mono text-sm text-[#EB3458]">IDR (Indonesian Rupiah)</span>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#EB3458]/20 text-[#EB3458] font-bold">
-                          Fiat Lokal
+                        <span className="font-semibold font-mono text-sm text-[#C1D0D6]">
+                          IDR (Indonesian Rupiah)
                         </span>
+                        <StatusBadge tone="brand">Fiat Lokal</StatusBadge>
                       </div>
-                      <p className="text-[11px] text-[#969BA8] mt-1">
-                        Pasar kuotasi Rupiah lokal seperti {formData.tokenSymbol || 'TOKEN'}/IDR untuk trader Indonesia.
+                      <p className="text-[11px] text-[#71818B] mt-1">
+                        Pasar kuotasi Rupiah lokal seperti {formData.tokenSymbol || 'TOKEN'}/IDR.
                       </p>
                     </button>
                   </div>
@@ -750,77 +773,87 @@ export const ListingPortalPage: React.FC<Props> = ({
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-medium text-[#969BA8] mb-1">
-                      Estimasi Target Harga Awal per Token ({formData.quoteCurrency}) *
-                    </label>
                     <Input
+                      label={`Estimasi Target Harga Awal per Token (${formData.quoteCurrency}) *`}
                       type="text"
-                      placeholder={formData.quoteCurrency === 'USDT' ? "1.50" : "1000"}
+                      placeholder={formData.quoteCurrency === 'USDT' ? '1.50' : '1000'}
                       value={formData.expectedInitialPriceIdr}
-                      onChange={e => setFormData({ ...formData, expectedInitialPriceIdr: e.target.value })}
+                      onChange={e =>
+                        setFormData({ ...formData, expectedInitialPriceIdr: e.target.value })
+                      }
                     />
-                    <span className="text-[10px] text-[#686D7A] mt-1 block">
-                      Target harga pembukaan di pasar {formData.tokenSymbol || 'TOKEN'}/{formData.quoteCurrency}
+                    <span className="text-[10px] text-[#71818B] mt-1 block">
+                      Target harga pembukaan di pasar {formData.tokenSymbol || 'TOKEN'}/
+                      {formData.quoteCurrency}
                     </span>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-[#969BA8] mb-1">
-                      Komitmen Likuiditas Awal ({formData.quoteCurrency}) *
-                    </label>
                     <Input
+                      label={`Komitmen Likuiditas Awal (${formData.quoteCurrency}) *`}
                       type="text"
-                      placeholder={formData.quoteCurrency === 'USDT' ? "25000" : "50000000"}
+                      placeholder={formData.quoteCurrency === 'USDT' ? '25000' : '50000000'}
                       value={formData.initialLiquidityCommitmentIdr}
-                      onChange={e => setFormData({ ...formData, initialLiquidityCommitmentIdr: e.target.value })}
+                      onChange={e =>
+                        setFormData({ ...formData, initialLiquidityCommitmentIdr: e.target.value })
+                      }
                     />
-                    <span className="text-[10px] text-[#686D7A] mt-1 block">
+                    <span className="text-[10px] text-[#71818B] mt-1 block">
                       Alokasi dana quote yang disediakan ke designated Market Maker.
                     </span>
                   </div>
 
                   <div className="md:col-span-2">
-                    <label className="block text-xs font-medium text-[#969BA8] mb-1">Deskripsi Singkat & Kegunaan Token</label>
+                    <label className="block text-[11px] font-medium text-[#A1AFB8] mb-1.5">
+                      Deskripsi Singkat & Kegunaan Token
+                    </label>
                     <textarea
                       rows={3}
                       placeholder="Jelaskan use-case token, ekosistem, dan rencana distribusi kepada komunitas..."
                       value={formData.description}
                       onChange={e => setFormData({ ...formData, description: e.target.value })}
-                      className="w-full px-3 py-2 rounded-lg bg-[#15171F] border border-[#292C38] text-xs text-[#F5F5F7] focus:outline-none focus:border-[#EB3458]"
+                      className="w-full px-3 py-2 rounded-[7px] bg-[#111820] border border-[#2B3944] text-xs text-[#E4EBEF] placeholder-[#53616A] focus:outline-none focus:border-[#8DA5B1]"
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Step 4: Project Owner Trader Account & Deposit / Withdraw Schedule */}
+              {/* Step 4 */}
               <div>
-                <h3 className="text-sm font-bold text-[#F5F5F7] mb-3 flex items-center gap-2 border-b border-[#292C38] pb-2">
-                  <span className="w-5 h-5 rounded-full bg-[#EB3458] text-white flex items-center justify-center text-xs">4</span>
-                  Akun Trader Pemilik Project & Saluran Deposit / Withdrawal
+                <h3 className="text-sm font-semibold text-[#E4EBEF] mb-3 flex items-center gap-2 border-b border-[#202B34] pb-2">
+                  <span className="w-5 h-5 rounded-full bg-[#8DA5B1] text-[#090D12] font-mono font-bold flex items-center justify-center text-xs">
+                    4
+                  </span>
+                  <span>Akun Trader Pemilik Project & Saluran Deposit / Withdrawal</span>
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="md:col-span-2">
-                    <label className="block text-xs font-medium text-[#969BA8] mb-1">
-                      Akun ID / Email Trader Pemilik Project (DIMONEX)
-                    </label>
                     <Input
+                      label="Akun ID / Email Trader Pemilik Project (DIMONEX)"
                       placeholder="e.g. project@dimonex.id atau usr-user1-0000-0000-000000000001"
                       value={formData.projectOwnerAccountId}
-                      onChange={e => setFormData({ ...formData, projectOwnerAccountId: e.target.value.trim() })}
+                      onChange={e =>
+                        setFormData({ ...formData, projectOwnerAccountId: e.target.value.trim() })
+                      }
                     />
-                    <p className="text-[10px] text-[#686D7A] mt-1">
+                    <p className="text-[10px] text-[#71818B] mt-1">
                       Akun ini akan ditetapkan sebagai akun trader resmi pemilik project untuk menerima saldo initial token saat listing disetujui.
                     </p>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-[#969BA8] mb-1">
+                    <label className="block text-[11px] font-medium text-[#A1AFB8] mb-1.5">
                       Jadwal Pembukaan Deposit Token
                     </label>
                     <select
                       value={formData.depositScheduleType}
-                      onChange={e => setFormData({ ...formData, depositScheduleType: e.target.value as 'IMMEDIATE' | 'SCHEDULED' })}
-                      className="w-full px-3 py-2 rounded-lg bg-[#15171F] border border-[#292C38] text-xs text-[#F5F5F7] focus:outline-none focus:border-[#EB3458]"
+                      onChange={e =>
+                        setFormData({
+                          ...formData,
+                          depositScheduleType: e.target.value as 'IMMEDIATE' | 'SCHEDULED',
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-[7px] bg-[#111820] border border-[#2B3944] text-xs text-[#E4EBEF] focus:outline-none focus:border-[#8DA5B1]"
                     >
                       <option value="IMMEDIATE">Buka Segera Saat Listing Aktif (Rekomendasi)</option>
                       <option value="SCHEDULED">Jadwal Khusus Pembukaan Deposit</option>
@@ -828,24 +861,31 @@ export const ListingPortalPage: React.FC<Props> = ({
 
                     {formData.depositScheduleType === 'SCHEDULED' && (
                       <div className="mt-2">
-                        <label className="block text-[10px] text-[#969BA8] mb-1">Pilih Tanggal & Jam Buka Deposit</label>
                         <Input
+                          label="Pilih Tanggal & Jam Buka Deposit"
                           type="datetime-local"
                           value={formData.depositOpenedAtDate}
-                          onChange={e => setFormData({ ...formData, depositOpenedAtDate: e.target.value })}
+                          onChange={e =>
+                            setFormData({ ...formData, depositOpenedAtDate: e.target.value })
+                          }
                         />
                       </div>
                     )}
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-[#969BA8] mb-1">
+                    <label className="block text-[11px] font-medium text-[#A1AFB8] mb-1.5">
                       Jadwal Pembukaan Penarikan (Withdrawal)
                     </label>
                     <select
                       value={formData.withdrawalScheduleType}
-                      onChange={e => setFormData({ ...formData, withdrawalScheduleType: e.target.value as 'IMMEDIATE' | 'SCHEDULED' })}
-                      className="w-full px-3 py-2 rounded-lg bg-[#15171F] border border-[#292C38] text-xs text-[#F5F5F7] focus:outline-none focus:border-[#EB3458]"
+                      onChange={e =>
+                        setFormData({
+                          ...formData,
+                          withdrawalScheduleType: e.target.value as 'IMMEDIATE' | 'SCHEDULED',
+                        })
+                      }
+                      className="w-full px-3 py-2 rounded-[7px] bg-[#111820] border border-[#2B3944] text-xs text-[#E4EBEF] focus:outline-none focus:border-[#8DA5B1]"
                     >
                       <option value="IMMEDIATE">Buka Segera Saat Listing Aktif</option>
                       <option value="SCHEDULED">Jadwal Khusus Pembukaan Withdrawal</option>
@@ -853,11 +893,13 @@ export const ListingPortalPage: React.FC<Props> = ({
 
                     {formData.withdrawalScheduleType === 'SCHEDULED' && (
                       <div className="mt-2">
-                        <label className="block text-[10px] text-[#969BA8] mb-1">Pilih Tanggal & Jam Buka Withdrawal</label>
                         <Input
+                          label="Pilih Tanggal & Jam Buka Withdrawal"
                           type="datetime-local"
                           value={formData.withdrawalOpenedAtDate}
-                          onChange={e => setFormData({ ...formData, withdrawalOpenedAtDate: e.target.value })}
+                          onChange={e =>
+                            setFormData({ ...formData, withdrawalOpenedAtDate: e.target.value })
+                          }
                         />
                       </div>
                     )}
@@ -865,184 +907,150 @@ export const ListingPortalPage: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="pt-4 flex items-center justify-end gap-3 border-t border-[#292C38]">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setActiveTab('EXPLORE')}
-                  className="text-xs"
-                >
+              <div className="pt-4 flex items-center justify-end gap-3 border-t border-[#202B34]">
+                <Button type="button" variant="secondary" onClick={() => setActiveTab('EXPLORE')}>
                   Batal
                 </Button>
-                <Button
-                  type="submit"
-                  disabled={isSubmittingApp}
-                  className="bg-[#EB3458] hover:bg-[#FF496B] text-white text-xs px-6"
-                >
-                  {isSubmittingApp ? 'Memproses Pengajuan...' : 'Kirim Pengajuan Listing'}
+                <Button type="submit" variant="primary" isLoading={isSubmittingApp}>
+                  Kirim Pengajuan Listing
                 </Button>
               </div>
             </form>
           </div>
         )}
 
-        {/* ========================================================= */}
         {/* TAB 3: TRACK APPLICATION STATUS */}
-        {/* ========================================================= */}
         {activeTab === 'TRACK' && (
-          <div className="max-w-3xl mx-auto space-y-6 animate-in fade-in duration-200">
-            {/* Search Input */}
-            <div className="p-6 rounded-2xl bg-[#0E1016] border border-[#292C38]">
-              <h3 className="text-base font-bold text-[#F5F5F7] mb-1">
+          <div className="max-w-3xl mx-auto space-y-6">
+            <div className="p-6 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+              <h3 className="text-base font-semibold text-[#E4EBEF] mb-1">
                 Lacak Status Pengajuan Listing
               </h3>
-              <p className="text-xs text-[#969BA8] mb-4">
+              <p className="text-xs text-[#A1AFB8] mb-4">
                 Masukkan Kode Permohonan (Application ID) atau Simbol Token yang Anda daftarkan.
               </p>
 
               <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <Search className="w-4 h-4 text-[#686D7A] absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    placeholder="e.g. REQ-..., SOL, ETH..."
-                    value={trackingQuery}
-                    onChange={e => setTrackingQuery(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && handleTrackApplication()}
-                    className="w-full pl-9 pr-4 py-2.5 rounded-lg bg-[#15171F] border border-[#292C38] text-xs text-[#F5F5F7] focus:outline-none focus:border-[#EB3458]"
-                  />
-                </div>
+                <SearchInput
+                  value={trackingQuery}
+                  onChange={setTrackingQuery}
+                  onKeyDown={e => e.key === 'Enter' && handleTrackApplication()}
+                  placeholder="e.g. REQ-..., SOL, ETH..."
+                  className="flex-1"
+                />
                 <Button
+                  variant="primary"
                   onClick={() => handleTrackApplication()}
-                  disabled={isTracking}
-                  className="bg-[#EB3458] hover:bg-[#FF496B] text-white text-xs px-5"
+                  isLoading={isTracking}
                 >
-                  {isTracking ? 'Melacak...' : 'Lacak'}
+                  Lacak
                 </Button>
               </div>
 
               {trackingError && (
-                <div className="mt-3 p-3 rounded-lg bg-[#EB3458]/10 border border-[#EB3458]/30 text-xs text-[#EB3458] flex items-center gap-2">
+                <div className="mt-3 p-3 rounded-[7px] bg-[#401F27]/50 border border-[#EA5B65]/40 text-xs text-[#EA5B65] flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
                   <span>{trackingError}</span>
                 </div>
               )}
             </div>
 
-            {/* Tracker Result Card */}
             {trackingResult && (
-              <div className="p-6 rounded-2xl bg-[#0E1016] border border-[#292C38] space-y-6">
-                <div className="flex items-center justify-between border-b border-[#292C38] pb-4">
+              <div className="p-6 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-6">
+                <div className="flex items-center justify-between border-b border-[#202B34] pb-4">
                   <div>
-                    <span className="text-[10px] text-[#686D7A] uppercase tracking-wider block">Token Proposal</span>
-                    <h2 className="text-lg font-bold text-[#F5F5F7] flex items-center gap-2">
+                    <span className="text-[10px] font-mono text-[#71818B] uppercase tracking-wider block">
+                      Token Proposal
+                    </span>
+                    <h2 className="text-lg font-semibold text-[#E4EBEF] flex items-center gap-2 mt-0.5">
                       <span>{trackingResult.tokenName}</span>
-                      <span className="text-xs px-2 py-0.5 rounded bg-[#EB3458]/15 text-[#EB3458] font-mono">
-                        {trackingResult.tokenSymbol}
-                      </span>
+                      <StatusBadge tone="brand">{trackingResult.tokenSymbol}</StatusBadge>
                     </h2>
                   </div>
                   <div className="text-right">
-                    <span className="text-[10px] text-[#686D7A] block">Target Pasar</span>
-                    <span className="font-mono text-xs font-bold text-[#F5F5F7]">
+                    <span className="text-[10px] text-[#71818B] block">Target Pasar</span>
+                    <span className="font-mono text-xs font-semibold text-[#E4EBEF]">
                       {trackingResult.pair}
                     </span>
                   </div>
                 </div>
 
-                {/* 4-Stage Progress Line */}
+                {/* 4-Stage Progress */}
                 <div>
-                  <h4 className="text-xs font-semibold text-[#969BA8] mb-3">
+                  <h4 className="text-xs font-semibold text-[#A1AFB8] mb-3">
                     Progres Verifikasi Maker-Checker & Engine Readiness
                   </h4>
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                    {/* Stage 1 */}
-                    <div className={`p-3 rounded-xl border ${
-                      trackingResult.stage >= 1
-                        ? 'bg-[#15171F] border-[#00C087]/50 text-[#F5F5F7]'
-                        : 'bg-[#08090D] border-[#292C38] text-[#686D7A]'
-                    }`}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[10px] font-bold">TAHAP 1</span>
-                        {trackingResult.stage >= 1 && <CheckCircle2 className="w-3.5 h-3.5 text-[#00C087]" />}
-                      </div>
-                      <p className="text-xs font-semibold">Penerimaan & Dokumen</p>
-                      <p className="text-[10px] text-[#969BA8] mt-0.5">Format kontrak & identitas</p>
-                    </div>
-
-                    {/* Stage 2 */}
-                    <div className={`p-3 rounded-xl border ${
-                      trackingResult.stage >= 2
-                        ? 'bg-[#15171F] border-[#00C087]/50 text-[#F5F5F7]'
-                        : trackingResult.stage === 1
-                        ? 'bg-[#15171F] border-[#EB3458]/40 text-[#EB3458]'
-                        : 'bg-[#08090D] border-[#292C38] text-[#686D7A]'
-                    }`}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[10px] font-bold">TAHAP 2</span>
-                        {trackingResult.stage >= 2 && <CheckCircle2 className="w-3.5 h-3.5 text-[#00C087]" />}
-                      </div>
-                      <p className="text-xs font-semibold">Maker Review</p>
-                      <p className="text-[10px] text-[#969BA8] mt-0.5">Parameter tick & lot size</p>
-                    </div>
-
-                    {/* Stage 3 */}
-                    <div className={`p-3 rounded-xl border ${
-                      trackingResult.stage >= 3
-                        ? 'bg-[#15171F] border-[#00C087]/50 text-[#F5F5F7]'
-                        : trackingResult.stage === 2
-                        ? 'bg-[#15171F] border-[#5B9DFF]/40 text-[#5B9DFF]'
-                        : 'bg-[#08090D] border-[#292C38] text-[#686D7A]'
-                    }`}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[10px] font-bold">TAHAP 3</span>
-                        {trackingResult.stage >= 3 && <CheckCircle2 className="w-3.5 h-3.5 text-[#00C087]" />}
-                      </div>
-                      <p className="text-xs font-semibold">Checker Approval</p>
-                      <p className="text-[10px] text-[#969BA8] mt-0.5">Audit independen Bappebti</p>
-                    </div>
-
-                    {/* Stage 4 */}
-                    <div className={`p-3 rounded-xl border ${
-                      trackingResult.stage >= 4
-                        ? 'bg-[#15171F] border-[#00C087]/50 text-[#F5F5F7]'
-                        : 'bg-[#08090D] border-[#292C38] text-[#686D7A]'
-                    }`}>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[10px] font-bold">TAHAP 4</span>
-                        {trackingResult.stage >= 4 && <CheckCircle2 className="w-3.5 h-3.5 text-[#00C087]" />}
-                      </div>
-                      <p className="text-xs font-semibold">Aktivasi Spot</p>
-                      <p className="text-[10px] text-[#969BA8] mt-0.5">Pasar live & order book</p>
-                    </div>
+                    {[
+                      {
+                        stage: 1,
+                        title: 'Penerimaan & Dokumen',
+                        desc: 'Format kontrak & identitas',
+                      },
+                      {
+                        stage: 2,
+                        title: 'Maker Review',
+                        desc: 'Parameter tick & lot size',
+                      },
+                      {
+                        stage: 3,
+                        title: 'Checker Approval',
+                        desc: 'Audit independen Bappebti',
+                      },
+                      {
+                        stage: 4,
+                        title: 'Aktivasi Spot',
+                        desc: 'Pasar live & order book',
+                      },
+                    ].map(step => {
+                      const done = trackingResult.stage >= step.stage;
+                      const current = trackingResult.stage === step.stage - 1;
+                      return (
+                        <div
+                          key={step.stage}
+                          className={`p-3 rounded-[7px] border ${
+                            done
+                              ? 'bg-[#111820] border-[#16A879]/50 text-[#E4EBEF]'
+                              : current
+                              ? 'bg-[#17212B] border-[#8DA5B1]/60 text-[#E4EBEF]'
+                              : 'bg-[#090D12] border-[#202B34] text-[#71818B]'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px] font-mono font-semibold">
+                              TAHAP {step.stage}
+                            </span>
+                            {done && <CheckCircle2 className="w-3.5 h-3.5 text-[#16A879]" />}
+                          </div>
+                          <p className="text-xs font-semibold">{step.title}</p>
+                          <p className="text-[10px] text-[#71818B] mt-0.5">{step.desc}</p>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
                 {/* Details */}
-                <div className="p-4 rounded-xl bg-[#15171F] border border-[#292C38] space-y-2 text-xs">
+                <div className="p-4 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-2.5 text-xs">
                   <div className="flex items-center justify-between">
-                    <span className="text-[#969BA8]">Status Terkini:</span>
-                    <span className="font-bold text-[#F5F5F7] px-2 py-0.5 rounded bg-[#292C38]">
+                    <span className="text-[#A1AFB8]">Status Terkini:</span>
+                    <StatusBadge tone="brand">
                       {trackingResult.stageName} ({trackingResult.status})
-                    </span>
+                    </StatusBadge>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-[#969BA8]">Jaringan Token:</span>
-                    <span className="font-mono text-[#F5F5F7]">{trackingResult.network}</span>
+                    <span className="text-[#A1AFB8]">Jaringan Token:</span>
+                    <span className="font-mono text-[#E4EBEF]">{trackingResult.network}</span>
                   </div>
 
-                  <div className="flex items-center justify-between pt-1 border-t border-[#292C38]/60">
-                    <span className="text-[#969BA8]">Saluran Deposit:</span>
+                  <div className="flex items-center justify-between pt-2 border-t border-[#202B34]">
+                    <span className="text-[#A1AFB8]">Saluran Deposit:</span>
                     <div className="flex items-center gap-2">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        trackingResult.depositStatus === 'OPEN'
-                          ? 'bg-[#00C087]/15 text-[#00C087] border border-[#00C087]/30'
-                          : 'bg-[#686D7A]/15 text-[#686D7A] border border-[#686D7A]/30'
-                      }`}>
+                      <StatusBadge tone={trackingResult.depositStatus === 'OPEN' ? 'buy' : 'neutral'}>
                         {trackingResult.depositStatus === 'OPEN' ? 'DIBUKA' : 'DITUTUP'}
-                      </span>
+                      </StatusBadge>
                       {trackingResult.depositOpenedAt && (
-                        <span className="text-[10px] text-[#969BA8] font-mono">
+                        <span className="text-[10px] text-[#71818B] font-mono">
                           (Buka: {new Date(trackingResult.depositOpenedAt).toLocaleString('id-ID')})
                         </span>
                       )}
@@ -1050,55 +1058,58 @@ export const ListingPortalPage: React.FC<Props> = ({
                   </div>
 
                   <div className="flex items-center justify-between">
-                    <span className="text-[#969BA8]">Saluran Penarikan (WD):</span>
+                    <span className="text-[#A1AFB8]">Saluran Penarikan (WD):</span>
                     <div className="flex items-center gap-2">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                        trackingResult.withdrawalStatus === 'OPEN'
-                          ? 'bg-[#00C087]/15 text-[#00C087] border border-[#00C087]/30'
-                          : 'bg-[#686D7A]/15 text-[#686D7A] border border-[#686D7A]/30'
-                      }`}>
+                      <StatusBadge
+                        tone={trackingResult.withdrawalStatus === 'OPEN' ? 'buy' : 'neutral'}
+                      >
                         {trackingResult.withdrawalStatus === 'OPEN' ? 'DIBUKA' : 'DITUTUP'}
-                      </span>
+                      </StatusBadge>
                       {trackingResult.withdrawalOpenedAt && (
-                        <span className="text-[10px] text-[#969BA8] font-mono">
-                          (Buka: {new Date(trackingResult.withdrawalOpenedAt).toLocaleString('id-ID')})
+                        <span className="text-[10px] text-[#71818B] font-mono">
+                          (Buka:{' '}
+                          {new Date(trackingResult.withdrawalOpenedAt).toLocaleString('id-ID')})
                         </span>
                       )}
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between pt-1 border-t border-[#292C38]/60">
-                    <span className="text-[#969BA8]">Designated Market Maker:</span>
-                    <span className="font-mono text-[#F5F5F7] text-[11px]">
+                  <div className="flex items-center justify-between pt-2 border-t border-[#202B34]">
+                    <span className="text-[#A1AFB8]">Designated Market Maker:</span>
+                    <span className="font-mono text-[#E4EBEF] text-[11px]">
                       {trackingResult.marketMakerEmail || 'mm@dimonex.id'}
                     </span>
                   </div>
 
                   <div className="flex items-center justify-between">
-                    <span className="text-[#969BA8]">Akun Trader Project Owner:</span>
-                    <span className="font-mono text-[#F5F5F7] text-[11px]">
-                      {trackingResult.projectOwnerEmail || trackingResult.projectOwnerAccountId || 'Belum Terdaftar'}
+                    <span className="text-[#A1AFB8]">Akun Trader Project Owner:</span>
+                    <span className="font-mono text-[#E4EBEF] text-[11px]">
+                      {trackingResult.projectOwnerEmail ||
+                        trackingResult.projectOwnerAccountId ||
+                        'Belum Terdaftar'}
                     </span>
                   </div>
 
                   {trackingResult.approvalReason && (
-                    <div className="flex items-start justify-between gap-4 pt-2 border-t border-[#292C38]">
-                      <span className="text-[#969BA8]">Catatan Review:</span>
-                      <span className="text-[#00C087] text-right font-medium">{trackingResult.approvalReason}</span>
+                    <div className="flex items-start justify-between gap-4 pt-2 border-t border-[#202B34]">
+                      <span className="text-[#A1AFB8]">Catatan Review:</span>
+                      <span className="text-[#35B887] text-right font-medium">
+                        {trackingResult.approvalReason}
+                      </span>
                     </div>
                   )}
                 </div>
 
                 {trackingResult.marketActive && (
-                  <div className="pt-2 flex justify-end">
+                  <div className="pt-1 flex justify-end">
                     <Button
+                      variant="profit"
                       onClick={() => {
                         onSelectPair(trackingResult.pair.replace('/', '-'));
                         onSelectView('TRADE');
                       }}
-                      className="bg-[#00C087] hover:bg-[#00D097] text-black font-bold text-xs"
                     >
-                      Buka Terminal Trading Spot
+                      <span>Buka Terminal Trading Spot</span>
                       <ArrowRight className="w-3.5 h-3.5 ml-1.5" />
                     </Button>
                   </div>
@@ -1108,26 +1119,25 @@ export const ListingPortalPage: React.FC<Props> = ({
           </div>
         )}
 
-        {/* ========================================================= */}
         {/* TAB 4: ADMIN & MAKER-CHECKER CONSOLE */}
-        {/* ========================================================= */}
         {activeTab === 'ADMIN_CONSOLE' && (
-          <div className="space-y-6 animate-in fade-in duration-200">
-            {/* Role Switcher Bar for Seamless Governance Testing */}
-            <div className="p-4 rounded-xl bg-[#0E1016] border border-[#292C38] flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="space-y-6">
+            <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] flex flex-col md:flex-row items-center justify-between gap-4">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-[#5B9DFF]/15 border border-[#5B9DFF]/30 flex items-center justify-center text-[#5B9DFF]">
+                <div className="w-9 h-9 rounded-[7px] bg-[#162436] border border-[#6D9FE8]/30 flex items-center justify-center text-[#6D9FE8]">
                   <Users className="w-5 h-5" />
                 </div>
                 <div>
-                  <div className="text-xs font-bold text-[#F5F5F7] flex items-center gap-2">
+                  <div className="text-xs font-semibold text-[#E4EBEF] flex items-center gap-2">
                     <span>Pengujian Tata Kelola Maker-Checker DIMONEX</span>
-                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-[#5B9DFF]/20 text-[#5B9DFF]">
-                      Live Multi-Role
-                    </span>
+                    <StatusBadge tone="info">Live Multi-Role</StatusBadge>
                   </div>
-                  <p className="text-[11px] text-[#969BA8]">
-                    Role aktif: <strong className="text-[#F5F5F7]">{user ? `${user.email} (${user.role.toUpperCase()})` : 'Belum Login'}</strong>. Pilih profil demo untuk menguji validasi self-approval dan otorisasi.
+                  <p className="text-[11px] text-[#A1AFB8]">
+                    Role aktif:{' '}
+                    <strong className="text-[#E4EBEF] font-mono">
+                      {user ? `${user.email} (${user.role.toUpperCase()})` : 'Belum Login'}
+                    </strong>
+                    . Pilih profil demo untuk menguji validasi self-approval dan otorisasi.
                   </p>
                 </div>
               </div>
@@ -1135,9 +1145,8 @@ export const ListingPortalPage: React.FC<Props> = ({
               <div className="flex items-center gap-2 flex-wrap justify-end">
                 <Button
                   size="sm"
-                  variant="outline"
+                  variant="secondary"
                   onClick={() => onQuickLogin('admin@dimonex.id', 'AdminDimonex2026!')}
-                  className="text-xs border-[#EB3458]/50 hover:bg-[#EB3458]/10 text-[#EB3458]"
                 >
                   Masuk sebagai Maker Admin
                 </Button>
@@ -1145,64 +1154,69 @@ export const ListingPortalPage: React.FC<Props> = ({
                   size="sm"
                   variant="outline"
                   onClick={() => onQuickLogin('compliance@dimonex.id', 'ComplianceAdmin2026!')}
-                  className="text-xs border-[#5B9DFF]/50 hover:bg-[#5B9DFF]/10 text-[#5B9DFF]"
                 >
                   Masuk sebagai Checker Admin
                 </Button>
               </div>
             </div>
 
-            {/* Embedded Full Feature ListingManagementView */}
             <ListingManagementView
-              currentUser={user || { id: 'admin-preview', role: 'admin', email: 'admin@dimonex.id' }}
+              currentUser={
+                user || { id: 'admin-preview', role: 'admin', email: 'admin@dimonex.id' }
+              }
               onRefreshMarkets={loadPublicAssets}
             />
           </div>
         )}
       </div>
 
-      {/* Confirmation Modal for Submitted Application */}
+      {/* Confirmation Modal */}
       <Modal
         isOpen={!!submittedResult}
         onClose={() => setSubmittedResult(null)}
         title="Pengajuan Listing Berhasil Dikirim"
         maxWidth="max-w-md"
       >
-        <div className="p-6 text-center space-y-4">
-          <div className="w-14 h-14 rounded-full bg-[#00C087]/15 border border-[#00C087]/30 flex items-center justify-center mx-auto text-[#00C087]">
-            <CheckCircle2 className="w-8 h-8" />
+        <div className="py-2 text-center space-y-4">
+          <div className="w-12 h-12 rounded-full bg-[#12392F] border border-[#16A879]/40 flex items-center justify-center mx-auto text-[#16A879]">
+            <CheckCircle2 className="w-6 h-6" />
           </div>
 
           <div>
-            <h3 className="text-lg font-bold text-[#F5F5F7]">
+            <h3 className="text-base font-semibold text-[#E4EBEF]">
               Proposal {submittedResult?.tokenSymbol} Berhasil Terdaftar
             </h3>
-            <p className="text-xs text-[#969BA8] mt-1 max-w-sm mx-auto">
+            <p className="text-xs text-[#A1AFB8] mt-1 max-w-sm mx-auto">
               {submittedResult?.trackingMessage}
             </p>
           </div>
 
-          <div className="p-3.5 rounded-xl bg-[#15171F] border border-[#292C38] text-left">
-            <span className="text-[10px] text-[#686D7A] block uppercase font-bold tracking-wider mb-1">
+          <div className="p-3.5 rounded-[7px] bg-[#111820] border border-[#202B34] text-left">
+            <span className="text-[10px] text-[#71818B] block uppercase font-mono font-semibold tracking-wider mb-1">
               Nomor Pelacakan Pengajuan (Application ID)
             </span>
             <div className="flex items-center justify-between gap-2">
-              <span className="font-mono text-sm font-bold text-[#EB3458] select-all">
+              <span className="font-mono text-sm font-semibold text-[#C1D0D6] select-all">
                 {submittedResult?.applicationId}
               </span>
               <button
+                type="button"
                 onClick={() => copyToClipboard(submittedResult?.applicationId || '')}
-                className="p-1.5 rounded-lg bg-[#1C1F29] hover:bg-[#292C38] text-[#969BA8] hover:text-[#F5F5F7] transition-colors"
+                className="p-1.5 rounded-[6px] bg-[#17212B] hover:bg-[#222F3A] text-[#A1AFB8] hover:text-[#E4EBEF] border border-[#2B3944] transition-colors cursor-pointer"
                 title="Salin ID"
               >
-                {copiedId ? <Check className="w-4 h-4 text-[#00C087]" /> : <Copy className="w-4 h-4" />}
+                {copiedId ? (
+                  <Check className="w-4 h-4 text-[#16A879]" />
+                ) : (
+                  <Copy className="w-4 h-4" />
+                )}
               </button>
             </div>
           </div>
 
           <div className="pt-2 flex justify-center gap-3">
             <Button
-              variant="outline"
+              variant="secondary"
               size="sm"
               onClick={() => {
                 setSubmittedResult(null);
@@ -1212,6 +1226,7 @@ export const ListingPortalPage: React.FC<Props> = ({
               Lihat Daftar Aset
             </Button>
             <Button
+              variant="primary"
               size="sm"
               onClick={() => {
                 const id = submittedResult?.applicationId;
@@ -1220,7 +1235,6 @@ export const ListingPortalPage: React.FC<Props> = ({
                 setActiveTab('TRACK');
                 handleTrackApplication(id);
               }}
-              className="bg-[#EB3458] hover:bg-[#FF496B] text-white"
             >
               Lacak Status Sekarang
             </Button>

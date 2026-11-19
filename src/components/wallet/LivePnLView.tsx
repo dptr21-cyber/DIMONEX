@@ -1,30 +1,19 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * src/components/wallet/LivePnLView.tsx
- * Live Real-Time PnL Tracker & Equity Performance Analytics.
- * Strictly calculates realized & unrealized PnL from authentic user trades & ledger balances.
+ * Live Real-Time PnL Tracker & Equity Performance Analytics in Obsidian Iridium matte theme.
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   TrendingUp,
-  TrendingDown,
   ArrowUpRight,
   ArrowDownRight,
-  Activity,
   RefreshCw,
-  DollarSign,
-  ShieldCheck,
-  CheckCircle2,
-  Calendar as CalendarIcon,
-  PieChart,
   BarChart3,
-  Layers,
-  Percent,
-  Award,
-  AlertCircle
+  Award
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -36,6 +25,9 @@ import {
   CartesianGrid
 } from 'recharts';
 import { formatIDR } from '../../lib/formatters.js';
+import { AssetIcon } from '../ui/AssetIcon.js';
+import { StatusBadge } from '../ui/StatusBadge.js';
+import { Button } from '../ui/Button.js';
 
 interface Props {
   onNavigateTrade?: (pairId: string) => void;
@@ -104,7 +96,6 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
   const [cumulativeSeries, setCumulativeSeries] = useState<CumulativePoint[]>([]);
   const [assetBreakdown, setAssetBreakdown] = useState<AssetPnLItem[]>([]);
 
-  // Fetch PnL Analytics from backend
   const fetchPnLData = useCallback(async () => {
     const token = localStorage.getItem('dimonex_auth_token');
     if (!token) return;
@@ -132,21 +123,17 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
 
   useEffect(() => {
     fetchPnLData();
-    // Live update interval: poll every 5 seconds
     const interval = setInterval(fetchPnLData, 5000);
     return () => clearInterval(interval);
   }, [fetchPnLData]);
 
-  // Filter series according to timeframe
   const filteredSeries = useMemo(() => {
     if (cumulativeSeries.length === 0) return [];
     if (timeframe === 'ALL') return cumulativeSeries;
-
     const daysCount = timeframe === '7D' ? 7 : timeframe === '14D' ? 14 : 30;
     return cumulativeSeries.slice(-daysCount);
   }, [cumulativeSeries, timeframe]);
 
-  // Format Helper based on active currency
   const formatValue = (valIdr: number, valUsdt: number, showSign = true): string => {
     if (hideBalance) return '••••••';
     const isIdr = currency === 'IDR';
@@ -164,33 +151,32 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
   const isRealizedProfit = (summary?.totalRealizedPnlIdr ?? 0) >= 0;
   const isUnrealizedProfit = (summary?.totalUnrealizedPnlIdr ?? 0) >= 0;
 
-  // Recharts Custom Tooltip
   const CustomChartTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
       const data: CumulativePoint = payload[0].payload;
       const dayPnl = currency === 'IDR' ? data.dailyPnlIdr : data.dailyPnlUsdt;
-      const cumPnl = currency === 'IDR' ? data.cumulativePnlIdr : data.cumulativePnlUsdt;
       const isUp = dayPnl >= 0;
 
       return (
-        <div className="rounded-xl bg-[#0E1016] border border-[#292C38] p-3 shadow-2xl text-xs font-mono">
-          <div className="text-[#9298A6] mb-1 font-semibold">{data.date}</div>
+        <div className="rounded-[7px] bg-[#1D2832] border border-[#2B3944] p-3 shadow-lg text-xs font-mono tabular-nums">
+          <div className="text-[#A1AFB8] mb-1 font-semibold">{data.date}</div>
           <div className="flex justify-between gap-4 py-0.5">
-            <span className="text-[#686D7A]">PnL Harian:</span>
-            <span className={`font-bold ${isUp ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
+            <span className="text-[#71818B] font-sans">PnL Harian:</span>
+            <span className={`font-semibold ${isUp ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
               {formatValue(data.dailyPnlIdr, data.dailyPnlUsdt)}
             </span>
           </div>
           <div className="flex justify-between gap-4 py-0.5">
-            <span className="text-[#686D7A]">Akumulasi PnL:</span>
-            <span className="font-bold text-[#F5F5F7]">
+            <span className="text-[#71818B] font-sans">Akumulasi PnL:</span>
+            <span className="font-semibold text-[#E4EBEF]">
               {formatValue(data.cumulativePnlIdr, data.cumulativePnlUsdt)}
             </span>
           </div>
-          <div className="flex justify-between gap-4 py-0.5 border-t border-[#292C38]/60 mt-1 pt-1">
-            <span className="text-[#686D7A]">Return %:</span>
-            <span className={`font-bold ${data.returnPct >= 0 ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
-              {data.returnPct >= 0 ? '+' : ''}{data.returnPct}%
+          <div className="flex justify-between gap-4 py-0.5 border-t border-[#202B34] mt-1 pt-1">
+            <span className="text-[#71818B] font-sans">Return %:</span>
+            <span className={`font-semibold ${data.returnPct >= 0 ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
+              {data.returnPct >= 0 ? '+' : ''}
+              {data.returnPct}%
             </span>
           </div>
         </div>
@@ -200,33 +186,28 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
   };
 
   return (
-    <div className="space-y-6">
-      {/* Top Control Bar: Live Status & Currency Selector */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-[#15171F] border border-[#292C38]">
+    <div className="space-y-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00C087] opacity-75" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#00C087]" />
-            </span>
-            <span className="text-xs font-bold text-[#F5F5F7] font-display">Live PnL Engine</span>
+            <span className="w-2 h-2 rounded-full bg-[#16A879]" />
+            <span className="text-xs font-semibold text-[#E4EBEF]">Live PnL Engine</span>
           </div>
-          <span className="text-[#686D7A]">·</span>
-          <span className="text-[11px] text-[#9298A6] font-mono">
+          <span className="text-[#40515D]">·</span>
+          <span className="text-[11px] text-[#A1AFB8] font-mono tabular-nums">
             Sinkronisasi Real-Time (WIB): {lastUpdated.toLocaleTimeString('id-ID')}
           </span>
         </div>
 
-        {/* Currency Switcher & Refresh */}
         <div className="flex items-center gap-2">
-          <div className="flex items-center bg-[#0E1016] p-0.5 rounded-lg border border-[#292C38] text-xs font-mono">
+          <div className="flex items-center bg-[#111820] p-0.5 rounded-[7px] border border-[#202B34] text-xs font-mono">
             <button
               type="button"
               onClick={() => setCurrency('IDR')}
-              className={`px-3 py-1 rounded font-bold transition-all ${
+              className={`px-3 py-1 rounded-[5px] font-medium transition-colors cursor-pointer ${
                 currency === 'IDR'
-                  ? 'bg-[#1C1F29] text-[#FF087F] border border-[#FF087F]/40 shadow-sm'
-                  : 'text-[#9298A6] hover:text-[#F5F5F7]'
+                  ? 'bg-[#1D2832] text-[#E4EBEF] border border-[#2B3944]'
+                  : 'text-[#71818B] hover:text-[#E4EBEF] border border-transparent'
               }`}
             >
               IDR (Rp)
@@ -234,199 +215,185 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
             <button
               type="button"
               onClick={() => setCurrency('USDT')}
-              className={`px-3 py-1 rounded font-bold transition-all ${
+              className={`px-3 py-1 rounded-[5px] font-medium transition-colors cursor-pointer ${
                 currency === 'USDT'
-                  ? 'bg-[#1C1F29] text-[#00C087] border border-[#00C087]/40 shadow-sm'
-                  : 'text-[#9298A6] hover:text-[#F5F5F7]'
+                  ? 'bg-[#1D2832] text-[#16A879] border border-[#16A879]/30'
+                  : 'text-[#71818B] hover:text-[#E4EBEF] border border-transparent'
               }`}
             >
               USDT ($)
             </button>
           </div>
 
-          <button
-            onClick={fetchPnLData}
-            title="Segarkan data PnL sekarang"
-            className="p-1.5 rounded-lg bg-[#0E1016] border border-[#292C38] hover:border-[#FF087F]/40 text-[#9298A6] hover:text-[#F5F5F7] transition-colors"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-[#FF087F]' : ''}`} />
-          </button>
+          <Button variant="secondary" size="sm" onClick={fetchPnLData} title="Segarkan data PnL sekarang">
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+          </Button>
         </div>
       </div>
 
-      {/* 6 Key Financial Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-        {/* Card 1: Net Cumulative PnL */}
-        <div className="rounded-xl bg-[#15171F] border border-[#292C38] p-4 shadow-xl flex flex-col justify-between">
-          <div className="flex items-center justify-between text-xs text-[#9298A6] mb-1">
-            <span className="font-semibold">Total Net PnL (Akumulasi)</span>
-            <span className="text-[10px] text-[#686D7A] font-mono">Realized + Unrealized</span>
+        <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4 flex flex-col justify-between">
+          <div className="flex items-center justify-between text-xs text-[#A1AFB8] mb-1">
+            <span className="font-medium">Total Net PnL (Akumulasi)</span>
+            <span className="text-[10px] text-[#71818B] font-mono">Realized + Unrealized</span>
           </div>
-          <div className="my-1.5">
-            <div className={`text-2xl font-extrabold font-mono tracking-tight ${isNetProfit ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
+          <div className="my-1.5 font-mono tabular-nums">
+            <div className={`text-2xl font-semibold tracking-tight ${isNetProfit ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
               {formatValue(summary?.netPnlIdr ?? 0, summary?.netPnlUsdt ?? 0)}
             </div>
-            <div className="flex items-center gap-1.5 mt-1 text-xs font-mono">
-              <span className={`inline-flex items-center font-bold ${isNetProfit ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
+            <div className="flex items-center gap-1.5 mt-1 text-xs">
+              <span className={`inline-flex items-center font-semibold ${isNetProfit ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
                 {isNetProfit ? <ArrowUpRight className="w-3.5 h-3.5 mr-0.5" /> : <ArrowDownRight className="w-3.5 h-3.5 mr-0.5" />}
                 {summary && summary.totalPortfolioEstIdr > 0
                   ? `${isNetProfit ? '+' : ''}${((summary.netPnlIdr / summary.totalPortfolioEstIdr) * 100).toFixed(2)}%`
                   : '+0.00%'}
               </span>
-              <span className="text-[#686D7A]">total modal</span>
+              <span className="text-[#71818B] font-sans">total modal</span>
             </div>
           </div>
-          <div className="pt-2 border-t border-[#292C38]/60 text-[10px] text-[#9298A6] font-mono flex justify-between">
-            <span>Estimasi Portofolio:</span>
-            <span className="text-[#F5F5F7] font-bold">
+          <div className="pt-2 border-t border-[#202B34] text-[10px] text-[#71818B] font-mono tabular-nums flex justify-between">
+            <span className="font-sans">Estimasi Portofolio:</span>
+            <span className="text-[#E4EBEF] font-semibold">
               {formatValue(summary?.totalPortfolioEstIdr ?? 0, (summary?.totalPortfolioEstIdr ?? 0) / (summary?.usdtRate || 16450), false)}
             </span>
           </div>
         </div>
 
-        {/* Card 2: Today's Live PnL */}
-        <div className="rounded-xl bg-[#15171F] border border-[#292C38] p-4 shadow-xl flex flex-col justify-between">
-          <div className="flex items-center justify-between text-xs text-[#9298A6] mb-1">
-            <span className="font-semibold">Live PnL Hari Ini</span>
-            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-[#00C087]/15 text-[#00C087] border border-[#00C087]/30">
-              HARI INI
-            </span>
+        <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4 flex flex-col justify-between">
+          <div className="flex items-center justify-between text-xs text-[#A1AFB8] mb-1">
+            <span className="font-medium">Live PnL Hari Ini</span>
+            <StatusBadge tone="buy">HARI INI</StatusBadge>
           </div>
-          <div className="my-1.5">
-            <div className={`text-2xl font-extrabold font-mono tracking-tight ${isTodayProfit ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
+          <div className="my-1.5 font-mono tabular-nums">
+            <div className={`text-2xl font-semibold tracking-tight ${isTodayProfit ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
               {formatValue(summary?.todayPnlIdr ?? 0, summary?.todayPnlUsdt ?? 0)}
             </div>
-            <div className="flex items-center gap-1.5 mt-1 text-xs font-mono">
-              <span className={`inline-flex items-center font-bold ${isTodayProfit ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
+            <div className="flex items-center gap-1.5 mt-1 text-xs">
+              <span className={`inline-flex items-center font-semibold ${isTodayProfit ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
                 {isTodayProfit ? <ArrowUpRight className="w-3.5 h-3.5 mr-0.5" /> : <ArrowDownRight className="w-3.5 h-3.5 mr-0.5" />}
-                {summary ? `${(summary.todayPnlPercent >= 0 ? '+' : '')}${summary.todayPnlPercent.toFixed(2)}%` : '+0.00%'}
+                {summary ? `${summary.todayPnlPercent >= 0 ? '+' : ''}${summary.todayPnlPercent.toFixed(2)}%` : '+0.00%'}
               </span>
-              <span className="text-[#686D7A]">return harian</span>
+              <span className="text-[#71818B] font-sans">return harian</span>
             </div>
           </div>
-          <div className="pt-2 border-t border-[#292C38]/60 text-[10px] text-[#9298A6] font-mono flex justify-between">
-            <span>Status Pasar:</span>
-            <span className="text-[#00C087] font-semibold">24/7 Bursa Aktif</span>
+          <div className="pt-2 border-t border-[#202B34] text-[10px] text-[#71818B] font-mono flex justify-between">
+            <span className="font-sans">Status Pasar:</span>
+            <span className="text-[#16A879] font-medium">24/7 Bursa Aktif</span>
           </div>
         </div>
 
-        {/* Card 3: Realized PnL (Closed Orders) */}
-        <div className="rounded-xl bg-[#15171F] border border-[#292C38] p-4 shadow-xl flex flex-col justify-between">
-          <div className="flex items-center justify-between text-xs text-[#9298A6] mb-1">
-            <span className="font-semibold">Realized PnL (Terealisasi)</span>
-            <span className="text-[10px] text-[#686D7A] font-mono">{summary?.totalTrades ?? 0} Order Selesai</span>
+        <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4 flex flex-col justify-between">
+          <div className="flex items-center justify-between text-xs text-[#A1AFB8] mb-1">
+            <span className="font-medium">Realized PnL (Terealisasi)</span>
+            <span className="text-[10px] text-[#71818B] font-mono">{summary?.totalTrades ?? 0} Order Selesai</span>
           </div>
-          <div className="my-1.5">
-            <div className={`text-2xl font-extrabold font-mono tracking-tight ${isRealizedProfit ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
+          <div className="my-1.5 font-mono tabular-nums">
+            <div className={`text-2xl font-semibold tracking-tight ${isRealizedProfit ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
               {formatValue(summary?.totalRealizedPnlIdr ?? 0, summary?.totalRealizedPnlUsdt ?? 0)}
             </div>
-            <div className="mt-1 text-[11px] text-[#9298A6] font-mono">
+            <div className="mt-1 text-[11px] text-[#71818B] font-sans">
               Keuntungan bersih dari matched trade order
             </div>
           </div>
-          <div className="pt-2 border-t border-[#292C38]/60 text-[10px] text-[#9298A6] font-mono flex justify-between">
-            <span>Biaya Trading (Fee):</span>
-            <span className="text-[#EB3458] font-bold">
+          <div className="pt-2 border-t border-[#202B34] text-[10px] text-[#71818B] font-mono tabular-nums flex justify-between">
+            <span className="font-sans">Biaya Trading (Fee):</span>
+            <span className="text-[#EA5B65] font-semibold">
               -{formatValue(summary?.totalFeesIdr ?? 0, summary?.totalFeesUsdt ?? 0, false)}
             </span>
           </div>
         </div>
 
-        {/* Card 4: Unrealized PnL (Portfolio Positions) */}
-        <div className="rounded-xl bg-[#15171F] border border-[#292C38] p-4 shadow-xl flex flex-col justify-between">
-          <div className="flex items-center justify-between text-xs text-[#9298A6] mb-1">
-            <span className="font-semibold">Unrealized PnL (Posisi Berjalan)</span>
-            <span className="text-[10px] text-[#686D7A] font-mono">{assetBreakdown.length} Aset Koin</span>
+        <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4 flex flex-col justify-between">
+          <div className="flex items-center justify-between text-xs text-[#A1AFB8] mb-1">
+            <span className="font-medium">Unrealized PnL (Posisi Berjalan)</span>
+            <span className="text-[10px] text-[#71818B] font-mono">{assetBreakdown.length} Aset Koin</span>
           </div>
-          <div className="my-1.5">
-            <div className={`text-2xl font-extrabold font-mono tracking-tight ${isUnrealizedProfit ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
+          <div className="my-1.5 font-mono tabular-nums">
+            <div className={`text-2xl font-semibold tracking-tight ${isUnrealizedProfit ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
               {formatValue(summary?.totalUnrealizedPnlIdr ?? 0, summary?.totalUnrealizedPnlUsdt ?? 0)}
             </div>
-            <div className="mt-1 text-[11px] text-[#9298A6] font-mono">
+            <div className="mt-1 text-[11px] text-[#71818B] font-sans">
               Valuasi terkini vs harga beli rata-rata aset
             </div>
           </div>
-          <div className="pt-2 border-t border-[#292C38]/60 text-[10px] text-[#9298A6] font-mono flex justify-between">
-            <span>Metode:</span>
-            <span className="text-[#F5F5F7] font-semibold">Mark-to-Market Real-Time</span>
+          <div className="pt-2 border-t border-[#202B34] text-[10px] text-[#71818B] font-mono flex justify-between">
+            <span className="font-sans">Metode:</span>
+            <span className="text-[#E4EBEF] font-medium">Mark-to-Market Real-Time</span>
           </div>
         </div>
 
-        {/* Card 5: Win Rate & Profit Factor */}
-        <div className="rounded-xl bg-[#15171F] border border-[#292C38] p-4 shadow-xl flex flex-col justify-between">
-          <div className="flex items-center justify-between text-xs text-[#9298A6] mb-1">
-            <span className="font-semibold">Win Rate & Profit Factor</span>
-            <Award className="w-4 h-4 text-[#FF087F]" />
+        <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4 flex flex-col justify-between">
+          <div className="flex items-center justify-between text-xs text-[#A1AFB8] mb-1">
+            <span className="font-medium">Win Rate &amp; Profit Factor</span>
+            <Award className="w-4 h-4 text-[#8DA5B1]" />
           </div>
-          <div className="my-1.5">
+          <div className="my-1.5 font-mono tabular-nums">
             <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-extrabold font-mono text-[#00C087] tracking-tight">
+              <span className="text-2xl font-semibold text-[#16A879] tracking-tight">
                 {summary?.winRateDaysPct ?? 0}%
               </span>
-              <span className="text-xs text-[#9298A6] font-mono">Hari Untung</span>
+              <span className="text-xs text-[#A1AFB8] font-sans">Hari Untung</span>
             </div>
-            <div className="mt-1 text-xs text-[#9298A6] font-mono flex items-center gap-2">
+            <div className="mt-1 text-xs text-[#A1AFB8] flex items-center gap-2">
               <span>Profit Factor:</span>
-              <span className="font-bold text-[#F5F5F7]">{summary?.profitFactor ?? 1.0}x</span>
-              <span className="text-[#686D7A]">·</span>
-              <span className="text-[#00C087]">{summary?.winningDaysCount ?? 0}W</span>
-              <span className="text-[#686D7A]">/</span>
-              <span className="text-[#EB3458]">{summary?.losingDaysCount ?? 0}L</span>
+              <span className="font-semibold text-[#E4EBEF]">{summary?.profitFactor ?? 1.0}x</span>
+              <span className="text-[#40515D]">·</span>
+              <span className="text-[#16A879]">{summary?.winningDaysCount ?? 0}W</span>
+              <span className="text-[#40515D]">/</span>
+              <span className="text-[#EA5B65]">{summary?.losingDaysCount ?? 0}L</span>
             </div>
           </div>
-          <div className="pt-2 border-t border-[#292C38]/60 text-[10px] text-[#9298A6] font-mono flex justify-between">
-            <span>Akurasi Order:</span>
-            <span className="text-[#F5F5F7] font-bold">{summary?.winRateTradesPct ?? 0}% Menang</span>
+          <div className="pt-2 border-t border-[#202B34] text-[10px] text-[#71818B] font-mono tabular-nums flex justify-between">
+            <span className="font-sans">Akurasi Order:</span>
+            <span className="text-[#E4EBEF] font-semibold">{summary?.winRateTradesPct ?? 0}% Menang</span>
           </div>
         </div>
 
-        {/* Card 6: Trading Volume & High Marks */}
-        <div className="rounded-xl bg-[#15171F] border border-[#292C38] p-4 shadow-xl flex flex-col justify-between">
-          <div className="flex items-center justify-between text-xs text-[#9298A6] mb-1">
-            <span className="font-semibold">Total Volume Transaksi</span>
-            <BarChart3 className="w-4 h-4 text-[#9298A6]" />
+        <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4 flex flex-col justify-between">
+          <div className="flex items-center justify-between text-xs text-[#A1AFB8] mb-1">
+            <span className="font-medium">Total Volume Transaksi</span>
+            <BarChart3 className="w-4 h-4 text-[#8DA5B1]" />
           </div>
-          <div className="my-1.5">
-            <div className="text-2xl font-extrabold font-mono text-[#F5F5F7] tracking-tight">
+          <div className="my-1.5 font-mono tabular-nums">
+            <div className="text-2xl font-semibold text-[#E4EBEF] tracking-tight">
               {formatValue(summary?.totalVolumeIdr ?? 0, summary?.totalVolumeUsdt ?? 0, false)}
             </div>
-            <div className="mt-1 text-xs text-[#9298A6] font-mono">
+            <div className="mt-1 text-xs text-[#71818B] font-sans">
               Total turnover transaksi terverifikasi ledger
             </div>
           </div>
-          <div className="pt-2 border-t border-[#292C38]/60 text-[10px] text-[#9298A6] font-mono flex justify-between">
-            <span>Hari Terbaik:</span>
-            <span className="text-[#00C087] font-bold">
+          <div className="pt-2 border-t border-[#202B34] text-[10px] text-[#71818B] font-mono tabular-nums flex justify-between">
+            <span className="font-sans">Hari Terbaik:</span>
+            <span className="text-[#16A879] font-semibold">
               {summary?.bestDay ? `${formatValue(summary.bestDay.pnlIdr, summary.bestDay.pnlUsdt)}` : '-'}
             </span>
           </div>
         </div>
       </div>
 
-      {/* Cumulative Equity Curve Chart Section */}
-      <div className="rounded-xl bg-[#15171F] border border-[#292C38] p-5 shadow-2xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#292C38]/80">
+      {/* Equity Curve Chart */}
+      <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#202B34]">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <TrendingUp className="w-4 h-4 text-[#00C087]" />
-              <h3 className="text-sm font-bold text-[#F5F5F7]">Grafik Kurva Akumulasi PnL (Equity Curve)</h3>
+              <TrendingUp className="w-4 h-4 text-[#16A879]" />
+              <h3 className="text-sm font-semibold text-[#E4EBEF]">Grafik Kurva Akumulasi PnL (Equity Curve)</h3>
             </div>
-            <p className="text-xs text-[#9298A6]">
+            <p className="text-xs text-[#71818B]">
               Perkembangan hasil perdagangan harian dan kumulatif berdasarkan transaksi riil
             </p>
           </div>
 
-          {/* Timeframe Filter Tabs */}
-          <div className="flex items-center bg-[#0E1016] p-0.5 rounded-lg border border-[#292C38] text-xs font-mono self-start sm:self-auto">
+          <div className="flex items-center bg-[#111820] p-0.5 rounded-[7px] border border-[#202B34] text-xs font-mono self-start sm:self-auto">
             {(['7D', '14D', '30D', 'ALL'] as const).map(tf => (
               <button
                 key={tf}
                 type="button"
                 onClick={() => setTimeframe(tf)}
-                className={`px-3 py-1.5 rounded font-bold transition-all ${
+                className={`px-3 py-1.5 rounded-[5px] font-medium transition-colors cursor-pointer ${
                   timeframe === tf
-                    ? 'bg-[#1C1F29] text-[#F5F5F7] border border-[#292C38] shadow-sm'
-                    : 'text-[#686D7A] hover:text-[#9298A6]'
+                    ? 'bg-[#1D2832] text-[#E4EBEF] border border-[#2B3944]'
+                    : 'text-[#71818B] hover:text-[#A1AFB8] border border-transparent'
                 }`}
               >
                 {tf}
@@ -435,10 +402,9 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
           </div>
         </div>
 
-        {/* Chart Area */}
         <div className="h-64 sm:h-72 w-full pt-4 select-none">
           {filteredSeries.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-xs text-[#9298A6] font-mono">
+            <div className="h-full flex items-center justify-center text-xs text-[#71818B] font-mono">
               Memuat data grafik performa...
             </div>
           ) : (
@@ -446,28 +412,25 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
               <AreaChart data={filteredSeries} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
                 <defs>
                   <linearGradient id="livePnlGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={isNetProfit ? '#00C087' : '#EB3458'} stopOpacity={0.4} />
-                    <stop offset="95%" stopColor={isNetProfit ? '#00C087' : '#EB3458'} stopOpacity={0.0} />
+                    <stop offset="5%" stopColor={isNetProfit ? '#16A879' : '#EA5B65'} stopOpacity={0.35} />
+                    <stop offset="95%" stopColor={isNetProfit ? '#16A879' : '#EA5B65'} stopOpacity={0.0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#292C38" opacity={0.5} vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#202B34" opacity={0.7} vertical={false} />
                 <XAxis
                   dataKey="date"
                   tickLine={false}
-                  axisLine={{ stroke: '#292C38' }}
-                  tick={{ fill: '#686D7A', fontSize: 10, fontFamily: 'monospace' }}
-                  tickFormatter={val => val.slice(5)} // MM-DD
+                  axisLine={{ stroke: '#2B3944' }}
+                  tick={{ fill: '#71818B', fontSize: 10, fontFamily: 'IBM Plex Mono, monospace' }}
+                  tickFormatter={val => val.slice(5)}
                 />
-                <YAxis
-                  hide
-                  domain={['auto', 'auto']}
-                />
+                <YAxis hide domain={['auto', 'auto']} />
                 <Tooltip content={<CustomChartTooltip />} />
                 <Area
                   type="monotone"
                   dataKey={currency === 'IDR' ? 'cumulativePnlIdr' : 'cumulativePnlUsdt'}
-                  stroke={isNetProfit ? '#00C087' : '#EB3458'}
-                  strokeWidth={2.5}
+                  stroke={isNetProfit ? '#16A879' : '#EA5B65'}
+                  strokeWidth={2}
                   fill="url(#livePnlGrad)"
                   isAnimationActive={false}
                 />
@@ -477,87 +440,79 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
         </div>
       </div>
 
-      {/* Asset-by-Asset PnL Breakdown Table */}
-      <div className="rounded-xl bg-[#15171F] border border-[#292C38] overflow-hidden shadow-2xl">
-        <div className="p-4 lg:p-5 border-b border-[#292C38] flex items-center justify-between">
+      {/* Asset-by-Asset Breakdown */}
+      <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
+        <div className="p-4 lg:p-5 border-b border-[#202B34] flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-bold text-[#F5F5F7]">Rincian PnL Posisi Berjalan per Koin</h3>
-            <p className="text-[11px] text-[#9298A6]">Perbandingan harga beli rata-rata dengan harga pasar saat ini</p>
+            <h3 className="text-sm font-semibold text-[#E4EBEF]">Rincian PnL Posisi Berjalan per Koin</h3>
+            <p className="text-[11px] text-[#71818B]">Perbandingan harga beli rata-rata dengan harga pasar saat ini</p>
           </div>
-          <span className="text-xs font-mono text-[#9298A6]">
-            {assetBreakdown.length} Posisi Koin
-          </span>
+          <span className="text-xs font-mono text-[#A1AFB8]">{assetBreakdown.length} Posisi Koin</span>
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs font-mono">
-            <thead className="bg-[#0E1016] text-[#686D7A] text-[11px] border-b border-[#292C38]">
+          <table className="w-full text-left text-xs font-mono tabular-nums">
+            <thead className="bg-[#111820] text-[#71818B] text-[11px] uppercase tracking-wider border-b border-[#202B34]">
               <tr>
-                <th className="py-3 px-4 font-sans">Aset / Koin</th>
-                <th className="py-3 px-4 text-right">Saldo Saat Ini</th>
-                <th className="py-3 px-4 text-right">Harga Beli Rata-Rata</th>
-                <th className="py-3 px-4 text-right">Harga Pasar Sekarang</th>
-                <th className="py-3 px-4 text-right">Unrealized PnL ({currency})</th>
-                <th className="py-3 px-4 text-right">Return %</th>
-                <th className="py-3 px-4 text-right font-sans">Aksi</th>
+                <th className="py-3 px-4 font-sans font-medium">Aset / Koin</th>
+                <th className="py-3 px-4 text-right font-sans font-medium">Saldo Saat Ini</th>
+                <th className="py-3 px-4 text-right font-sans font-medium">Harga Beli Rata-Rata</th>
+                <th className="py-3 px-4 text-right font-sans font-medium">Harga Pasar Sekarang</th>
+                <th className="py-3 px-4 text-right font-sans font-medium">Unrealized PnL ({currency})</th>
+                <th className="py-3 px-4 text-right font-sans font-medium">Return %</th>
+                <th className="py-3 px-4 text-right font-sans font-medium">Aksi</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#292C38]/40">
+            <tbody className="divide-y divide-[#202B34]">
               {assetBreakdown.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-[#9298A6] font-sans">
-                    <p className="font-semibold text-xs text-[#F5F5F7] mb-1">Belum Ada Aset Terdaftar</p>
+                  <td colSpan={7} className="py-8 text-center text-[#71818B] font-sans">
+                    <p className="font-semibold text-xs text-[#E4EBEF] mb-1">Belum Ada Aset Terdaftar</p>
                     <p className="text-[11px]">Lakukan transaksi beli di pasar spot untuk memulai posisi trading.</p>
                   </td>
                 </tr>
               ) : (
                 assetBreakdown.map(item => {
                   const isUp = item.unrealizedPnlIdr >= 0;
-                  const avgPrice = currency === 'IDR' ? formatIDR(String(item.avgBuyPriceIdr * 100)) : `$${item.avgBuyPriceUsdt.toLocaleString()}`;
-                  const curPrice = currency === 'IDR' ? formatIDR(String(item.currentPriceIdr * 100)) : `$${item.currentPriceUsdt.toLocaleString()}`;
+                  const avgPrice =
+                    currency === 'IDR' ? formatIDR(String(item.avgBuyPriceIdr * 100)) : `$${item.avgBuyPriceUsdt.toLocaleString()}`;
+                  const curPrice =
+                    currency === 'IDR' ? formatIDR(String(item.currentPriceIdr * 100)) : `$${item.currentPriceUsdt.toLocaleString()}`;
                   const pnlDisplay = formatValue(item.unrealizedPnlIdr, item.unrealizedPnlUsdt);
 
                   return (
-                    <tr key={item.symbol} className="hover:bg-[#1C1F29]/60 transition-colors">
-                      <td className="py-3 px-4">
+                    <tr key={item.symbol} className="hover:bg-[#17212B] transition-colors">
+                      <td className="py-3 px-4 font-sans">
                         <div className="flex items-center gap-2.5">
-                          <div className="w-7 h-7 rounded-lg bg-[#0E1016] border border-[#292C38] flex items-center justify-center font-bold text-xs text-[#FF087F]">
-                            {item.symbol.slice(0, 3)}
-                          </div>
+                          <AssetIcon symbol={item.symbol} size="sm" />
                           <div>
-                            <span className="font-bold text-[#F5F5F7] block">{item.symbol}</span>
-                            <span className="text-[10px] text-[#686D7A]">
+                            <span className="font-semibold text-[#E4EBEF] block">{item.symbol}</span>
+                            <span className="text-[10px] text-[#71818B] font-mono">
                               Total Beli: {item.totalBought} {item.symbol}
                             </span>
                           </div>
                         </div>
                       </td>
-                      <td className="py-3 px-4 text-right font-bold text-[#F5F5F7]">
+                      <td className="py-3 px-4 text-right font-semibold text-[#E4EBEF]">
                         {hideBalance ? '••••' : `${item.holding} ${item.symbol}`}
                       </td>
-                      <td className="py-3 px-4 text-right text-[#9298A6]">
-                        {avgPrice}
-                      </td>
-                      <td className="py-3 px-4 text-right font-bold text-[#F5F5F7]">
-                        {curPrice}
-                      </td>
-                      <td className={`py-3 px-4 text-right font-bold ${isUp ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
+                      <td className="py-3 px-4 text-right text-[#A1AFB8]">{avgPrice}</td>
+                      <td className="py-3 px-4 text-right font-semibold text-[#E4EBEF]">{curPrice}</td>
+                      <td className={`py-3 px-4 text-right font-semibold ${isUp ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
                         {pnlDisplay}
                       </td>
-                      <td className="py-3 px-4 text-right font-bold">
-                        <span className={`inline-flex items-center ${isUp ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
+                      <td className="py-3 px-4 text-right font-semibold">
+                        <span className={`inline-flex items-center ${isUp ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
                           {isUp ? <ArrowUpRight className="w-3.5 h-3.5 mr-0.5" /> : <ArrowDownRight className="w-3.5 h-3.5 mr-0.5" />}
-                          {isUp ? '+' : ''}{item.returnPct}%
+                          {isUp ? '+' : ''}
+                          {item.returnPct}%
                         </span>
                       </td>
                       <td className="py-3 px-4 text-right font-sans">
                         {onNavigateTrade && item.symbol !== 'IDR' && (
-                          <button
-                            onClick={() => onNavigateTrade(`${item.symbol}-IDR`)}
-                            className="px-2.5 py-1 text-xs font-semibold text-[#FF087F] hover:text-white bg-[#0E1016] hover:bg-[#FF087F]/20 border border-[#FF087F]/30 rounded-lg transition-colors"
-                          >
+                          <Button variant="secondary" size="sm" onClick={() => onNavigateTrade(`${item.symbol}-IDR`)}>
                             Trade
-                          </button>
+                          </Button>
                         )}
                       </td>
                     </tr>

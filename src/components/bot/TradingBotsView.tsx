@@ -1,11 +1,10 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * src/components/bot/TradingBotsView.tsx
- * DOMINEX Real Automated Trading Bots Terminal — Spot Grid, Layer Ladder, Smart TWAP, & Volume Maker
- * Connected directly to the DOMINEX Matching Engine, Atomic Double-Entry Ledger, & WebSocket Streams.
- * NO MOCK TRADES, NO FAKE DATA: Every bot places real limit orders and executes real trades.
+ * DIMONEX Real Automated Trading Bots Terminal — Spot Grid, Layer Ladder, Smart TWAP, & Volume Maker
+ * Connected directly to the DIMONEX Matching Engine, Atomic Double-Entry Ledger, & WebSocket Streams.
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -13,29 +12,33 @@ import {
   Bot,
   Play,
   Square,
-  TrendingUp,
-  RotateCcw,
-  Sparkles,
   ShieldCheck,
-  CheckCircle2,
-  Clock,
-  ArrowRight,
-  Plus,
   AlertTriangle,
   Flame,
-  Layers,
   Activity,
   Terminal,
   RefreshCw,
-  Trash2
 } from 'lucide-react';
 import { Button } from '../ui/Button.js';
 import { Input } from '../ui/Input.js';
 import { useToast } from '../ui/Toast.js';
+import { PageHeader, PanelHeader } from '../ui/PanelHeader.js';
+import { SegmentedTabs } from '../ui/Tabs.js';
+import { StatusBadge } from '../ui/StatusBadge.js';
 import { UserProfile, UserBalance, TradingPairItem } from '../../types/index.js';
-import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
+import {
+  formatIDR,
+  formatCrypto,
+  formatDateTime,
+  safeBigInt,
+  formatQuotePrice,
+} from '../../lib/formatters.js';
 import { BalanceDiagnosticModal } from '../wallet/BalanceDiagnosticModal.js';
-import { isWebSocketSupported, reportWebSocketSuccess, reportWebSocketFailure } from '../../utils/wsHelper.js';
+import {
+  isWebSocketSupported,
+  reportWebSocketSuccess,
+  reportWebSocketFailure,
+} from '../../utils/wsHelper.js';
 
 interface Props {
   user: UserProfile | null;
@@ -49,12 +52,34 @@ interface Props {
 
 type BotStrategy = 'SPOT_GRID' | 'DCA_LAYERS' | 'SMART_TWAP' | 'VOLUME_MAKER';
 
+const STRATEGY_CARDS: { id: BotStrategy; title: string; desc: string }[] = [
+  {
+    id: 'SPOT_GRID',
+    title: 'Spot Grid Bot',
+    desc: 'Capture volatility by placing real layered buy/sell orders in the order book.',
+  },
+  {
+    id: 'DCA_LAYERS',
+    title: 'Layer Ladder DCA',
+    desc: 'Automated scaled multi-level limit accumulation or distribution.',
+  },
+  {
+    id: 'SMART_TWAP',
+    title: 'Smart TWAP Slicer',
+    desc: 'Slice large institutional orders into small randomized chunks over time.',
+  },
+  {
+    id: 'VOLUME_MAKER',
+    title: 'Volume Maker Bot',
+    desc: 'Generate continuous 24h market liquidity and turnover across price spreads.',
+  },
+];
+
 export const TradingBotsView: React.FC<Props> = ({
   user,
   balances,
   pairs,
   onOpenAuthModal,
-  displayCurrency,
   onRefreshBalances,
   onRefreshOrders,
 }) => {
@@ -63,7 +88,6 @@ export const TradingBotsView: React.FC<Props> = ({
   const [selectedPairId, setSelectedPairId] = useState<string>(() => pairs[0]?.id || 'BTC-IDR');
   const [botFilterTab, setBotFilterTab] = useState<'ALL' | 'RUNNING' | 'STOPPED'>('ALL');
 
-  // Real bots state fetched from backend
   const [activeBots, setActiveBots] = useState<any[]>([]);
   const [isLoadingBots, setIsLoadingBots] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
@@ -76,7 +100,7 @@ export const TradingBotsView: React.FC<Props> = ({
   const [lowerPrice, setLowerPrice] = useState('1400000000');
   const [upperPrice, setUpperPrice] = useState('1520000000');
   const [gridCount, setGridCount] = useState('6');
-  const [investmentIdr, setInvestmentIdr] = useState('20000000'); // 20M IDR
+  const [investmentIdr, setInvestmentIdr] = useState('20000000');
 
   // DCA / Layer Ladder inputs
   const [layerSide, setLayerSide] = useState<'BUY' | 'SELL'>('BUY');
@@ -96,42 +120,59 @@ export const TradingBotsView: React.FC<Props> = ({
   const [volMinPrice, setVolMinPrice] = useState('1420000000');
   const [volMaxPrice, setVolMaxPrice] = useState('1480000000');
   const [volDelaySec, setVolDelaySec] = useState('3');
-  const [volDirection, setVolDirection] = useState<'BUY_FIRST' | 'SELL_FIRST' | 'RANDOM'>('RANDOM');
+  const [volDirection] = useState<'BUY_FIRST' | 'SELL_FIRST' | 'RANDOM'>('RANDOM');
 
-  const selectedPair = pairs.find(p => p.id === selectedPairId) || pairs[0] || {
-    id: 'BTC-IDR',
-    symbol: 'BTC/IDR',
-    baseCurrency: 'BTC',
-    quoteCurrency: 'IDR',
-    baseDecimals: 8,
-    quoteDecimals: 2,
-    lastPrice: '145000000000'
-  };
+  const selectedPair =
+    pairs.find(p => p.id === selectedPairId) ||
+    pairs[0] || {
+      id: 'BTC-IDR',
+      symbol: 'BTC/IDR',
+      baseCurrency: 'BTC',
+      quoteCurrency: 'IDR',
+      baseDecimals: 8,
+      quoteDecimals: 2,
+      lastPrice: '145000000000',
+    };
 
-  // Sync default prices when pair changes
+  const quoteDecimals = selectedPair.quoteDecimals ?? (selectedPair.quoteCurrency === 'IDR' ? 2 : 6);
+
+  // Format human-readable numeric price respecting pair decimals (IDR or USDT)
+  const formatPriceInput = useCallback(
+    (rawVal: number): string => {
+      if (!Number.isFinite(rawVal) || rawVal <= 0) return '0';
+      if (selectedPair.quoteCurrency === 'IDR') {
+        return Math.round(rawVal).toString();
+      }
+      const precision = rawVal >= 100 ? 2 : rawVal >= 1 ? 4 : Math.min(quoteDecimals, 6);
+      return Number(rawVal.toFixed(precision)).toString();
+    },
+    [selectedPair.quoteCurrency, quoteDecimals]
+  );
+
+  // Sync default prices when pair changes using accurate quoteDecimals scaling
   useEffect(() => {
     if (selectedPair && selectedPair.lastPrice) {
       const midUnits = safeBigInt(selectedPair.lastPrice);
-      const midRupiah = Number(midUnits / 100n);
-      if (Number.isFinite(midRupiah) && midRupiah > 0) {
-        setLowerPrice(Math.round(midRupiah * 0.95).toString());
-        setUpperPrice(Math.round(midRupiah * 1.05).toString());
-        setLayerStartPrice(Math.round(midRupiah * 0.99).toString());
-        setTwapTargetPrice(midRupiah.toString());
-        setVolMinPrice(Math.round(midRupiah * 0.98).toString());
-        setVolMaxPrice(Math.round(midRupiah * 1.02).toString());
+      const scale = 10 ** quoteDecimals;
+      const midHuman = Number(midUnits) / scale;
+      if (Number.isFinite(midHuman) && midHuman > 0) {
+        setLowerPrice(formatPriceInput(midHuman * 0.95));
+        setUpperPrice(formatPriceInput(midHuman * 1.05));
+        setLayerStartPrice(formatPriceInput(midHuman * 0.99));
+        setTwapTargetPrice(formatPriceInput(midHuman));
+        setVolMinPrice(formatPriceInput(midHuman * 0.98));
+        setVolMaxPrice(formatPriceInput(midHuman * 1.02));
       }
     }
-  }, [selectedPairId, selectedPair.lastPrice]);
+  }, [selectedPairId, selectedPair.lastPrice, quoteDecimals, formatPriceInput]);
 
-  // Load real bots from backend
   const loadBots = useCallback(async () => {
     const token = localStorage.getItem('dimonex_auth_token');
     if (!token) return;
     try {
       setIsLoadingBots(true);
       const res = await fetch('/api/bot/list', {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
         const data = await res.json();
@@ -146,7 +187,6 @@ export const TradingBotsView: React.FC<Props> = ({
     }
   }, []);
 
-  // WebSocket authoritative real-time state management
   useEffect(() => {
     if (!user) return;
     let ws: WebSocket | null = null;
@@ -167,19 +207,23 @@ export const TradingBotsView: React.FC<Props> = ({
           reportWebSocketSuccess();
           if (!ws || ws.readyState !== WebSocket.OPEN) return;
           setWsConnected(true);
-          ws.send(JSON.stringify({
-            action: 'subscribe',
-            channel: `bots:${user.id}`,
-            userId: user.id
-          }));
-          ws.send(JSON.stringify({
-            action: 'subscribe',
-            channel: `orders:${user.id}`,
-            userId: user.id
-          }));
+          ws.send(
+            JSON.stringify({
+              action: 'subscribe',
+              channel: `bots:${user.id}`,
+              userId: user.id,
+            })
+          );
+          ws.send(
+            JSON.stringify({
+              action: 'subscribe',
+              channel: `orders:${user.id}`,
+              userId: user.id,
+            })
+          );
         };
 
-        ws.onmessage = (event) => {
+        ws.onmessage = event => {
           try {
             const msg = JSON.parse(event.data);
             if (msg.type === 'bot_snapshot' && Array.isArray(msg.data)) {
@@ -199,11 +243,13 @@ export const TradingBotsView: React.FC<Props> = ({
               if (onRefreshOrders) onRefreshOrders();
             } else if (msg.type === 'bot_stopped' && msg.data) {
               const stoppedBot = msg.data;
-              setActiveBots(prev => prev.map(b => b.id === stoppedBot.id ? { ...b, status: 'STOPPED' } : b));
+              setActiveBots(prev =>
+                prev.map(b => (b.id === stoppedBot.id ? { ...b, status: 'STOPPED' } : b))
+              );
               if (onRefreshBalances) onRefreshBalances();
               if (onRefreshOrders) onRefreshOrders();
             }
-          } catch (e) {}
+          } catch {}
         };
 
         ws.onclose = () => {
@@ -217,7 +263,7 @@ export const TradingBotsView: React.FC<Props> = ({
           reportWebSocketFailure();
           setWsConnected(false);
         };
-      } catch (err) {
+      } catch {
         reportWebSocketFailure();
         setWsConnected(false);
       }
@@ -226,7 +272,6 @@ export const TradingBotsView: React.FC<Props> = ({
     connectWs();
     loadBots();
 
-    // High-frequency REST polling fallback when WebSocket is unsupported (e.g. Vercel Serverless)
     const pollInterval = isWebSocketSupported() ? 10000 : 3000;
     const fallbackSync = setInterval(loadBots, pollInterval);
 
@@ -238,7 +283,6 @@ export const TradingBotsView: React.FC<Props> = ({
     };
   }, [user, loadBots, onRefreshBalances, onRefreshOrders]);
 
-  // Deploy real bot into the Matching Engine
   const handleDeployBot = async () => {
     if (!user) {
       onOpenAuthModal();
@@ -264,7 +308,7 @@ export const TradingBotsView: React.FC<Props> = ({
           upperPrice,
           gridCount,
           totalInvestmentIdr: investmentIdr,
-          spacingMode: 'ARITHMETIC'
+          spacingMode: 'ARITHMETIC',
         };
       } else if (selectedStrategy === 'DCA_LAYERS') {
         endpoint = '/api/bot/layers/deploy';
@@ -274,7 +318,7 @@ export const TradingBotsView: React.FC<Props> = ({
           startPrice: layerStartPrice,
           layerCount,
           priceStepPercent: layerStepPercent,
-          quantityPerLayer: layerQty
+          quantityPerLayer: layerQty,
         };
       } else if (selectedStrategy === 'SMART_TWAP') {
         endpoint = '/api/bot/smart-trade/deploy';
@@ -284,7 +328,7 @@ export const TradingBotsView: React.FC<Props> = ({
           targetPrice: twapTargetPrice,
           totalVolume: twapTotalVolume,
           sliceCount: twapSliceCount,
-          orderType: 'LIMIT'
+          orderType: 'LIMIT',
         };
       } else if (selectedStrategy === 'VOLUME_MAKER') {
         endpoint = '/api/bot/volume/deploy';
@@ -297,7 +341,7 @@ export const TradingBotsView: React.FC<Props> = ({
           amountRandom: true,
           amountMin: (parseFloat(volTarget) * 0.01).toFixed(4),
           amountMax: (parseFloat(volTarget) * 0.05).toFixed(4),
-          directionMode: volDirection
+          directionMode: volDirection,
         };
       }
 
@@ -305,9 +349,9 @@ export const TradingBotsView: React.FC<Props> = ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify(body),
       });
 
       const data = await res.json();
@@ -317,7 +361,7 @@ export const TradingBotsView: React.FC<Props> = ({
 
       showToast(
         'success',
-        'Bot Berhasil Diluncurkan!',
+        'Bot Berhasil Diluncurkan',
         `${data.bot?.name || 'Bot'} aktif di matching engine dengan ${data.bot?.deployedOrderIds?.length || 0} order nyata.`
       );
 
@@ -332,7 +376,6 @@ export const TradingBotsView: React.FC<Props> = ({
     }
   };
 
-  // Stop bot manually & cancel open orders
   const handleStopBot = async (botId: string, botName: string) => {
     const token = localStorage.getItem('dimonex_auth_token');
     if (!token) return;
@@ -343,9 +386,9 @@ export const TradingBotsView: React.FC<Props> = ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ botId, cancelOpenOrders: true })
+        body: JSON.stringify({ botId, cancelOpenOrders: true }),
       });
 
       const data = await res.json();
@@ -353,7 +396,11 @@ export const TradingBotsView: React.FC<Props> = ({
         throw new Error(data.error || 'Gagal menghentikan bot');
       }
 
-      showToast('info', 'Bot Berhasil Dihentikan', `${botName} telah dihentikan dan seluruh order terbuka telah dibatalkan.`);
+      showToast(
+        'info',
+        'Bot Dihentikan',
+        `${botName} telah dihentikan dan seluruh order terbuka telah dibatalkan.`
+      );
       loadBots();
       if (onRefreshBalances) onRefreshBalances();
       if (onRefreshOrders) onRefreshOrders();
@@ -365,7 +412,6 @@ export const TradingBotsView: React.FC<Props> = ({
     }
   };
 
-  // Cancel all bots
   const handleCancelAllBots = async () => {
     const token = localStorage.getItem('dimonex_auth_token');
     if (!token) return;
@@ -375,12 +421,12 @@ export const TradingBotsView: React.FC<Props> = ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        }
+          Authorization: `Bearer ${token}`,
+        },
       });
       const data = await res.json();
       if (res.ok) {
-        showToast('success', 'Semua Bot Dihentikan', data.message || 'Seluruh bot telah dihentikan secara massal.');
+        showToast('success', 'Semua Bot Dihentikan', data.message || 'Seluruh bot telah dihentikan.');
         loadBots();
         if (onRefreshBalances) onRefreshBalances();
         if (onRefreshOrders) onRefreshOrders();
@@ -390,49 +436,51 @@ export const TradingBotsView: React.FC<Props> = ({
     }
   };
 
-  // User balances for selected pair directly mapped from atomic ledger units
   const quoteItem = balances.find(b => b.currency === selectedPair.quoteCurrency);
   const baseItem = balances.find(b => b.currency === selectedPair.baseCurrency);
 
   const quoteRawUnits = safeBigInt(quoteItem?.balanceAvailable || '0');
   const baseRawUnits = safeBigInt(baseItem?.balanceAvailable || '0');
 
-  // Convert raw ledger atomic units to real human readable numbers
-  const quoteAvailableNum = selectedPair.quoteCurrency === 'IDR'
-    ? Number(quoteRawUnits / 100n)
-    : Number(quoteRawUnits) / (10 ** selectedPair.quoteDecimals);
+  const quoteAvailableNum =
+    selectedPair.quoteCurrency === 'IDR'
+      ? Number(quoteRawUnits / 100n)
+      : Number(quoteRawUnits) / 10 ** quoteDecimals;
 
-  const baseAvailableNum = Number(baseRawUnits) / (10 ** (selectedPair.baseDecimals || 8));
+  const baseAvailableNum = Number(baseRawUnits) / 10 ** (selectedPair.baseDecimals || 8);
 
-  // Formatted string representations
-  const quoteDisplay = selectedPair.quoteCurrency === 'IDR'
-    ? formatIDR(quoteRawUnits.toString())
-    : `${quoteAvailableNum.toLocaleString()} ${selectedPair.quoteCurrency}`;
+  const quoteDisplay =
+    selectedPair.quoteCurrency === 'IDR'
+      ? formatIDR(quoteRawUnits.toString())
+      : `${quoteAvailableNum.toLocaleString('en-US', { maximumFractionDigits: 4 })} ${selectedPair.quoteCurrency}`;
 
   const baseDisplay = `${formatCrypto(baseRawUnits.toString(), selectedPair.baseDecimals)} ${selectedPair.baseCurrency}`;
 
-  // Duplicate running bot detection
   const duplicateRunningBot = activeBots.find(
-    b => b.pairId === selectedPair.id && b.status === 'RUNNING' && (
-      (selectedStrategy === 'SPOT_GRID' && b.strategy === 'SPOT_GRID') ||
-      (selectedStrategy === 'DCA_LAYERS' && (
-        (layerSide === 'BUY' && b.strategy === 'BUY_LAYERS') ||
-        (layerSide === 'SELL' && b.strategy === 'SELL_LAYERS')
-      )) ||
-      (selectedStrategy === 'SMART_TWAP' && b.strategy === 'SMART_TRADE') ||
-      (selectedStrategy === 'VOLUME_MAKER' && b.strategy === 'VOLUME_BOT')
-    )
+    b =>
+      b.pairId === selectedPair.id &&
+      b.status === 'RUNNING' &&
+      ((selectedStrategy === 'SPOT_GRID' && b.strategy === 'SPOT_GRID') ||
+        (selectedStrategy === 'DCA_LAYERS' &&
+          ((layerSide === 'BUY' && b.strategy === 'BUY_LAYERS') ||
+            (layerSide === 'SELL' && b.strategy === 'SELL_LAYERS'))) ||
+        (selectedStrategy === 'SMART_TWAP' && b.strategy === 'SMART_TRADE') ||
+        (selectedStrategy === 'VOLUME_MAKER' && b.strategy === 'VOLUME_BOT'))
   );
 
-  // Ledger available balance validation
   let isInsufficientBalance = false;
   let balanceErrorMessage = '';
+
+  const fmtReqQuote = (amt: number) =>
+    selectedPair.quoteCurrency === 'IDR'
+      ? `Rp ${Math.round(amt).toLocaleString('id-ID')}`
+      : `${amt.toLocaleString('en-US', { maximumFractionDigits: 4 })} ${selectedPair.quoteCurrency}`;
 
   if (selectedStrategy === 'SPOT_GRID') {
     const invNum = parseFloat(investmentIdr) || 0;
     if (invNum > quoteAvailableNum) {
       isInsufficientBalance = true;
-      balanceErrorMessage = `Saldo ${selectedPair.quoteCurrency} tidak mencukupi di ledger (Dibutuhkan: Rp ${invNum.toLocaleString('id-ID')}, Tersedia: ${quoteDisplay})`;
+      balanceErrorMessage = `Saldo ${selectedPair.quoteCurrency} tidak mencukupi (Dibutuhkan: ${fmtReqQuote(invNum)}, Tersedia: ${quoteDisplay})`;
     }
   } else if (selectedStrategy === 'DCA_LAYERS') {
     if (layerSide === 'BUY') {
@@ -442,7 +490,7 @@ export const TradingBotsView: React.FC<Props> = ({
       const estTotal = startP * count * qty;
       if (estTotal > quoteAvailableNum) {
         isInsufficientBalance = true;
-        balanceErrorMessage = `Estimasi saldo ${selectedPair.quoteCurrency} tidak mencukupi (Dibutuhkan: ~Rp ${Math.round(estTotal).toLocaleString('id-ID')}, Tersedia: ${quoteDisplay})`;
+        balanceErrorMessage = `Estimasi saldo ${selectedPair.quoteCurrency} tidak mencukupi (Dibutuhkan: ~${fmtReqQuote(estTotal)}, Tersedia: ${quoteDisplay})`;
       }
     } else {
       const count = parseInt(layerCount, 10) || 5;
@@ -450,7 +498,7 @@ export const TradingBotsView: React.FC<Props> = ({
       const totalBase = count * qty;
       if (totalBase > baseAvailableNum) {
         isInsufficientBalance = true;
-        balanceErrorMessage = `Saldo ${selectedPair.baseCurrency} tidak mencukupi di ledger (Dibutuhkan: ${totalBase} ${selectedPair.baseCurrency}, Tersedia: ${baseDisplay})`;
+        balanceErrorMessage = `Saldo ${selectedPair.baseCurrency} tidak mencukupi (Dibutuhkan: ${totalBase} ${selectedPair.baseCurrency}, Tersedia: ${baseDisplay})`;
       }
     }
   } else if (selectedStrategy === 'SMART_TWAP') {
@@ -460,523 +508,471 @@ export const TradingBotsView: React.FC<Props> = ({
       const totalReq = targetP * vol;
       if (totalReq > quoteAvailableNum) {
         isInsufficientBalance = true;
-        balanceErrorMessage = `Estimasi saldo ${selectedPair.quoteCurrency} tidak mencukupi (Dibutuhkan: ~Rp ${Math.round(totalReq).toLocaleString('id-ID')}, Tersedia: ${quoteDisplay})`;
+        balanceErrorMessage = `Estimasi saldo ${selectedPair.quoteCurrency} tidak mencukupi (Dibutuhkan: ~${fmtReqQuote(totalReq)}, Tersedia: ${quoteDisplay})`;
       }
     } else {
       const vol = parseFloat(twapTotalVolume) || 0;
       if (vol > baseAvailableNum) {
         isInsufficientBalance = true;
-        balanceErrorMessage = `Saldo ${selectedPair.baseCurrency} tidak mencukupi di ledger (Dibutuhkan: ${vol} ${selectedPair.baseCurrency}, Tersedia: ${baseDisplay})`;
+        balanceErrorMessage = `Saldo ${selectedPair.baseCurrency} tidak mencukupi (Dibutuhkan: ${vol} ${selectedPair.baseCurrency}, Tersedia: ${baseDisplay})`;
       }
     }
   }
 
   const runningBots = activeBots.filter(b => b.status === 'RUNNING');
   const stoppedBots = activeBots.filter(b => b.status !== 'RUNNING');
-  const displayedBots = botFilterTab === 'RUNNING'
-    ? runningBots
-    : botFilterTab === 'STOPPED'
-    ? stoppedBots
-    : activeBots;
+  const displayedBots =
+    botFilterTab === 'RUNNING'
+      ? runningBots
+      : botFilterTab === 'STOPPED'
+      ? stoppedBots
+      : activeBots;
+
+  const filterTabs: { id: 'ALL' | 'RUNNING' | 'STOPPED'; label: string; badge: number }[] = [
+    { id: 'ALL', label: 'Semua', badge: activeBots.length },
+    { id: 'RUNNING', label: 'Berjalan', badge: runningBots.length },
+    { id: 'STOPPED', label: 'Dihentikan', badge: stoppedBots.length },
+  ];
 
   return (
-    <div className="flex-1 flex flex-col p-4 lg:p-6 bg-[#08090D] overflow-y-auto space-y-6">
+    <div className="flex-1 flex flex-col p-4 lg:p-6 bg-[#090D12] overflow-y-auto space-y-6">
       {/* Header Banner */}
-      <div className="rounded-2xl obsidian-glass border border-white/10 p-6 lg:p-8 relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-96 h-96 bg-[#FF087F]/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="max-w-3xl relative z-10">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-white/5 border border-white/10 text-xs font-semibold text-[#FF087F] mb-3">
-            <Bot className="w-3.5 h-3.5 text-[#FF087F]" />
-            DOMINEX Real Algorithmic Engine · 100% On-Engine Execution
-          </div>
-          <h1 className="text-2xl lg:text-3xl font-display font-extrabold text-[#F5F5F7] tracking-tight">
-            Automated Quantitative Trading Bots
-          </h1>
-          <p className="text-xs lg:text-sm text-[#9298A6] mt-2 leading-relaxed">
-            Deploy authoritative algorithmic trading strategies 24/7. Every order is matched on the in-memory double-entry matching engine without simulated or mock data.
-          </p>
+      <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] p-5 lg:p-6 space-y-4">
+        <PageHeader
+          title="Automated Quantitative Trading Bots"
+          subtitle="Deploy algorithmic trading strategies directly on the DIMONEX double-entry matching engine with atomic fund reservation."
+          badge={<StatusBadge tone="brand">DIMONEX Engine</StatusBadge>}
+          actions={
+            <div className="flex items-center gap-2 text-xs font-mono tabular-nums text-[#A1AFB8]">
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  wsConnected ? 'bg-[#35B887] animate-pulse' : 'bg-[#D6A85C]'
+                }`}
+              />
+              <span>{wsConnected ? 'WebSocket Synced' : 'Polling Sync'}</span>
+            </div>
+          }
+          className="border-b-0 pb-0"
+        />
 
-          <div className="flex flex-wrap items-center gap-4 mt-4 pt-4 border-t border-white/5 text-xs">
-            <div className="flex items-center gap-1.5 text-emerald-400 font-mono">
-              <ShieldCheck className="w-4 h-4" />
-              <span>Real Double-Entry Settlement</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-cyan-400 font-mono">
-              <Activity className="w-4 h-4" />
-              <span>Instant Stop & Fund Unlock</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-[#FF087F] font-mono">
-              <Flame className="w-4 h-4" />
-              <span>L2 Order Book Sync</span>
-            </div>
-            <div className="flex items-center gap-1.5 font-mono text-emerald-400 ml-auto">
-              <span className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-              <span>{wsConnected ? 'WebSocket Live Synced' : 'Syncing...'}</span>
-            </div>
+        <div className="flex flex-wrap items-center gap-5 pt-3 border-t border-[#202B34] text-xs text-[#A1AFB8]">
+          <div className="flex items-center gap-1.5 font-mono">
+            <ShieldCheck className="w-3.5 h-3.5 text-[#35B887]" />
+            <span>Double-Entry Settlement</span>
+          </div>
+          <div className="flex items-center gap-1.5 font-mono">
+            <Activity className="w-3.5 h-3.5 text-[#8DA5B1]" />
+            <span>Instant Stop &amp; Fund Unlock</span>
+          </div>
+          <div className="flex items-center gap-1.5 font-mono">
+            <Flame className="w-3.5 h-3.5 text-[#D6A85C]" />
+            <span>L2 Order Book Sync</span>
           </div>
         </div>
       </div>
 
-      {/* Strategy Selector Tabs */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[
-          { id: 'SPOT_GRID', title: 'Spot Grid Bot', desc: 'Capture volatility by placing real layered buy/sell orders in the order book.' },
-          { id: 'DCA_LAYERS', title: 'Layer Ladder DCA', desc: 'Automated scaled multi-level limit accumulation or distribution.' },
-          { id: 'SMART_TWAP', title: 'Smart TWAP Slicer', desc: 'Slice large institutional orders into small randomized chunks over time.' },
-          { id: 'VOLUME_MAKER', title: 'Volume Maker Bot', desc: 'Generate continuous 24h market liquidity and turnover across price spreads.' },
-        ].map(strat => (
-          <button
-            key={strat.id}
-            onClick={() => setSelectedStrategy(strat.id as BotStrategy)}
-            className={`p-4 rounded-xl text-left transition-all obsidian-glass border ${
-              selectedStrategy === strat.id
-                ? 'border-[#FF087F] bg-[#171923] shadow-lg shadow-[#FF087F]/15'
-                : 'border-white/10 hover:border-white/20'
-            }`}
-          >
-            <div className="flex items-center justify-between mb-1">
-              <span className="font-display font-bold text-sm text-[#F5F5F7]">{strat.title}</span>
-              {selectedStrategy === strat.id && (
-                <span className="w-2 h-2 rounded-full bg-[#FF087F] animate-pulse" />
-              )}
-            </div>
-            <p className="text-[11px] text-[#9298A6] leading-tight">{strat.desc}</p>
-          </button>
-        ))}
+      {/* Strategy Selector Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {STRATEGY_CARDS.map(strat => {
+          const isSelected = selectedStrategy === strat.id;
+          return (
+            <button
+              key={strat.id}
+              type="button"
+              onClick={() => setSelectedStrategy(strat.id)}
+              className={`p-4 rounded-[10px] text-left transition-colors border cursor-pointer ${
+                isSelected
+                  ? 'bg-[#17212B] border-[#8DA5B1]'
+                  : 'bg-[#141C24] border-[#202B34] hover:border-[#2B3944] hover:bg-[#17212B]/60'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <span className="font-semibold text-sm text-[#E4EBEF]">{strat.title}</span>
+                {isSelected && <StatusBadge tone="brand">Active</StatusBadge>}
+              </div>
+              <p className="text-xs text-[#71818B] leading-relaxed">{strat.desc}</p>
+            </button>
+          );
+        })}
       </div>
 
-      {/* Main Workspace: Config Form (Left) & Real Active Bots (Right) */}
+      {/* Main Workspace */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left: Configuration Form (5 cols) */}
-        <div className="lg:col-span-5 rounded-2xl obsidian-glass border border-white/10 p-5 space-y-4 shadow-xl">
-          <div className="flex items-center justify-between pb-3 border-b border-white/5">
+        <div className="lg:col-span-5 bg-[#141C24] border border-[#202B34] rounded-[10px] overflow-hidden self-start">
+          <PanelHeader
+            title="Konfigurasi Bot"
+            subtitle="Order ditempatkan langsung ke order book akun Anda"
+            actions={<StatusBadge tone="brand">{selectedStrategy.replace('_', ' ')}</StatusBadge>}
+          />
+
+          <div className="p-5 space-y-4">
+            {duplicateRunningBot && (
+              <div className="p-3 rounded-[7px] bg-[#2C2415]/50 border border-[#D6A85C]/40 text-[#D6A85C] text-xs flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <div className="space-y-0.5">
+                  <p className="font-semibold">Bot Aktif Sedang Berjalan</p>
+                  <p className="text-xs text-[#E4EBEF]/90 leading-relaxed">
+                    Bot <strong>{duplicateRunningBot.name}</strong> sedang RUNNING pada pair {selectedPair.id}. Hentikan bot tersebut terlebih dahulu untuk mencegah duplikasi order.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {isInsufficientBalance && !duplicateRunningBot && (
+              <div className="p-3 rounded-[7px] bg-[#401F27]/50 border border-[#EA5B65]/40 text-[#EA5B65] text-xs flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-semibold">Saldo Ledger Tidak Mencukupi</p>
+                  <p className="text-xs text-[#E4EBEF]/90 mt-0.5">{balanceErrorMessage}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Pair Selector */}
             <div>
-              <h3 className="font-display font-bold text-sm text-[#F5F5F7]">Konfigurasi Bot</h3>
-              <p className="text-[11px] text-[#9298A6]">Order akan langsung masuk ke Order Book akun Anda</p>
-            </div>
-            <span className="text-xs font-mono font-bold text-[#FF087F] px-2 py-0.5 rounded bg-[#FF087F]/10 border border-[#FF087F]/20">
-              {selectedStrategy.replace('_', ' ')}
-            </span>
-          </div>
-
-          {/* Duplicate Running Bot Warning */}
-          {duplicateRunningBot && (
-            <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-600/60 text-amber-300 text-xs flex items-start gap-2.5">
-              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-              <div className="space-y-0.5">
-                <p className="font-bold">Bot Aktif Sedang Berjalan</p>
-                <p className="text-[11px] text-amber-300/90 leading-tight">
-                  Bot <strong>{duplicateRunningBot.name}</strong> saat ini sedang berstatus <strong>RUNNING</strong> pada pair {selectedPair.id}. Untuk mencegah eksekusi ganda dan duplikasi order pada buku order, hentikan bot tersebut terlebih dahulu.
-                </p>
+              <div className="flex items-center justify-between mb-1.5">
+                <label htmlFor="bot-pair-select" className="text-xs font-medium text-[#A1AFB8]">
+                  Trading Pair
+                </label>
+                <span className="text-[11px] font-mono tabular-nums text-[#A1AFB8]">
+                  Last:{' '}
+                  <strong className="text-[#E4EBEF]">
+                    {formatQuotePrice(
+                      selectedPair.lastPrice,
+                      selectedPair.quoteCurrency,
+                      selectedPair.quoteDecimals,
+                      true
+                    )}
+                  </strong>
+                </span>
               </div>
+              <select
+                id="bot-pair-select"
+                value={selectedPair.id}
+                onChange={e => setSelectedPairId(e.target.value)}
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] px-3 py-2 text-xs font-mono font-semibold text-[#E4EBEF] focus:outline-none focus:border-[#8DA5B1]"
+              >
+                {pairs.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.symbol || `${p.baseCurrency}/${p.quoteCurrency}`} ({p.id})
+                  </option>
+                ))}
+              </select>
             </div>
-          )}
 
-          {/* Insufficient Balance Warning */}
-          {isInsufficientBalance && !duplicateRunningBot && (
-            <div className="p-3 rounded-xl bg-red-950/40 border border-red-700/60 text-red-300 text-xs flex items-start gap-2.5">
-              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-bold">Saldo Ledger Tidak Mencukupi</p>
-                <p className="text-[11px] text-red-300/90">{balanceErrorMessage}</p>
+            {/* Available Balances Strip */}
+            <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34] flex items-center justify-between gap-3 text-xs font-mono tabular-nums">
+              <div className="min-w-0">
+                <span className="text-[11px] font-sans text-[#71818B] block">
+                  Tersedia {selectedPair.quoteCurrency}
+                </span>
+                <span className="font-semibold text-[#E4EBEF] truncate block">{quoteDisplay}</span>
               </div>
-            </div>
-          )}
-
-          {/* Pair Selector */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-[11px] font-medium text-[#9298A6]">Trading Pair</label>
-              <span className="text-[10px] font-mono text-[#F5F5F7]">
-                Harga Terakhir: <strong>{formatQuotePrice(selectedPair.lastPrice, selectedPair.quoteCurrency, selectedPair.quoteDecimals, true)}</strong>
-              </span>
-            </div>
-            <select
-              value={selectedPair.id}
-              onChange={e => setSelectedPairId(e.target.value)}
-              className="w-full bg-[#0D1017] border border-white/10 rounded-lg p-2.5 text-xs font-bold text-white focus:outline-none focus:border-[#FF087F]"
-            >
-              {pairs.map(p => (
-                <option key={p.id} value={p.id}>
-                  {p.symbol || `${p.baseCurrency}/${p.quoteCurrency}`} ({p.id})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* User Available Balance Indicator */}
-          <div className="p-3 rounded-xl bg-white/5 border border-white/5 flex items-center justify-between text-xs font-mono">
-            <div>
-              <span className="text-[10px] text-[#9298A6] block">Tersedia {selectedPair.quoteCurrency}</span>
-              <span className="font-bold text-[#F5F5F7]">{quoteDisplay}</span>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="text-right">
-                <span className="text-[10px] text-[#9298A6] block">Tersedia {selectedPair.baseCurrency}</span>
-                <span className="font-bold text-[#F5F5F7]">{baseDisplay}</span>
-              </div>
-              {onRefreshBalances && (
+              <div className="flex items-center gap-2.5 shrink-0">
+                <div className="text-right">
+                  <span className="text-[11px] font-sans text-[#71818B] block">
+                    Tersedia {selectedPair.baseCurrency}
+                  </span>
+                  <span className="font-semibold text-[#E4EBEF]">{baseDisplay}</span>
+                </div>
+                {onRefreshBalances && (
+                  <button
+                    type="button"
+                    onClick={onRefreshBalances}
+                    className="p-2 rounded-[7px] bg-[#17212B] hover:bg-[#222F3A] border border-[#2B3944] text-[#A1AFB8] hover:text-[#E4EBEF] transition-colors cursor-pointer"
+                    title="Segarkan Saldo Ledger"
+                    aria-label="Segarkan Saldo Ledger"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={onRefreshBalances}
-                  className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-[#9298A6] hover:text-white transition-colors"
-                  title="Segarkan Saldo Ledger"
+                  onClick={() => setIsDiagnosticOpen(true)}
+                  className="px-2.5 py-2 rounded-[7px] bg-[#12392F] hover:bg-[#16A879]/20 text-[#35B887] border border-[#35B887]/30 transition-colors flex items-center gap-1.5 text-[11px] font-sans font-medium cursor-pointer"
+                  title="Cek Sinkronisasi Ledger & Matching Engine"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" />
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Audit</span>
                 </button>
-              )}
-              <button
-                type="button"
-                onClick={() => setIsDiagnosticOpen(true)}
-                className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 transition-colors flex items-center gap-1 text-[10px] font-sans font-semibold"
-                title="Cek Sinkronisasi Ledger & Matching Engine"
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Audit Sync</span>
-              </button>
+              </div>
             </div>
-          </div>
 
-          {/* STRATEGY SPECIFIC FORMS */}
-          {selectedStrategy === 'SPOT_GRID' && (
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] text-[#9298A6] block mb-1">Batas Bawah (IDR)</label>
+            {/* STRATEGY FORMS */}
+            {selectedStrategy === 'SPOT_GRID' && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
                   <Input
+                    label={`Batas Bawah (${selectedPair.quoteCurrency})`}
                     type="number"
+                    step="any"
                     value={lowerPrice}
                     onChange={e => setLowerPrice(e.target.value)}
-                    className="font-mono text-xs"
                   />
-                </div>
-                <div>
-                  <label className="text-[11px] text-[#9298A6] block mb-1">Batas Atas (IDR)</label>
                   <Input
+                    label={`Batas Atas (${selectedPair.quoteCurrency})`}
                     type="number"
+                    step="any"
                     value={upperPrice}
                     onChange={e => setUpperPrice(e.target.value)}
-                    className="font-mono text-xs"
                   />
                 </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] text-[#9298A6] block mb-1">Jumlah Grid (3 - 30)</label>
+                <div className="grid grid-cols-2 gap-3">
                   <Input
+                    label="Jumlah Grid (3–30)"
                     type="number"
                     min="3"
                     max="30"
                     value={gridCount}
                     onChange={e => setGridCount(e.target.value)}
-                    className="font-mono text-xs"
                   />
-                </div>
-                <div>
-                  <label className="text-[11px] text-[#9298A6] block mb-1">Total Alokasi (IDR)</label>
                   <Input
+                    label={`Total Alokasi (${selectedPair.quoteCurrency})`}
                     type="number"
+                    step="any"
                     value={investmentIdr}
                     onChange={e => setInvestmentIdr(e.target.value)}
-                    className="font-mono text-xs"
                   />
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {selectedStrategy === 'DCA_LAYERS' && (
-            <div className="space-y-3">
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setLayerSide('BUY')}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg border transition-all ${
-                    layerSide === 'BUY'
-                      ? 'bg-[#16C784]/20 border-[#16C784] text-[#16C784]'
-                      : 'border-white/10 text-[#9298A6]'
-                  }`}
-                >
-                  Ladder Buy (Akumulasi)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLayerSide('SELL')}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg border transition-all ${
-                    layerSide === 'SELL'
-                      ? 'bg-[#EA3943]/20 border-[#EA3943] text-[#EA3943]'
-                      : 'border-white/10 text-[#9298A6]'
-                  }`}
-                >
-                  Ladder Sell (Distribusi)
-                </button>
-              </div>
+            {selectedStrategy === 'DCA_LAYERS' && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setLayerSide('BUY')}
+                    className={`py-2 text-xs font-semibold rounded-[7px] border transition-colors cursor-pointer ${
+                      layerSide === 'BUY'
+                        ? 'bg-[#12392F] border-[#16A879] text-[#16A879]'
+                        : 'bg-[#111820] border-[#2B3944] text-[#A1AFB8] hover:text-[#E4EBEF]'
+                    }`}
+                  >
+                    Ladder Buy (Akumulasi)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLayerSide('SELL')}
+                    className={`py-2 text-xs font-semibold rounded-[7px] border transition-colors cursor-pointer ${
+                      layerSide === 'SELL'
+                        ? 'bg-[#401F27] border-[#EA5B65] text-[#EA5B65]'
+                        : 'bg-[#111820] border-[#2B3944] text-[#A1AFB8] hover:text-[#E4EBEF]'
+                    }`}
+                  >
+                    Ladder Sell (Distribusi)
+                  </button>
+                </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] text-[#9298A6] block mb-1">Harga Awal (IDR)</label>
+                <div className="grid grid-cols-2 gap-3">
                   <Input
+                    label={`Harga Awal (${selectedPair.quoteCurrency})`}
                     type="number"
+                    step="any"
                     value={layerStartPrice}
                     onChange={e => setLayerStartPrice(e.target.value)}
-                    className="font-mono text-xs"
                   />
-                </div>
-                <div>
-                  <label className="text-[11px] text-[#9298A6] block mb-1">Jumlah Layer</label>
                   <Input
+                    label="Jumlah Layer"
                     type="number"
                     value={layerCount}
                     onChange={e => setLayerCount(e.target.value)}
-                    className="font-mono text-xs"
                   />
                 </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] text-[#9298A6] block mb-1">Langkah Jarak (%)</label>
+                <div className="grid grid-cols-2 gap-3">
                   <Input
+                    label="Langkah Jarak (%)"
                     type="number"
                     step="0.1"
                     value={layerStepPercent}
                     onChange={e => setLayerStepPercent(e.target.value)}
-                    className="font-mono text-xs"
                   />
-                </div>
-                <div>
-                  <label className="text-[11px] text-[#9298A6] block mb-1">Kuantitas per Layer</label>
                   <Input
+                    label={`Kuantitas / Layer (${selectedPair.baseCurrency})`}
                     type="number"
                     step="0.001"
                     value={layerQty}
                     onChange={e => setLayerQty(e.target.value)}
-                    className="font-mono text-xs"
                   />
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {selectedStrategy === 'SMART_TWAP' && (
-            <div className="space-y-3">
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setTwapSide('BUY')}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg border transition-all ${
-                    twapSide === 'BUY'
-                      ? 'bg-[#16C784]/20 border-[#16C784] text-[#16C784]'
-                      : 'border-white/10 text-[#9298A6]'
-                  }`}
-                >
-                  TWAP Buy
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTwapSide('SELL')}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg border transition-all ${
-                    twapSide === 'SELL'
-                      ? 'bg-[#EA3943]/20 border-[#EA3943] text-[#EA3943]'
-                      : 'border-white/10 text-[#9298A6]'
-                  }`}
-                >
-                  TWAP Sell
-                </button>
-              </div>
+            {selectedStrategy === 'SMART_TWAP' && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTwapSide('BUY')}
+                    className={`py-2 text-xs font-semibold rounded-[7px] border transition-colors cursor-pointer ${
+                      twapSide === 'BUY'
+                        ? 'bg-[#12392F] border-[#16A879] text-[#16A879]'
+                        : 'bg-[#111820] border-[#2B3944] text-[#A1AFB8] hover:text-[#E4EBEF]'
+                    }`}
+                  >
+                    TWAP Buy
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTwapSide('SELL')}
+                    className={`py-2 text-xs font-semibold rounded-[7px] border transition-colors cursor-pointer ${
+                      twapSide === 'SELL'
+                        ? 'bg-[#401F27] border-[#EA5B65] text-[#EA5B65]'
+                        : 'bg-[#111820] border-[#2B3944] text-[#A1AFB8] hover:text-[#E4EBEF]'
+                    }`}
+                  >
+                    TWAP Sell
+                  </button>
+                </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] text-[#9298A6] block mb-1">Target Harga (IDR)</label>
+                <div className="grid grid-cols-2 gap-3">
                   <Input
+                    label={`Target Harga (${selectedPair.quoteCurrency})`}
                     type="number"
+                    step="any"
                     value={twapTargetPrice}
                     onChange={e => setTwapTargetPrice(e.target.value)}
-                    className="font-mono text-xs"
                   />
-                </div>
-                <div>
-                  <label className="text-[11px] text-[#9298A6] block mb-1">Jumlah Slice</label>
                   <Input
+                    label="Jumlah Slice"
                     type="number"
                     value={twapSliceCount}
                     onChange={e => setTwapSliceCount(e.target.value)}
-                    className="font-mono text-xs"
                   />
                 </div>
-              </div>
 
-              <div>
-                <label className="text-[11px] text-[#9298A6] block mb-1">Total Volume ({selectedPair.baseCurrency})</label>
                 <Input
+                  label={`Total Volume (${selectedPair.baseCurrency})`}
                   type="number"
                   step="0.01"
                   value={twapTotalVolume}
                   onChange={e => setTwapTotalVolume(e.target.value)}
-                  className="font-mono text-xs"
                 />
               </div>
-            </div>
-          )}
+            )}
 
-          {selectedStrategy === 'VOLUME_MAKER' && (
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] text-[#9298A6] block mb-1">Harga Minimum (IDR)</label>
+            {selectedStrategy === 'VOLUME_MAKER' && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3">
                   <Input
+                    label={`Harga Minimum (${selectedPair.quoteCurrency})`}
                     type="number"
+                    step="any"
                     value={volMinPrice}
                     onChange={e => setVolMinPrice(e.target.value)}
-                    className="font-mono text-xs"
                   />
-                </div>
-                <div>
-                  <label className="text-[11px] text-[#9298A6] block mb-1">Harga Maksimum (IDR)</label>
                   <Input
+                    label={`Harga Maksimum (${selectedPair.quoteCurrency})`}
                     type="number"
+                    step="any"
                     value={volMaxPrice}
                     onChange={e => setVolMaxPrice(e.target.value)}
-                    className="font-mono text-xs"
                   />
                 </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] text-[#9298A6] block mb-1">Target Turnover ({selectedPair.baseCurrency})</label>
+                <div className="grid grid-cols-2 gap-3">
                   <Input
+                    label={`Target Turnover (${selectedPair.baseCurrency})`}
                     type="number"
+                    step="any"
                     value={volTarget}
                     onChange={e => setVolTarget(e.target.value)}
-                    className="font-mono text-xs"
                   />
-                </div>
-                <div>
-                  <label className="text-[11px] text-[#9298A6] block mb-1">Interval Delay (Detik)</label>
                   <Input
+                    label="Interval Delay (Detik)"
                     type="number"
                     value={volDelaySec}
                     onChange={e => setVolDelaySec(e.target.value)}
-                    className="font-mono text-xs"
                   />
                 </div>
               </div>
-            </div>
-          )}
-
-          {/* Submit Deploy Button with Duplicate Guard */}
-          <Button
-            onClick={handleDeployBot}
-            disabled={isDeploying || !!duplicateRunningBot || isInsufficientBalance}
-            className={`w-full py-3 text-xs font-bold shadow-lg transition-all ${
-              duplicateRunningBot
-                ? 'bg-amber-950/80 text-amber-400 border border-amber-700/80 cursor-not-allowed opacity-90'
-                : isInsufficientBalance
-                ? 'bg-red-950/80 text-red-400 border border-red-700/80 cursor-not-allowed opacity-90'
-                : 'bg-[#FF087F] hover:bg-[#D926FF] text-white shadow-[#FF087F]/20 cursor-pointer'
-            }`}
-          >
-            {isDeploying ? (
-              <div className="flex items-center gap-2">
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>Menghubungkan ke Matching Engine...</span>
-              </div>
-            ) : duplicateRunningBot ? (
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-amber-400" />
-                <span>Bot {duplicateRunningBot.pairId} Sudah Aktif (Hentikan Dulu)</span>
-              </div>
-            ) : isInsufficientBalance ? (
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-red-400" />
-                <span>Saldo Ledger Tidak Mencukupi</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <Play className="w-4 h-4 fill-current" />
-                <span>Luncurkan Bot Nyata (Deploy to Order Book)</span>
-              </div>
             )}
-          </Button>
 
-          <p className="text-[10px] text-center text-[#9298A6]">
-            Dana dialokasikan dan dikunci secara aman via Double-Entry Ledger. Anda dapat menghentikan bot kapan saja.
-          </p>
+            <Button
+              type="button"
+              variant={duplicateRunningBot || isInsufficientBalance ? 'secondary' : 'primary'}
+              size="lg"
+              onClick={handleDeployBot}
+              isLoading={isDeploying}
+              disabled={isDeploying || !!duplicateRunningBot || isInsufficientBalance}
+              icon={
+                duplicateRunningBot || isInsufficientBalance ? (
+                  <AlertTriangle className="w-4 h-4 text-[#D6A85C]" />
+                ) : (
+                  <Play className="w-4 h-4" />
+                )
+              }
+              className="w-full"
+            >
+              {isDeploying
+                ? 'Menghubungkan ke Engine...'
+                : duplicateRunningBot
+                ? `Bot ${duplicateRunningBot.pairId} Sudah Aktif`
+                : isInsufficientBalance
+                ? 'Saldo Ledger Tidak Mencukupi'
+                : 'Luncurkan Bot Nyata (Deploy)'}
+            </Button>
+
+            <p className="text-[11px] text-center text-[#71818B]">
+              Dana dialokasikan secara atomik via Double-Entry Ledger dan dapat dihentikan kapan saja.
+            </p>
+          </div>
         </div>
 
-        {/* Right: Real Active Bots & Engine Execution (7 cols) */}
+        {/* Right: Active Bots List (7 cols) */}
         <div className="lg:col-span-7 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <h3 className="font-display font-bold text-base text-[#F5F5F7]">Daftar Bot Trading</h3>
-              <div className="flex items-center gap-1 bg-[#171923] p-1 rounded-lg border border-white/10 text-xs">
-                <button
-                  type="button"
-                  onClick={() => setBotFilterTab('ALL')}
-                  className={`px-2.5 py-0.5 rounded-md font-medium transition-all ${
-                    botFilterTab === 'ALL' ? 'bg-white/10 text-white font-bold' : 'text-[#9298A6] hover:text-white'
-                  }`}
-                >
-                  Semua ({activeBots.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setBotFilterTab('RUNNING')}
-                  className={`px-2.5 py-0.5 rounded-md font-medium transition-all ${
-                    botFilterTab === 'RUNNING' ? 'bg-emerald-950 border border-emerald-700 text-emerald-400 font-bold' : 'text-[#9298A6] hover:text-white'
-                  }`}
-                >
-                  Berjalan ({runningBots.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setBotFilterTab('STOPPED')}
-                  className={`px-2.5 py-0.5 rounded-md font-medium transition-all ${
-                    botFilterTab === 'STOPPED' ? 'bg-slate-800 border border-slate-700 text-slate-300 font-bold' : 'text-[#9298A6] hover:text-white'
-                  }`}
-                >
-                  Dihentikan ({stoppedBots.length})
-                </button>
-              </div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <h3 className="font-semibold text-base text-[#E4EBEF]">Daftar Bot Trading</h3>
+              <SegmentedTabs
+                tabs={filterTabs}
+                activeTab={botFilterTab}
+                onChange={setBotFilterTab}
+                size="sm"
+              />
             </div>
 
             <div className="flex items-center gap-2">
-              <button
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
                 onClick={loadBots}
-                disabled={isLoadingBots}
-                className="p-1.5 rounded-lg bg-white/5 border border-white/10 text-[#9298A6] hover:text-white transition-colors"
+                isLoading={isLoadingBots}
+                icon={<RefreshCw className="w-3.5 h-3.5" />}
                 title="Refresh Bot List"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingBots ? 'animate-spin' : ''}`} />
-              </button>
+                Refresh
+              </Button>
 
               {runningBots.length > 0 && (
-                <button
+                <Button
+                  type="button"
+                  variant="danger"
+                  size="sm"
                   onClick={handleCancelAllBots}
-                  className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-red-950/60 border border-red-800 text-red-300 hover:bg-red-900/60 transition-colors"
                 >
                   Hentikan Semua Bot
-                </button>
+                </Button>
               )}
             </div>
           </div>
 
-          {/* Bots Cards List */}
           {displayedBots.length === 0 ? (
-            <div className="rounded-2xl obsidian-glass border border-white/10 p-12 text-center space-y-3">
-              <Bot className="w-12 h-12 text-[#9298A6] mx-auto opacity-40" />
+            <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-12 text-center space-y-3">
+              <Bot className="w-10 h-10 text-[#536B77] mx-auto" />
               <div className="space-y-1">
-                <p className="font-bold text-sm text-[#F5F5F7]">
+                <p className="font-semibold text-sm text-[#E4EBEF]">
                   {botFilterTab === 'RUNNING'
                     ? 'Tidak ada bot yang sedang berjalan'
                     : botFilterTab === 'STOPPED'
                     ? 'Tidak ada bot yang dihentikan'
                     : 'Belum ada bot trading aktif'}
                 </p>
-                <p className="text-xs text-[#9298A6] max-w-md mx-auto">
-                  Pilih strategi di sebelah kiri dan klik <strong>Luncurkan Bot Nyata</strong>. Order limit akan langsung dipasang di buku order DOMINEX.
+                <p className="text-xs text-[#71818B] max-w-md mx-auto">
+                  Pilih strategi di sebelah kiri dan klik Luncurkan Bot Nyata untuk memasang order limit di buku order DIMONEX.
                 </p>
               </div>
             </div>
@@ -991,104 +987,118 @@ export const TradingBotsView: React.FC<Props> = ({
                 return (
                   <div
                     key={bot.id}
-                    className="rounded-xl obsidian-glass border border-white/10 p-4 space-y-3 hover:border-white/20 transition-all shadow-md"
+                    className="rounded-[10px] bg-[#141C24] border border-[#202B34] hover:border-[#2B3944] p-4 space-y-3 transition-colors"
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2.5">
-                        <span className={`w-2.5 h-2.5 rounded-full ${isRunning ? 'bg-[#16C784] animate-pulse' : 'bg-[#9298A6]'}`} />
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-start gap-2.5">
+                        <span
+                          className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
+                            isRunning ? 'bg-[#16A879] animate-pulse' : 'bg-[#53616A]'
+                          }`}
+                        />
                         <div>
-                          <div className="flex items-center gap-2">
-                            <h4 className="font-bold text-sm text-[#F5F5F7] font-display">{bot.name}</h4>
-                            <span className="text-[10px] font-mono px-2 py-0.2 rounded bg-white/5 border border-white/10 text-slate-300">
-                              {bot.pairId}
-                            </span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h4 className="font-semibold text-sm text-[#E4EBEF]">{bot.name}</h4>
+                            <span className="text-xs font-mono text-[#8DA5B1]">{bot.pairId}</span>
                           </div>
-                          <p className="text-[11px] text-[#9298A6] font-mono">
-                            ID: {bot.id} · Dimulai: {formatDateTime(bot.createdAt)}
+                          <p className="text-[11px] text-[#71818B] font-mono tabular-nums mt-0.5">
+                            ID: {bot.id} · {formatDateTime(bot.createdAt)}
                           </p>
                         </div>
                       </div>
 
                       <div className="flex items-center gap-2">
-                        <span className={`text-[10px] font-bold font-mono px-2 py-0.5 rounded border ${
-                          isRunning
-                            ? 'bg-emerald-950/80 text-emerald-400 border-emerald-700/60'
-                            : bot.status === 'COMPLETED'
-                            ? 'bg-blue-950/80 text-blue-400 border-blue-700/60'
-                            : 'bg-slate-800/80 text-slate-400 border-slate-700'
-                        }`}>
+                        <StatusBadge
+                          tone={
+                            isRunning
+                              ? 'success'
+                              : bot.status === 'COMPLETED'
+                              ? 'info'
+                              : 'neutral'
+                          }
+                        >
                           {bot.status}
-                        </span>
+                        </StatusBadge>
 
                         {isRunning && (
-                          <button
+                          <Button
                             type="button"
+                            variant="danger"
+                            size="sm"
                             disabled={isStopping}
                             onClick={() => handleStopBot(bot.id, bot.name)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-lg bg-red-950/80 border border-red-700/80 text-red-300 hover:bg-red-900/80 transition-all cursor-pointer shadow-xs disabled:opacity-50"
+                            icon={<Square className="w-3 h-3 fill-current" />}
                           >
-                            <Square className="w-3 h-3 fill-current" />
-                            <span>{isStopping ? 'Menghentikan...' : 'Stop Manual'}</span>
-                          </button>
+                            {isStopping ? 'Menghentikan...' : 'Stop Manual'}
+                          </Button>
                         )}
 
-                        <button
+                        <Button
                           type="button"
+                          variant="secondary"
+                          size="sm"
                           onClick={() => setSelectedBotLog(selectedBotLog?.id === bot.id ? null : bot)}
-                          className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-white/5 border border-white/10 text-[#9298A6] hover:text-white"
                         >
                           {selectedBotLog?.id === bot.id ? 'Tutup Log' : 'Log Eksekusi'}
-                        </button>
+                        </Button>
                       </div>
                     </div>
 
-                    {/* Stats Grid */}
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-white/5 text-xs font-mono">
-                      <div className="p-2 rounded-lg bg-[#0D1017]">
-                        <span className="text-[10px] text-[#9298A6] block">Order Diterapkan</span>
-                        <span className="font-bold text-[#F5F5F7]">{deployedCount} Order</span>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-3 border-t border-[#202B34] text-xs font-mono tabular-nums">
+                      <div className="p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34]">
+                        <span className="text-[11px] font-sans text-[#71818B] block">Order Diterapkan</span>
+                        <span className="font-semibold text-[#E4EBEF]">{deployedCount} Order</span>
                       </div>
-                      <div className="p-2 rounded-lg bg-[#0D1017]">
-                        <span className="text-[10px] text-[#9298A6] block">Order Terisi (Matched)</span>
-                        <span className="font-bold text-emerald-400">{filledCount} Matched</span>
+                      <div className="p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34]">
+                        <span className="text-[11px] font-sans text-[#71818B] block">Order Terisi</span>
+                        <span className="font-semibold text-[#35B887]">{filledCount} Matched</span>
                       </div>
-                      <div className="p-2 rounded-lg bg-[#0D1017]">
-                        <span className="text-[10px] text-[#9298A6] block">Volume Eksekusi</span>
-                        <span className="font-bold text-[#F5F5F7]">{bot.totalVolumeFilled || '0'}</span>
+                      <div className="p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34]">
+                        <span className="text-[11px] font-sans text-[#71818B] block">Volume Eksekusi</span>
+                        <span className="font-semibold text-[#E4EBEF]">{bot.totalVolumeFilled || '0'}</span>
                       </div>
-                      <div className="p-2 rounded-lg bg-[#0D1017]">
-                        <span className="text-[10px] text-[#9298A6] block">Profit Terealisasi</span>
-                        <span className="font-bold text-[#16C784]">
+                      <div className="p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34]">
+                        <span className="text-[11px] font-sans text-[#71818B] block">Profit Terealisasi</span>
+                        <span className="font-semibold text-[#16A879]">
                           {formatIDR(bot.realizedProfitIdr || '0')}
                         </span>
                       </div>
                     </div>
 
-                    {/* Execution Logs Drawer */}
                     {selectedBotLog?.id === bot.id && (
-                      <div className="p-3 rounded-xl bg-[#08090D] border border-white/10 space-y-2 mt-2">
-                        <div className="flex items-center justify-between text-xs font-mono text-[#9298A6] border-b border-white/5 pb-1">
-                          <span className="flex items-center gap-1.5 text-white font-bold">
-                            <Terminal className="w-3.5 h-3.5 text-[#FF087F]" />
+                      <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-2 mt-2">
+                        <div className="flex items-center justify-between text-xs font-mono text-[#A1AFB8] border-b border-[#202B34] pb-1.5">
+                          <span className="flex items-center gap-1.5 text-[#E4EBEF] font-semibold">
+                            <Terminal className="w-3.5 h-3.5 text-[#8DA5B1]" />
                             Server Execution Audit Trail
                           </span>
-                          <span>{bot.logs?.length || 0} Events Recorded</span>
+                          <span className="tabular-nums">{bot.logs?.length || 0} Events</span>
                         </div>
                         <div className="max-h-48 overflow-y-auto space-y-1 font-mono text-[11px] pr-1">
-                          {(!bot.logs || bot.logs.length === 0) ? (
-                            <p className="text-slate-500 py-2">Belum ada aktivitas log yang tercatat.</p>
+                          {!bot.logs || bot.logs.length === 0 ? (
+                            <p className="text-[#71818B] py-2 font-sans">
+                              Belum ada aktivitas log yang tercatat.
+                            </p>
                           ) : (
                             bot.logs.map((log: any, idx: number) => (
-                              <div key={idx} className="flex items-start gap-2 text-slate-300">
-                                <span className="text-slate-500 shrink-0">[{new Date(log.timestamp).toLocaleTimeString()}]</span>
-                                <span className={`shrink-0 font-bold ${
-                                  log.type === 'FILL' ? 'text-emerald-400' :
-                                  log.type === 'ORDER' ? 'text-blue-400' :
-                                  log.type === 'ERROR' ? 'text-red-400' : 'text-slate-300'
-                                }`}>
+                              <div key={idx} className="flex items-start gap-2 text-[#A1AFB8]">
+                                <span className="text-[#71818B] tabular-nums shrink-0">
+                                  [{new Date(log.timestamp).toLocaleTimeString()}]
+                                </span>
+                                <span
+                                  className={`shrink-0 font-semibold ${
+                                    log.type === 'FILL'
+                                      ? 'text-[#16A879]'
+                                      : log.type === 'ORDER'
+                                      ? 'text-[#6D9FE8]'
+                                      : log.type === 'ERROR'
+                                      ? 'text-[#EA5B65]'
+                                      : 'text-[#A1AFB8]'
+                                  }`}
+                                >
                                   {log.type}
                                 </span>
-                                <span className="text-slate-300 break-all">{log.message}</span>
+                                <span className="text-[#E4EBEF] break-all">{log.message}</span>
                               </div>
                             ))
                           )}
@@ -1103,7 +1113,6 @@ export const TradingBotsView: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* Balance & Engine Synchronization Diagnostic Tool Modal */}
       <BalanceDiagnosticModal
         isOpen={isDiagnosticOpen}
         onClose={() => setIsDiagnosticOpen(false)}

@@ -1,17 +1,9 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * src/components/wallet/WalletView.tsx
- * DOMINEX Universal Portfolio & Asset Management.
- * 
- * Features:
- * - Dynamic support for ALL tokens from active markets and listing portal
- *   (BTC, ETH, USDT, SOL, TON, DOGE, and any newly listed/created token).
- * - Multi-network deposit and withdrawal options with real blockchain address generation.
- * - Dynamic asset selector in Deposit & Withdraw modals with real-time token search.
- * - Instant ledger crediting and double-entry synchronization.
- * - Accurate valuation and percentage allocation across all portfolio assets.
+ * DIMONEX Universal Portfolio & Asset Management — Obsidian Iridium.
  */
 
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
@@ -25,30 +17,27 @@ import {
   Copy,
   CheckCircle2,
   AlertTriangle,
-  ShieldCheck,
-  Search,
   RefreshCw,
   Clock,
   ArrowRightLeft,
   Activity,
-  Layers,
-  Sparkles,
-  Coins,
-  Check,
-  ExternalLink,
   Calendar
 } from 'lucide-react';
 import { UserBalance, UserProfile, TradingPairItem } from '../../types/index.js';
-import { formatIDR, formatCrypto, safeBigInt } from '../../lib/formatters.js';
+import { formatIDR, safeBigInt } from '../../lib/formatters.js';
 import { Button } from '../ui/Button.js';
 import { Input } from '../ui/Input.js';
 import { Modal } from '../ui/Modal.js';
 import { useToast } from '../ui/Toast.js';
+import { StatusBadge } from '../ui/StatusBadge.js';
+import { AssetIcon } from '../ui/AssetIcon.js';
+import { SegmentedTabs } from '../ui/Tabs.js';
+import { SearchInput } from '../ui/Controls.js';
 import { AssetPerformance } from './AssetPerformance.js';
 import { BalanceDiagnosticModal } from './BalanceDiagnosticModal.js';
 import { LivePnLView } from './LivePnLView.js';
 import { PnLCalendarView } from './PnLCalendarView.js';
-import { connectMetaMaskWallet, formatAddress, isMetaMaskAvailable } from '../../lib/web3.js';
+import { connectMetaMaskWallet, formatAddress } from '../../lib/web3.js';
 
 interface Props {
   balances: UserBalance[];
@@ -98,7 +87,6 @@ export const WalletView: React.FC<Props> = ({
   user,
   onRefreshBalances,
   onOpenAuthModal,
-  onOpenKycView,
   onNavigateTrade,
   initialAction = 'NONE',
 }) => {
@@ -113,33 +101,26 @@ export const WalletView: React.FC<Props> = ({
   );
   const [isDiagnosticOpen, setIsDiagnosticOpen] = useState(false);
 
-  // Supported Assets from Backend
   const [supportedAssets, setSupportedAssets] = useState<SupportedAssetItem[]>([]);
-  const [isLoadingAssets, setIsLoadingAssets] = useState(false);
+  const [, setIsLoadingAssets] = useState(false);
 
-  // Selected asset & network for Deposit / Withdraw
   const [selectedAsset, setSelectedAsset] = useState<string>('IDR');
   const [selectedNetwork, setSelectedNetwork] = useState<string>('VA_BCA');
   const [modalAssetSearch, setModalAssetSearch] = useState('');
 
-  // Customizable Deposit Amount
   const [depositAmount, setDepositAmount] = useState<string>('10000000');
   const [isCopied, setIsCopied] = useState(false);
   const [isSimulatingDeposit, setIsSimulatingDeposit] = useState(false);
 
-  // Withdraw State
   const [wdAddress, setWdAddress] = useState('');
   const [wdAmount, setWdAmount] = useState('');
   const [isSubmittingWd, setIsSubmittingWd] = useState(false);
 
-  // Real transactions from backend
   const [transactions, setTransactions] = useState<RealTransaction[]>([]);
   const [isLoadingTxs, setIsLoadingTxs] = useState(false);
 
-  // Dynamic deposit address from backend
   const [dynamicAddress, setDynamicAddress] = useState<string>('');
 
-  // Web3 & MetaMask integration state
   const [connectedWeb3Address, setConnectedWeb3Address] = useState<string | null>(null);
   const [isConnectingWeb3, setIsConnectingWeb3] = useState(false);
 
@@ -160,7 +141,6 @@ export const WalletView: React.FC<Props> = ({
     }
   };
 
-  // Fetch supported assets from backend
   const fetchSupportedAssets = useCallback(async () => {
     try {
       setIsLoadingAssets(true);
@@ -182,15 +162,9 @@ export const WalletView: React.FC<Props> = ({
     fetchSupportedAssets();
   }, [fetchSupportedAssets]);
 
-  // Compute full list of all available tokens from:
-  // 1. supportedAssets (backend)
-  // 2. pairs (all market trading pairs base and quote currencies)
-  // 3. balances
-  // 4. default foundation tokens (IDR, BTC, ETH, USDT, SOL, TON, DOGE)
   const allAvailableTokens = useMemo(() => {
     const tokenMap = new Map<string, { symbol: string; name: string; isFiat: boolean; decimals: number }>();
 
-    // Default foundation list
     const defaults = [
       { symbol: 'IDR', name: 'Indonesian Rupiah', isFiat: true, decimals: 2 },
       { symbol: 'USDT', name: 'Tether USD', isFiat: false, decimals: 6 },
@@ -202,7 +176,6 @@ export const WalletView: React.FC<Props> = ({
     ];
     defaults.forEach(d => tokenMap.set(d.symbol, d));
 
-    // From backend supported assets
     supportedAssets.forEach(a => {
       tokenMap.set(a.symbol, {
         symbol: a.symbol,
@@ -212,7 +185,6 @@ export const WalletView: React.FC<Props> = ({
       });
     });
 
-    // From active trading pairs
     pairs.forEach(p => {
       if (p.baseCurrency && !tokenMap.has(p.baseCurrency)) {
         tokenMap.set(p.baseCurrency, {
@@ -232,7 +204,6 @@ export const WalletView: React.FC<Props> = ({
       }
     });
 
-    // From user balances
     balances.forEach(b => {
       if (b.currency && !tokenMap.has(b.currency)) {
         tokenMap.set(b.currency, {
@@ -247,7 +218,6 @@ export const WalletView: React.FC<Props> = ({
     return Array.from(tokenMap.values());
   }, [supportedAssets, pairs, balances]);
 
-  // Network Options helper for ANY token
   const getNetworksForAsset = useCallback((assetSymbol: string): NetworkOption[] => {
     const clean = assetSymbol.toUpperCase();
     const found = supportedAssets.find(a => a.symbol === clean);
@@ -306,7 +276,6 @@ export const WalletView: React.FC<Props> = ({
     ];
   }, [supportedAssets]);
 
-  // Presets helper for ANY token
   const getPresetsForAsset = useCallback((assetSymbol: string): { label: string; value: string }[] => {
     const clean = assetSymbol.toUpperCase();
     const found = supportedAssets.find(a => a.symbol === clean);
@@ -379,7 +348,6 @@ export const WalletView: React.FC<Props> = ({
     ];
   }, [supportedAssets]);
 
-  // Fetch or generate dynamic address when asset or network changes
   useEffect(() => {
     if (selectedAsset === 'IDR') {
       setDynamicAddress('880017777777777 (BCA VA)');
@@ -410,18 +378,16 @@ export const WalletView: React.FC<Props> = ({
       });
   }, [selectedAsset, selectedNetwork]);
 
-  // Asset Price in IDR helper
   const getAssetPriceIDR = useCallback((symbol: string): number => {
     if (symbol === 'IDR') return 1;
 
-    // First, look up from real market pairs
     const pair = pairs.find(p => p.baseCurrency === symbol && p.quoteCurrency === 'IDR');
     if (pair && pair.lastPrice) {
-      const priceNum = Number(safeBigInt(pair.lastPrice) / 100n);
+      const dec = pair.quoteDecimals ?? 2;
+      const priceNum = Number(safeBigInt(pair.lastPrice)) / (10 ** dec);
       if (priceNum > 0) return priceNum;
     }
 
-    // Secondary fallback benchmark prices
     const benchmarks: Record<string, number> = {
       BTC: 1450000000,
       ETH: 48500000,
@@ -433,7 +399,6 @@ export const WalletView: React.FC<Props> = ({
     return benchmarks[symbol] || 50000;
   }, [pairs]);
 
-  // Compute Total Estimated Portfolio Value STRICTLY from real balances across ALL tokens
   const { totalEstimatedIDR, assetHoldings, allocationData } = useMemo(() => {
     let totalIDR = 0;
 
@@ -466,31 +431,29 @@ export const WalletView: React.FC<Props> = ({
       };
     });
 
-    // Compute dynamic percentage allocations
     const allocation = holdings
       .filter(h => h.valIDR > 0)
       .map(h => {
         const pct = totalIDR > 0 ? (h.valIDR / totalIDR) * 100 : 0;
         const colors: Record<string, string> = {
-          BTC: '#FF087F',
-          ETH: '#D926FF',
-          USDT: '#16C784',
-          SOL: '#F5B942',
-          TON: '#0098EA',
-          DOGE: '#C2A633',
-          IDR: '#9298A6'
+          BTC: '#D6A85C',
+          ETH: '#8DA5B1',
+          USDT: '#16A879',
+          SOL: '#6D9FE8',
+          TON: '#A5BAC4',
+          DOGE: '#D6A85C',
+          IDR: '#536B77'
         };
         return {
           currency: h.currency,
           pct: Number(pct.toFixed(1)),
-          color: colors[h.currency] || '#C5C9D4'
+          color: colors[h.currency] || '#71818B'
         };
       });
 
     return { totalEstimatedIDR: totalIDR, assetHoldings: holdings, allocationData: allocation };
   }, [allAvailableTokens, balances, getAssetPriceIDR]);
 
-  // Load real user transaction history from backend
   const fetchTransactions = useCallback(async () => {
     const token = localStorage.getItem('dimonex_auth_token');
     if (!token) return;
@@ -524,7 +487,6 @@ export const WalletView: React.FC<Props> = ({
     setTimeout(() => setIsCopied(false), 2000);
   };
 
-  // Real deposit simulation that credits the authoritative backend ledger
   const handleSimulateDeposit = async () => {
     const token = localStorage.getItem('dimonex_auth_token');
     if (!token) {
@@ -589,7 +551,6 @@ export const WalletView: React.FC<Props> = ({
     }
   };
 
-  // Real withdrawal request to backend
   const handleConfirmWithdraw = async () => {
     const token = localStorage.getItem('dimonex_auth_token');
     if (!token) {
@@ -679,45 +640,47 @@ export const WalletView: React.FC<Props> = ({
   });
 
   return (
-    <div className="flex-1 flex flex-col p-4 lg:p-6 bg-[#08090D] overflow-y-auto">
+    <div className="flex-1 flex flex-col p-4 lg:p-6 bg-[#090D12] overflow-y-auto space-y-5">
       {/* Portfolio Header Card */}
-      <div className="rounded-2xl obsidian-glass border border-white/10 p-5 lg:p-6 shadow-2xl mb-6">
+      <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-5 lg:p-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs font-semibold text-[#9298A6]">Estimated Portfolio Value</span>
+              <span className="text-xs font-medium text-[#A1AFB8]">Estimated Portfolio Value</span>
               <button
+                type="button"
                 onClick={() => setHideBalance(!hideBalance)}
-                className="text-[#9298A6] hover:text-[#F5F5F7] transition-colors p-1"
+                className="text-[#71818B] hover:text-[#E4EBEF] transition-colors p-1 cursor-pointer"
                 title={hideBalance ? 'Show balance' : 'Hide balance'}
               >
                 {hideBalance ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
 
-            <div className="flex items-baseline gap-3">
-              <h2 className="text-2xl lg:text-3xl font-extrabold text-[#F5F5F7] font-mono tracking-tight">
-                {hideBalance ? 'Rp ••••••••••' : formatIDR(String(Math.round(totalEstimatedIDR)))}
+            <div className="flex items-baseline gap-3 font-mono tabular-nums">
+              <h2 className="text-2xl lg:text-3xl font-semibold text-[#E4EBEF] tracking-tight">
+                {hideBalance ? 'Rp ••••••••••' : formatIDR(String(Math.round(totalEstimatedIDR * 100)))}
               </h2>
-              <span className="text-xs text-[#9298A6] font-mono">
-                {hideBalance ? '≈ $••••' : `≈ $${(totalEstimatedIDR / 16350).toLocaleString('en-US', { maximumFractionDigits: 2 })} USDT`}
+              <span className="text-xs text-[#71818B]">
+                {hideBalance
+                  ? '≈ $••••'
+                  : `≈ $${(totalEstimatedIDR / 16350).toLocaleString('en-US', { maximumFractionDigits: 2 })} USDT`}
               </span>
             </div>
 
             <div className="mt-2 flex items-center gap-2 text-xs font-mono">
-              <span className="inline-flex items-center gap-1 font-semibold text-[#16C784]">
+              <span className="inline-flex items-center gap-1 font-medium text-[#16A879]">
                 <TrendingUp className="w-3.5 h-3.5" />
                 Atomic Double-Entry Ledger
               </span>
-              <span className="text-[#686D7A]">·</span>
-              <span className="text-[#9298A6]">{allAvailableTokens.length} Koin Terdaftar</span>
+              <span className="text-[#40515D]">·</span>
+              <span className="text-[#A1AFB8] tabular-nums">{allAvailableTokens.length} Koin Terdaftar</span>
             </div>
           </div>
 
-          {/* Quick Portfolio Actions */}
           <div className="flex flex-wrap items-center gap-2.5">
             <Button
-              variant="gradient"
+              variant="primary"
               size="md"
               icon={<ArrowDownLeft className="w-4 h-4" />}
               onClick={() => {
@@ -750,14 +713,13 @@ export const WalletView: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* Visual Allocation Bar */}
         {allocationData.length > 0 && (
-          <div className="mt-6 pt-5 border-t border-white/5 space-y-2">
+          <div className="mt-6 pt-5 border-t border-[#202B34] space-y-2">
             <div className="flex justify-between items-center text-xs">
-              <span className="text-[#9298A6] font-semibold">Alokasi Aset Portofolio</span>
-              <span className="font-mono text-[#F5F5F7] font-bold">100% Terverifikasi Ledger</span>
+              <span className="text-[#A1AFB8] font-medium">Alokasi Aset Portofolio</span>
+              <StatusBadge tone="success">100% Terverifikasi Ledger</StatusBadge>
             </div>
-            <div className="w-full h-2 rounded-full bg-[#171923] overflow-hidden flex">
+            <div className="w-full h-2 rounded-full bg-[#111820] overflow-hidden flex">
               {allocationData.map(a => (
                 <div
                   key={a.currency}
@@ -769,10 +731,10 @@ export const WalletView: React.FC<Props> = ({
             </div>
             <div className="flex flex-wrap gap-4 pt-1">
               {allocationData.map(a => (
-                <div key={a.currency} className="flex items-center gap-1.5 text-xs font-mono">
+                <div key={a.currency} className="flex items-center gap-1.5 text-xs font-mono tabular-nums">
                   <span className="w-2 h-2 rounded-full" style={{ backgroundColor: a.color }} />
-                  <span className="text-[#9298A6]">{a.currency}</span>
-                  <span className="font-bold text-[#F5F5F7]">{a.pct}%</span>
+                  <span className="text-[#71818B]">{a.currency}</span>
+                  <span className="font-semibold text-[#E4EBEF]">{a.pct}%</span>
                 </div>
               ))}
             </div>
@@ -781,162 +743,123 @@ export const WalletView: React.FC<Props> = ({
       </div>
 
       {/* Wallet Domain Tab Navigation */}
-      <div className="flex items-center gap-1.5 p-1 bg-[#15171F] border border-[#292C38] rounded-xl mb-6 overflow-x-auto scrollbar-none">
-        <button
-          type="button"
-          onClick={() => setActiveTab('ASSETS')}
-          className={`px-4 py-2 rounded-lg text-xs font-bold font-display flex items-center gap-2 transition-all whitespace-nowrap ${
-            activeTab === 'ASSETS'
-              ? 'bg-[#FF087F] text-white shadow-md'
-              : 'text-[#9298A6] hover:text-[#F5F5F7] hover:bg-[#1C1F29]'
-          }`}
-        >
-          <Wallet className="w-4 h-4" />
-          <span>Portofolio & Saldo</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('LIVE_PNL')}
-          className={`px-4 py-2 rounded-lg text-xs font-bold font-display flex items-center gap-2 transition-all whitespace-nowrap ${
-            activeTab === 'LIVE_PNL'
-              ? 'bg-[#FF087F] text-white shadow-md'
-              : 'text-[#9298A6] hover:text-[#F5F5F7] hover:bg-[#1C1F29]'
-          }`}
-        >
-          <TrendingUp className="w-4 h-4" />
-          <span>Live PnL Real-Time</span>
-          <span className="relative flex h-2 w-2 ml-0.5">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00C087] opacity-75" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-[#00C087]" />
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('CALENDAR_PNL')}
-          className={`px-4 py-2 rounded-lg text-xs font-bold font-display flex items-center gap-2 transition-all whitespace-nowrap ${
-            activeTab === 'CALENDAR_PNL'
-              ? 'bg-[#FF087F] text-white shadow-md'
-              : 'text-[#9298A6] hover:text-[#F5F5F7] hover:bg-[#1C1F29]'
-          }`}
-        >
-          <Calendar className="w-4 h-4" />
-          <span>Kalender PnL Harian</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('TRANSACTIONS')}
-          className={`px-4 py-2 rounded-lg text-xs font-bold font-display flex items-center gap-2 transition-all whitespace-nowrap ${
-            activeTab === 'TRANSACTIONS'
-              ? 'bg-[#FF087F] text-white shadow-md'
-              : 'text-[#9298A6] hover:text-[#F5F5F7] hover:bg-[#1C1F29]'
-          }`}
-        >
-          <Clock className="w-4 h-4" />
-          <span>Riwayat Transaksi Ledger</span>
-        </button>
+      <div className="overflow-x-auto scrollbar-none">
+        <SegmentedTabs
+          tabs={[
+            { id: 'ASSETS', label: 'Portofolio & Saldo', icon: <Wallet className="w-3.5 h-3.5" /> },
+            { id: 'LIVE_PNL', label: 'Live PnL Real-Time', icon: <TrendingUp className="w-3.5 h-3.5" /> },
+            { id: 'CALENDAR_PNL', label: 'Kalender PnL Harian', icon: <Calendar className="w-3.5 h-3.5" /> },
+            { id: 'TRANSACTIONS', label: 'Riwayat Transaksi Ledger', icon: <Clock className="w-3.5 h-3.5" /> },
+          ]}
+          activeTab={activeTab}
+          onChange={setActiveTab}
+        />
       </div>
 
-      {/* =========================================================================
-          TAB 1: PORTOFOLIO & DAFTAR SALDO
-          ========================================================================= */}
+      {/* TAB 1: ASSETS */}
       {activeTab === 'ASSETS' && (
-        <div className="space-y-6">
-          {/* Asset Holdings Table */}
-          <div className="rounded-xl bg-[#15171F] border border-[#292C38] overflow-hidden shadow-2xl">
-            <div className="p-4 lg:p-5 border-b border-[#292C38] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="space-y-5">
+          <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
+            <div className="p-4 lg:p-5 border-b border-[#202B34] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h3 className="text-sm font-bold text-[#F5F5F7] font-display">Daftar Saldo & Aset Terdaftar ({allAvailableTokens.length} Koin)</h3>
-                <p className="text-[11px] text-[#9298A6]">Seluruh token dari pasar aktif, listing token baru, dan dompet Anda</p>
+                <h3 className="text-sm font-semibold text-[#E4EBEF]">
+                  Daftar Saldo &amp; Aset Terdaftar ({allAvailableTokens.length} Koin)
+                </h3>
+                <p className="text-[11px] text-[#71818B]">
+                  Seluruh token dari pasar aktif, listing token baru, dan dompet Anda
+                </p>
               </div>
-              <div className="relative w-full sm:w-64">
-                <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-[#686D7A]" />
-                <input
-                  type="text"
-                  placeholder="Cari koin atau nama..."
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  className="w-full pl-9 pr-3 py-1.5 text-xs bg-[#0E1016] border border-[#292C38] rounded-lg text-[#F5F5F7] placeholder-[#686D7A] outline-none focus:border-[#FF087F] font-mono"
-                />
-              </div>
+              <SearchInput
+                placeholder="Cari koin atau nama..."
+                value={search}
+                onChange={setSearch}
+                className="w-full sm:w-64"
+              />
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs font-mono">
-                <thead className="bg-[#0E1016] text-[#686D7A] text-[11px] border-b border-[#292C38]">
+              <table className="w-full text-left text-xs font-mono tabular-nums">
+                <thead className="bg-[#111820] text-[#71818B] text-[11px] uppercase tracking-wider border-b border-[#202B34]">
                   <tr>
-                    <th className="py-3 px-4 font-sans">Aset / Koin</th>
-                    <th className="py-3 px-4 text-right">Saldo Tersedia</th>
-                    <th className="py-3 px-4 text-right">Terkunci Order</th>
-                    <th className="py-3 px-4 text-right">Total Saldo</th>
-                    <th className="py-3 px-4 text-right">Estimasi Nilai (IDR)</th>
-                    <th className="py-3 px-4 text-right font-sans">Aksi Cepat</th>
+                    <th className="py-3 px-4 font-sans font-medium">Aset / Koin</th>
+                    <th className="py-3 px-4 text-right font-sans font-medium">Saldo Tersedia</th>
+                    <th className="py-3 px-4 text-right font-sans font-medium">Terkunci Order</th>
+                    <th className="py-3 px-4 text-right font-sans font-medium">Total Saldo</th>
+                    <th className="py-3 px-4 text-right font-sans font-medium">Estimasi Nilai (IDR)</th>
+                    <th className="py-3 px-4 text-right font-sans font-medium">Aksi Cepat</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#292C38]/40">
+                <tbody className="divide-y divide-[#202B34]">
                   {filteredHoldings.map(h => (
-                    <tr key={h.currency} className="hover:bg-[#1C1F29]/60 transition-colors">
-                      <td className="py-3 px-4">
+                    <tr key={h.currency} className="hover:bg-[#17212B] transition-colors">
+                      <td className="py-3 px-4 font-sans">
                         <div className="flex items-center gap-2.5">
-                          <div className="w-7 h-7 rounded-lg bg-[#15171F] border border-[#292C38] flex items-center justify-center font-bold text-xs text-[#FF087F]">
-                            {h.currency.slice(0, 3)}
-                          </div>
+                          <AssetIcon symbol={h.currency} size="sm" />
                           <div>
                             <div className="flex items-center gap-1.5">
-                              <span className="font-bold text-[#F5F5F7] block">{h.currency}</span>
+                              <span className="font-semibold text-[#E4EBEF]">{h.currency}</span>
                               {(h.currency === 'SOL' || h.currency === 'TON' || h.currency === 'DOGE') && (
-                                <span className="px-1 py-0.2 rounded bg-[#FF087F]/20 text-[#FF087F] text-[8px] font-bold border border-[#FF087F]/30">
-                                  LISTED
-                                </span>
+                                <StatusBadge tone="brand">LISTED</StatusBadge>
                               )}
                             </div>
-                            <span className="text-[10px] text-[#686D7A]">
-                              {h.name}
-                            </span>
+                            <span className="text-[10px] text-[#71818B]">{h.name}</span>
                           </div>
                         </div>
                       </td>
-                      <td className="py-3 px-4 text-right font-bold text-[#F5F5F7]">
-                        {hideBalance ? '••••' : (h.currency === 'IDR' ? formatIDR(String(Math.round(h.available * 100))) : `${h.available.toLocaleString()} ${h.currency}`)}
+                      <td className="py-3 px-4 text-right font-semibold text-[#E4EBEF]">
+                        {hideBalance
+                          ? '••••'
+                          : h.currency === 'IDR'
+                          ? formatIDR(String(Math.round(h.available * 100)))
+                          : `${h.available.toLocaleString()} ${h.currency}`}
                       </td>
-                      <td className="py-3 px-4 text-right text-amber-400">
-                        {hideBalance ? '••••' : (h.currency === 'IDR' ? formatIDR(String(Math.round(h.locked * 100))) : `${h.locked.toLocaleString()} ${h.currency}`)}
+                      <td className="py-3 px-4 text-right text-[#D6A85C]">
+                        {hideBalance
+                          ? '••••'
+                          : h.currency === 'IDR'
+                          ? formatIDR(String(Math.round(h.locked * 100)))
+                          : `${h.locked.toLocaleString()} ${h.currency}`}
                       </td>
-                      <td className="py-3 px-4 text-right font-bold text-[#F5F5F7]">
-                        {hideBalance ? '••••' : (h.currency === 'IDR' ? formatIDR(String(Math.round(h.total * 100))) : `${h.total.toLocaleString()} ${h.currency}`)}
+                      <td className="py-3 px-4 text-right font-semibold text-[#E4EBEF]">
+                        {hideBalance
+                          ? '••••'
+                          : h.currency === 'IDR'
+                          ? formatIDR(String(Math.round(h.total * 100)))
+                          : `${h.total.toLocaleString()} ${h.currency}`}
                       </td>
-                      <td className="py-3 px-4 text-right font-bold text-[#F5F5F7]">
+                      <td className="py-3 px-4 text-right font-semibold text-[#E4EBEF]">
                         {hideBalance ? '••••' : formatIDR(String(Math.round(h.valIDR * 100)))}
                       </td>
                       <td className="py-3 px-4 text-right font-sans">
                         <div className="flex items-center justify-end gap-2">
                           <button
+                            type="button"
                             onClick={() => {
                               handleSelectAssetForModal(h.currency);
                               setActiveModal('DEPOSIT');
                             }}
-                            className="text-xs text-[#FF087F] hover:text-[#D926FF] font-semibold"
+                            className="text-xs text-[#8DA5B1] hover:text-[#C1D0D6] font-medium cursor-pointer"
                           >
                             Deposit
                           </button>
-                          <span className="text-[#292C38]">|</span>
+                          <span className="text-[#2B3944]">|</span>
                           <button
+                            type="button"
                             onClick={() => {
                               handleSelectAssetForModal(h.currency);
                               setActiveModal('WITHDRAW');
                             }}
-                            className="text-xs text-[#9298A6] hover:text-[#F5F5F7] font-semibold"
+                            className="text-xs text-[#A1AFB8] hover:text-[#E4EBEF] font-medium cursor-pointer"
                           >
                             Tarik
                           </button>
                           {onNavigateTrade && h.currency !== 'IDR' && (
                             <>
-                              <span className="text-[#292C38]">|</span>
+                              <span className="text-[#2B3944]">|</span>
                               <button
+                                type="button"
                                 onClick={() => onNavigateTrade(`${h.currency}-IDR`)}
-                                className="text-xs text-[#16C784] hover:text-emerald-300 font-semibold"
+                                className="text-xs text-[#16A879] hover:text-[#20BC8B] font-medium cursor-pointer"
                               >
                                 Trade
                               </button>
@@ -951,84 +874,69 @@ export const WalletView: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* Asset Performance Component */}
           <AssetPerformance balances={balances} onNavigateTrade={onNavigateTrade} hideBalance={hideBalance} />
         </div>
       )}
 
-      {/* =========================================================================
-          TAB 2: LIVE PNL REAL-TIME TRACKER
-          ========================================================================= */}
+      {/* TAB 2: LIVE PNL */}
       {activeTab === 'LIVE_PNL' && (
         <LivePnLView onNavigateTrade={onNavigateTrade} hideBalance={hideBalance} />
       )}
 
-      {/* =========================================================================
-          TAB 3: KALENDER PNL HARIAN
-          ========================================================================= */}
+      {/* TAB 3: CALENDAR PNL */}
       {activeTab === 'CALENDAR_PNL' && (
         <PnLCalendarView onNavigateTrade={onNavigateTrade} hideBalance={hideBalance} />
       )}
 
-      {/* =========================================================================
-          TAB 4: RIWAYAT TRANSAKSI LEDGER
-          ========================================================================= */}
+      {/* TAB 4: TRANSACTIONS */}
       {activeTab === 'TRANSACTIONS' && (
-        <div className="rounded-xl bg-[#15171F] border border-[#292C38] p-4 lg:p-5 shadow-2xl">
-          <div className="flex items-center justify-between pb-3 mb-3 border-b border-[#292C38]">
+        <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4 lg:p-5">
+          <div className="flex items-center justify-between pb-3 mb-3 border-b border-[#202B34]">
             <div>
-              <h3 className="text-sm font-bold text-[#F5F5F7]">Riwayat Transaksi Ledger</h3>
-              <p className="text-[11px] text-[#9298A6]">Catatan riil mutasi setoran dan penarikan akun Anda</p>
+              <h3 className="text-sm font-semibold text-[#E4EBEF]">Riwayat Transaksi Ledger</h3>
+              <p className="text-[11px] text-[#71818B]">Catatan riil mutasi setoran dan penarikan akun Anda</p>
             </div>
-            <button
-              onClick={fetchTransactions}
-              className="text-xs font-mono text-[#9298A6] hover:text-[#F5F5F7] flex items-center gap-1"
-            >
+            <Button variant="secondary" size="sm" onClick={fetchTransactions}>
               <RefreshCw className={`w-3.5 h-3.5 ${isLoadingTxs ? 'animate-spin' : ''}`} />
               Segarkan
-            </button>
+            </Button>
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs font-mono">
-              <thead className="bg-[#0E1016] text-[#686D7A] text-[11px] border-b border-[#292C38]">
+            <table className="w-full text-left text-xs font-mono tabular-nums">
+              <thead className="bg-[#111820] text-[#71818B] text-[11px] uppercase tracking-wider border-b border-[#202B34]">
                 <tr>
-                  <th className="py-2.5 px-3 font-sans">Type</th>
-                  <th className="py-2.5 px-3">Asset</th>
-                  <th className="py-2.5 px-3 text-right">Amount</th>
-                  <th className="py-2.5 px-3 text-center">Status</th>
-                  <th className="py-2.5 px-3">Date / Time</th>
-                  <th className="py-2.5 px-3 text-right">Reference / TXID</th>
+                  <th className="py-2.5 px-3 font-sans font-medium">Type</th>
+                  <th className="py-2.5 px-3 font-sans font-medium">Asset</th>
+                  <th className="py-2.5 px-3 text-right font-sans font-medium">Amount</th>
+                  <th className="py-2.5 px-3 text-center font-sans font-medium">Status</th>
+                  <th className="py-2.5 px-3 font-sans font-medium">Date / Time</th>
+                  <th className="py-2.5 px-3 text-right font-sans font-medium">Reference / TXID</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#292C38]/40">
+              <tbody className="divide-y divide-[#202B34]">
                 {transactions.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="py-8 text-center text-[#9298A6] font-sans">
-                      <p className="font-semibold text-xs text-[#F5F5F7] mb-1">Belum Ada Riwayat Transaksi</p>
+                    <td colSpan={6} className="py-10 text-center text-[#71818B] font-sans">
+                      <p className="font-semibold text-xs text-[#E4EBEF] mb-1">Belum Ada Riwayat Transaksi</p>
                       <p className="text-[11px]">Lakukan deposit untuk menambahkan dana ke saldo akun.</p>
                     </td>
                   </tr>
                 ) : (
                   transactions.map(tx => (
-                    <tr key={tx.id} className="hover:bg-[#1C1F29]/60">
+                    <tr key={tx.id} className="hover:bg-[#17212B] transition-colors">
                       <td className="py-3 px-3 font-sans font-semibold">
-                        <span className={tx.type === 'DEPOSIT' ? 'text-[#16C784]' : 'text-[#EA3943]'}>
+                        <span className={tx.type === 'DEPOSIT' ? 'text-[#16A879]' : 'text-[#EA5B65]'}>
                           {tx.type}
                         </span>
                       </td>
-                      <td className="py-3 px-3 font-bold text-[#F5F5F7]">{tx.asset}</td>
-                      <td className="py-3 px-3 text-right font-bold text-[#F5F5F7]">{tx.amount}</td>
-                      <td className="py-3 px-3 text-center">
-                        <span className="inline-flex items-center gap-1 text-[10px] text-[#16C784] bg-[#16C784]/15 px-2 py-0.5 rounded font-sans font-semibold">
-                          <CheckCircle2 className="w-3 h-3" />
-                          {tx.status}
-                        </span>
+                      <td className="py-3 px-3 font-semibold text-[#E4EBEF]">{tx.asset}</td>
+                      <td className="py-3 px-3 text-right font-semibold text-[#E4EBEF]">{tx.amount}</td>
+                      <td className="py-3 px-3 text-center font-sans">
+                        <StatusBadge tone="buy">{tx.status}</StatusBadge>
                       </td>
-                      <td className="py-3 px-3 text-[#969BA8]">{tx.time}</td>
-                      <td className="py-3 px-3 text-right text-[#686D7A] hover:text-[#969BA8]">
-                        {tx.txid}
-                      </td>
+                      <td className="py-3 px-3 text-[#A1AFB8]">{tx.time}</td>
+                      <td className="py-3 px-3 text-right text-[#71818B]">{tx.txid}</td>
                     </tr>
                   ))
                 )}
@@ -1038,37 +946,30 @@ export const WalletView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* =========================================================================
-          UNIVERSAL DEPOSIT MODAL WITH ALL LISTED TOKENS
-          ========================================================================= */}
+      {/* DEPOSIT MODAL */}
       <Modal
         isOpen={activeModal === 'DEPOSIT'}
         onClose={() => setActiveModal('NONE')}
-        title={`Deposit ${selectedAsset} (Simulasi Masuk Ledger)`}
-        subtitle="Mendukung seluruh token pasar dan koin listing. Saldo otomatis masuk ke ledger atomik bursa."
+        title={`Deposit ${selectedAsset}`}
+        subtitle="Saldo otomatis dicatat ke ledger double-entry DIMONEX."
         maxWidth="max-w-md"
       >
         <div className="space-y-4">
-          {/* Asset Picker with Search & Comprehensive List */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="text-[11px] font-semibold text-[#969BA8]">Pilih Aset / Koin ({allAvailableTokens.length} Koin)</label>
-              <span className="text-[10px] text-[#FF087F] font-mono">Aktif: {selectedAsset}</span>
+              <label className="text-[11px] font-medium text-[#A1AFB8]">
+                Pilih Aset / Koin ({allAvailableTokens.length} Koin)
+              </label>
+              <span className="text-[10px] text-[#C1D0D6] font-mono">Aktif: {selectedAsset}</span>
             </div>
 
-            {/* Quick Search */}
-            <div className="relative mb-2">
-              <Search className="w-3.5 h-3.5 text-[#686D7A] absolute left-2.5 top-2.5 pointer-events-none" />
-              <input
-                type="text"
-                placeholder="Cari koin (BTC, ETH, SOL, TON, DOGE...)"
-                value={modalAssetSearch}
-                onChange={e => setModalAssetSearch(e.target.value)}
-                className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#0E1016] border border-[#292C38] rounded-lg text-[#F5F5F7] placeholder-[#686D7A] outline-none focus:border-[#FF087F] font-mono"
-              />
-            </div>
+            <SearchInput
+              placeholder="Cari koin (BTC, ETH, SOL, TON, DOGE...)"
+              value={modalAssetSearch}
+              onChange={setModalAssetSearch}
+              className="mb-2"
+            />
 
-            {/* Scrollable Asset Pills */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-h-24 flex-wrap scrollbar-none">
               {filteredModalTokens.map(tok => {
                 const isCur = selectedAsset === tok.symbol;
@@ -1077,10 +978,10 @@ export const WalletView: React.FC<Props> = ({
                     key={tok.symbol}
                     type="button"
                     onClick={() => handleSelectAssetForModal(tok.symbol)}
-                    className={`px-3 py-1 text-xs font-bold rounded-lg border transition-all ${
+                    className={`px-3 py-1 text-xs font-medium rounded-[7px] border transition-colors cursor-pointer ${
                       isCur
-                        ? 'bg-[#FF087F] text-white border-[#FF087F] shadow-sm'
-                        : 'bg-[#0E1016] border-[#292C38] text-[#9298A6] hover:text-[#F5F5F7] hover:bg-[#15171F]'
+                        ? 'bg-[#8DA5B1] text-[#090D12] border-[#8DA5B1] font-semibold'
+                        : 'bg-[#111820] border-[#2B3944] text-[#A1AFB8] hover:text-[#E4EBEF] hover:bg-[#17212B]'
                     }`}
                   >
                     {tok.symbol}
@@ -1090,53 +991,48 @@ export const WalletView: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* Network Selector */}
           <div>
-            <label className="text-[11px] font-medium text-[#969BA8] block mb-1">Jaringan Transfer / Bank</label>
+            <label className="text-[11px] font-medium text-[#A1AFB8] block mb-1">Jaringan Transfer / Bank</label>
             <div className="space-y-1.5 max-h-36 overflow-y-auto">
               {getNetworksForAsset(selectedAsset).map(net => (
                 <button
                   key={net.id}
                   type="button"
                   onClick={() => setSelectedNetwork(net.id)}
-                  className={`w-full flex items-center justify-between p-2.5 rounded-lg border text-left transition-colors ${
+                  className={`w-full flex items-center justify-between p-2.5 rounded-[7px] border text-left transition-colors cursor-pointer ${
                     selectedNetwork === net.id
-                      ? 'bg-[#1C1F29] border-[#FF087F] text-[#F5F5F7]'
-                      : 'bg-[#0E1016] border-[#292C38] text-[#9298A6] hover:text-[#F5F5F7]'
+                      ? 'bg-[#1D2832] border-[#8DA5B1] text-[#E4EBEF]'
+                      : 'bg-[#111820] border-[#202B34] text-[#A1AFB8] hover:text-[#E4EBEF]'
                   }`}
                 >
                   <div>
-                    <span className="text-xs font-bold block text-[#F5F5F7]">{net.name}</span>
-                    <span className="text-[10px] text-[#686D7A] font-mono">
+                    <span className="text-xs font-semibold block text-[#E4EBEF]">{net.name}</span>
+                    <span className="text-[10px] text-[#71818B] font-mono">
                       Min: {net.minDeposit} · {net.confirmations} Konfirmasi
                     </span>
                   </div>
-                  <span className="text-xs font-mono font-semibold text-[#16C784]">Biaya: {net.fee}</span>
+                  <span className="text-xs font-mono font-medium text-[#16A879]">Biaya: {net.fee}</span>
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Customizable Amount Input */}
           <div className="space-y-1.5">
-            <label className="text-[11px] font-medium text-[#969BA8] block">
-              Nominal Setoran / Deposit (Dapat Diubah)
-            </label>
             <Input
+              label="Nominal Setoran / Deposit"
               value={depositAmount}
               onChange={e => setDepositAmount(e.target.value)}
               placeholder={`Masukkan nominal ${selectedAsset}`}
               suffixText={selectedAsset}
             />
-            {/* Quick Presets */}
             <div className="flex items-center gap-1.5 flex-wrap pt-1">
-              <span className="text-[10px] text-[#686D7A] font-mono">Preset:</span>
+              <span className="text-[10px] text-[#71818B] font-mono">Preset:</span>
               {getPresetsForAsset(selectedAsset).map(preset => (
                 <button
                   key={preset.label}
                   type="button"
                   onClick={() => setDepositAmount(preset.value)}
-                  className="px-2 py-0.5 rounded text-[10px] font-mono bg-[#171923] border border-white/10 hover:border-[#FF087F]/40 text-[#9298A6] hover:text-[#F5F5F7] transition-colors"
+                  className="px-2 py-0.5 rounded-[5px] text-[10px] font-mono bg-[#17212B] border border-[#2B3944] hover:border-[#8DA5B1] text-[#A1AFB8] hover:text-[#E4EBEF] transition-colors cursor-pointer"
                 >
                   {preset.label}
                 </button>
@@ -1144,101 +1040,87 @@ export const WalletView: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* QR Code & Address Display */}
-          <div className="p-3.5 rounded-xl bg-[#0E1016] border border-[#292C38] flex flex-col items-center text-center">
-            <span className="text-[11px] text-[#969BA8] mb-1">Alamat Setoran Akun Anda</span>
-            <div className="w-full flex items-center justify-between p-2 rounded-lg bg-[#15171F] border border-[#292C38] font-mono text-xs text-[#F5F5F7] mb-2">
+          <div className="p-3.5 rounded-[10px] bg-[#111820] border border-[#202B34] flex flex-col items-center text-center">
+            <span className="text-[11px] text-[#A1AFB8] mb-1.5">Alamat Setoran Akun Anda</span>
+            <div className="w-full flex items-center justify-between p-2 rounded-[7px] bg-[#141C24] border border-[#2B3944] font-mono text-xs text-[#E4EBEF] mb-2">
               <span className="truncate pr-2">{dynamicAddress}</span>
               <button
+                type="button"
                 onClick={handleCopy}
-                className="shrink-0 text-[#FF087F] hover:text-[#D926FF] p-1 transition-colors"
+                className="shrink-0 text-[#8DA5B1] hover:text-[#C1D0D6] p-1 transition-colors cursor-pointer"
                 title="Copy Address"
               >
-                {isCopied ? <CheckCircle2 className="w-4 h-4 text-[#16C784]" /> : <Copy className="w-4 h-4" />}
+                {isCopied ? <CheckCircle2 className="w-4 h-4 text-[#16A879]" /> : <Copy className="w-4 h-4" />}
               </button>
             </div>
 
-            {/* Network Warning */}
-            <div className="flex items-start gap-2 p-2 rounded-lg bg-[#FF087F]/10 border border-[#FF087F]/30 text-left w-full">
-              <AlertTriangle className="w-3.5 h-3.5 text-[#FF087F] shrink-0 mt-0.5" />
-              <p className="text-[10px] text-[#FF087F] leading-tight">
-                Kirimkan hanya <strong>{selectedAsset}</strong> via jaringan yang sesuai. Transaksi akan diverifikasi langsung oleh ledger server.
+            <div className="flex items-start gap-2 p-2 rounded-[7px] bg-[#2C2415] border border-[#D6A85C]/30 text-left w-full">
+              <AlertTriangle className="w-3.5 h-3.5 text-[#D6A85C] shrink-0 mt-0.5" />
+              <p className="text-[10px] text-[#E4EBEF] leading-tight">
+                Kirimkan hanya <strong>{selectedAsset}</strong> via jaringan yang sesuai. Transaksi diverifikasi langsung oleh ledger server.
               </p>
             </div>
           </div>
 
-          {/* Web3 / MetaMask Option for Crypto Tokens */}
           {selectedAsset !== 'IDR' && (
-            <div className="p-3 rounded-xl bg-[#12141C] border border-[#292C38] space-y-2">
+            <div className="p-3 rounded-[10px] bg-[#111820] border border-[#202B34] space-y-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-[#FF087F] animate-pulse" />
-                  <span className="text-[11px] font-bold text-[#F5F5F7]">Koneksi Dompet Web3 / MetaMask</span>
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#8DA5B1]" />
+                  <span className="text-[11px] font-semibold text-[#E4EBEF]">Koneksi Dompet Web3 / MetaMask</span>
                 </div>
                 {connectedWeb3Address ? (
-                  <span className="text-[10px] font-mono text-[#16C784] bg-[#16C784]/15 px-2 py-0.5 rounded border border-[#16C784]/30">
-                    Terhubung
-                  </span>
+                  <StatusBadge tone="buy">Terhubung</StatusBadge>
                 ) : (
-                  <span className="text-[10px] text-[#686D7A] font-mono">Opsional</span>
+                  <span className="text-[10px] text-[#71818B] font-mono">Opsional</span>
                 )}
               </div>
 
               {connectedWeb3Address ? (
-                <div className="flex items-center justify-between p-2 rounded-lg bg-[#0E1016] border border-[#16C784]/30">
+                <div className="flex items-center justify-between p-2 rounded-[7px] bg-[#141C24] border border-[#16A879]/30">
                   <div className="text-left font-mono">
-                    <span className="text-[10px] text-[#9298A6] block">Akun EVM Terdeteksi:</span>
-                    <span className="text-xs text-[#16C784] font-bold">{formatAddress(connectedWeb3Address)}</span>
+                    <span className="text-[10px] text-[#A1AFB8] block">Akun EVM Terdeteksi:</span>
+                    <span className="text-xs text-[#16A879] font-semibold">{formatAddress(connectedWeb3Address)}</span>
                   </div>
                   <button
                     type="button"
                     onClick={() => setConnectedWeb3Address(null)}
-                    className="text-[10px] text-[#9298A6] hover:text-[#EA3943] transition-colors"
+                    className="text-[10px] text-[#A1AFB8] hover:text-[#EA5B65] transition-colors cursor-pointer"
                   >
                     Putuskan
                   </button>
                 </div>
               ) : (
                 <div className="flex items-center justify-between gap-2">
-                  <p className="text-[10px] text-[#9298A6] leading-tight text-left">
+                  <p className="text-[10px] text-[#71818B] leading-tight text-left">
                     Hubungkan MetaMask untuk integrasi transfer on-chain langsung ke bursa.
                   </p>
-                  <button
-                    type="button"
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    isLoading={isConnectingWeb3}
                     onClick={handleConnectMetaMask}
-                    disabled={isConnectingWeb3}
-                    className="shrink-0 px-2.5 py-1 text-[11px] font-semibold bg-[#1C1F29] hover:bg-[#252936] text-[#FF087F] hover:text-white border border-[#FF087F]/40 rounded-lg transition-all flex items-center gap-1"
                   >
-                    {isConnectingWeb3 ? (
-                      <>
-                        <RefreshCw className="w-3 h-3 animate-spin" />
-                        <span>Menghubungkan...</span>
-                      </>
-                    ) : (
-                      <span>Hubungkan MetaMask</span>
-                    )}
-                  </button>
+                    Hubungkan MetaMask
+                  </Button>
                 </div>
               )}
             </div>
           )}
 
-          {/* Simulation Action Crediting Real Ledger */}
           <Button
             variant="profit"
             size="md"
-            className="w-full font-bold"
+            className="w-full"
             isLoading={isSimulatingDeposit}
             onClick={handleSimulateDeposit}
           >
-            Depositkan {depositAmount} {selectedAsset} ke Ledger Sekarang
+            Depositkan {depositAmount} {selectedAsset} ke Ledger
           </Button>
         </div>
       </Modal>
 
-      {/* =========================================================================
-          UNIVERSAL WITHDRAW MODAL WITH ALL LISTED TOKENS
-          ========================================================================= */}
+      {/* WITHDRAW MODAL */}
       <Modal
         isOpen={activeModal === 'WITHDRAW'}
         onClose={() => setActiveModal('NONE')}
@@ -1247,26 +1129,21 @@ export const WalletView: React.FC<Props> = ({
         maxWidth="max-w-md"
       >
         <div className="space-y-4">
-          {/* Asset Selection */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="text-[11px] font-semibold text-[#969BA8]">Pilih Asset ({allAvailableTokens.length} Koin)</label>
-              <span className="text-[10px] text-[#FF087F] font-mono">Dipilih: {selectedAsset}</span>
+              <label className="text-[11px] font-medium text-[#A1AFB8]">
+                Pilih Asset ({allAvailableTokens.length} Koin)
+              </label>
+              <span className="text-[10px] text-[#C1D0D6] font-mono">Dipilih: {selectedAsset}</span>
             </div>
 
-            {/* Quick Search */}
-            <div className="relative mb-2">
-              <Search className="w-3.5 h-3.5 text-[#686D7A] absolute left-2.5 top-2.5 pointer-events-none" />
-              <input
-                type="text"
-                placeholder="Cari koin penarikan..."
-                value={modalAssetSearch}
-                onChange={e => setModalAssetSearch(e.target.value)}
-                className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#0E1016] border border-[#292C38] rounded-lg text-[#F5F5F7] placeholder-[#686D7A] outline-none focus:border-[#FF087F] font-mono"
-              />
-            </div>
+            <SearchInput
+              placeholder="Cari koin penarikan..."
+              value={modalAssetSearch}
+              onChange={setModalAssetSearch}
+              className="mb-2"
+            />
 
-            {/* Scrollable Pills */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-h-24 flex-wrap scrollbar-none">
               {filteredModalTokens.map(tok => {
                 const isCur = selectedAsset === tok.symbol;
@@ -1275,10 +1152,10 @@ export const WalletView: React.FC<Props> = ({
                     key={tok.symbol}
                     type="button"
                     onClick={() => handleSelectAssetForModal(tok.symbol)}
-                    className={`px-3 py-1 text-xs font-bold rounded-lg border transition-all ${
+                    className={`px-3 py-1 text-xs font-medium rounded-[7px] border transition-colors cursor-pointer ${
                       isCur
-                        ? 'bg-[#FF087F] text-white border-[#FF087F] shadow-sm'
-                        : 'bg-[#0E1016] border-[#292C38] text-[#9298A6] hover:text-[#F5F5F7] hover:bg-[#15171F]'
+                        ? 'bg-[#8DA5B1] text-[#090D12] border-[#8DA5B1] font-semibold'
+                        : 'bg-[#111820] border-[#2B3944] text-[#A1AFB8] hover:text-[#E4EBEF] hover:bg-[#17212B]'
                     }`}
                   >
                     {tok.symbol}
@@ -1288,31 +1165,29 @@ export const WalletView: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* Network Selection for Crypto */}
           {selectedAsset !== 'IDR' && (
             <div>
-              <label className="text-[11px] font-medium text-[#969BA8] block mb-1">Pilih Jaringan Penarikan</label>
+              <label className="text-[11px] font-medium text-[#A1AFB8] block mb-1">Pilih Jaringan Penarikan</label>
               <div className="space-y-1">
                 {getNetworksForAsset(selectedAsset).map(net => (
                   <button
                     key={net.id}
                     type="button"
                     onClick={() => setSelectedNetwork(net.id)}
-                    className={`w-full flex items-center justify-between p-2 rounded-lg border text-left text-xs ${
+                    className={`w-full flex items-center justify-between p-2 rounded-[7px] border text-left text-xs cursor-pointer ${
                       selectedNetwork === net.id
-                        ? 'bg-[#1C1F29] border-[#FF087F] text-[#F5F5F7]'
-                        : 'bg-[#0E1016] border-[#292C38] text-[#9298A6]'
+                        ? 'bg-[#1D2832] border-[#8DA5B1] text-[#E4EBEF]'
+                        : 'bg-[#111820] border-[#202B34] text-[#A1AFB8]'
                     }`}
                   >
                     <span>{net.name}</span>
-                    <span className="font-mono text-[#16C784]">Biaya: {net.fee}</span>
+                    <span className="font-mono text-[#16A879]">Biaya: {net.fee}</span>
                   </button>
                 ))}
               </div>
             </div>
           )}
 
-          {/* Destination Address */}
           <Input
             label="Alamat Tujuan / Nomor Rekening"
             placeholder={selectedAsset === 'IDR' ? 'Nomor Rekening Bank BCA/Mandiri/BRI' : `Alamat dompet ${selectedAsset} Anda`}
@@ -1320,7 +1195,6 @@ export const WalletView: React.FC<Props> = ({
             onChange={e => setWdAddress(e.target.value)}
           />
 
-          {/* Amount */}
           <Input
             label="Jumlah Penarikan"
             suffixText={selectedAsset}
@@ -1334,11 +1208,10 @@ export const WalletView: React.FC<Props> = ({
             placeholder="0.00"
           />
 
-          {/* Fee & Net Received Calculation */}
-          <div className="p-3 rounded-lg bg-[#0E1016] border border-[#292C38] space-y-1.5 text-xs font-mono">
-            <div className="flex justify-between text-[#969BA8]">
-              <span>Biaya Penarikan (Fee)</span>
-              <span className="text-[#F5F5F7] font-semibold">
+          <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-1.5 text-xs font-mono tabular-nums">
+            <div className="flex justify-between text-[#A1AFB8]">
+              <span className="font-sans">Biaya Penarikan (Fee)</span>
+              <span className="text-[#E4EBEF] font-medium">
                 {selectedAsset === 'BTC'
                   ? '0.0001 BTC'
                   : selectedAsset === 'USDT'
@@ -1356,9 +1229,9 @@ export const WalletView: React.FC<Props> = ({
                   : `0.01 ${selectedAsset}`}
               </span>
             </div>
-            <div className="flex justify-between text-[#969BA8]">
-              <span>Jumlah Diterima Bersih</span>
-              <span className="text-[#16C784] font-bold text-sm">
+            <div className="flex justify-between text-[#A1AFB8]">
+              <span className="font-sans">Jumlah Diterima Bersih</span>
+              <span className="text-[#16A879] font-semibold text-sm">
                 {wdAmount && parseFloat(wdAmount) > 0 ? `${wdAmount} ${selectedAsset}` : `0.00 ${selectedAsset}`}
               </span>
             </div>
@@ -1367,7 +1240,7 @@ export const WalletView: React.FC<Props> = ({
           <Button
             variant="danger"
             size="lg"
-            className="w-full font-bold"
+            className="w-full"
             isLoading={isSubmittingWd}
             onClick={handleConfirmWithdraw}
           >
@@ -1376,7 +1249,7 @@ export const WalletView: React.FC<Props> = ({
         </div>
       </Modal>
 
-      {/* Transfer Modal */}
+      {/* TRANSFER MODAL */}
       <Modal
         isOpen={activeModal === 'TRANSFER'}
         onClose={() => setActiveModal('NONE')}
@@ -1385,15 +1258,15 @@ export const WalletView: React.FC<Props> = ({
         maxWidth="max-w-md"
       >
         <div className="space-y-4">
-          <div className="p-3 rounded-lg bg-[#0E1016] border border-[#292C38] flex items-center justify-between text-xs font-mono">
+          <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34] flex items-center justify-between text-xs font-mono">
             <div>
-              <span className="text-[#686D7A] block text-[10px]">From</span>
-              <strong className="text-[#F5F5F7]">Spot Wallet</strong>
+              <span className="text-[#71818B] block text-[10px]">From</span>
+              <strong className="text-[#E4EBEF]">Spot Wallet</strong>
             </div>
-            <ArrowRightLeft className="w-4 h-4 text-[#FF087F]" />
+            <ArrowRightLeft className="w-4 h-4 text-[#8DA5B1]" />
             <div className="text-right">
-              <span className="text-[#686D7A] block text-[10px]">To</span>
-              <strong className="text-[#F5F5F7]">Futures Contract</strong>
+              <span className="text-[#71818B] block text-[10px]">To</span>
+              <strong className="text-[#E4EBEF]">Futures Contract</strong>
             </div>
           </div>
 
@@ -1419,7 +1292,6 @@ export const WalletView: React.FC<Props> = ({
         </div>
       </Modal>
 
-      {/* Balance & Engine Synchronization Diagnostic Tool Modal */}
       <BalanceDiagnosticModal
         isOpen={isDiagnosticOpen}
         onClose={() => setIsDiagnosticOpen(false)}

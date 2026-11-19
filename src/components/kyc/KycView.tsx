@@ -1,13 +1,18 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * src/components/kyc/KycView.tsx
- * Indonesian Identity Verification (KYC) Wizard with NIK validation and Tier limits.
+ * Indonesian Identity Verification (KYC) Wizard in Obsidian Iridium matte theme.
  */
 
 import React, { useState } from 'react';
+import { ShieldCheck } from 'lucide-react';
 import { UserProfile } from '../../types/index.js';
+import { PageHeader } from '../ui/PanelHeader.js';
+import { StatusBadge } from '../ui/StatusBadge.js';
+import { Button } from '../ui/Button.js';
+import { Input } from '../ui/Input.js';
 
 interface Props {
   user: UserProfile | null;
@@ -25,15 +30,14 @@ export const KycView: React.FC<Props> = ({ user, onKycUpdated, onOpenAuthModal }
 
   if (!user) {
     return (
-      <div className="p-8 text-center bg-[#0b0e14] border border-[#1e2633] rounded-lg">
-        <h2 className="text-base font-bold text-slate-100 mb-2">Verifikasi Identitas KYC</h2>
-        <p className="text-xs text-slate-400 mb-4">Silakan masuk ke akun Anda terlebih dahulu.</p>
-        <button
-          onClick={onOpenAuthModal}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs rounded transition-colors"
-        >
-          Masuk Akun
-        </button>
+      <div className="flex-1 p-6 bg-[#090D12] flex items-center justify-center">
+        <div className="max-w-md w-full p-8 text-center bg-[#141C24] border border-[#202B34] rounded-[10px]">
+          <h2 className="text-base font-semibold text-[#E4EBEF] mb-2">Verifikasi Identitas KYC</h2>
+          <p className="text-xs text-[#71818B] mb-5">Silakan masuk ke akun Anda terlebih dahulu.</p>
+          <Button variant="primary" size="md" onClick={onOpenAuthModal}>
+            Masuk Akun
+          </Button>
+        </div>
       </div>
     );
   }
@@ -55,7 +59,7 @@ export const KycView: React.FC<Props> = ({ user, onKycUpdated, onOpenAuthModal }
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          Authorization: `Bearer ${token}`
         },
         body: JSON.stringify({
           fullName: fullName.trim(),
@@ -80,110 +84,99 @@ export const KycView: React.FC<Props> = ({ user, onKycUpdated, onOpenAuthModal }
   };
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
-      <div className="bg-[#0b0e14] border border-[#1e2633] rounded-lg p-6">
-        <div className="flex items-center justify-between border-b border-[#1e2633] pb-4 mb-6">
-          <div>
-            <h2 className="text-base font-bold text-slate-100">Verifikasi Identitas Resmi (KYC)</h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Standar kepatuhan Bappebti & OJK untuk verifikasi data kependudukan Indonesia.
-            </p>
-          </div>
-          <div className="text-right">
-            <span className="text-[11px] text-slate-500 block">Status Akun:</span>
-            <span className={`text-xs font-bold ${user.kycStatus === 'approved' ? 'text-emerald-400' : 'text-amber-400'}`}>
+    <div className="flex-1 bg-[#090D12] p-4 lg:p-6 overflow-y-auto">
+      <div className="max-w-2xl mx-auto space-y-6">
+        <PageHeader
+          title="Verifikasi Identitas Resmi (KYC)"
+          subtitle="Standar kepatuhan Bappebti & OJK untuk verifikasi data kependudukan Indonesia."
+          badge={
+            <StatusBadge tone={user.kycStatus === 'approved' ? 'buy' : 'warning'}>
               {user.kycStatus === 'approved' ? 'Terverifikasi (Tier 1)' : 'Belum Diverifikasi'}
-            </span>
-          </div>
-        </div>
+            </StatusBadge>
+          }
+        />
 
-        {/* Tier Limits Overview */}
-        <div className="grid grid-cols-2 gap-4 mb-6 text-xs">
-          <div className="bg-[#101622] border border-[#1e2633] p-3 rounded">
-            <span className="text-slate-400 block mb-1">Batas Transaksi Harian (Tier 1)</span>
-            <span className="font-mono font-bold text-slate-200">Rp 25.000.000 / hari</span>
+        <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] p-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6 text-xs">
+            <div className="bg-[#111820] border border-[#202B34] p-3.5 rounded-[7px]">
+              <span className="text-[#71818B] block mb-1">Batas Transaksi Harian (Tier 1)</span>
+              <span className="font-mono tabular-nums font-semibold text-[#E4EBEF]">Rp 25.000.000 / hari</span>
+            </div>
+            <div className="bg-[#111820] border border-[#202B34] p-3.5 rounded-[7px]">
+              <span className="text-[#71818B] block mb-1">Batas Transaksi Lanjutan (Tier 2)</span>
+              <span className="font-mono tabular-nums font-semibold text-[#E4EBEF]">Rp 500.000.000 / hari</span>
+            </div>
           </div>
-          <div className="bg-[#101622] border border-[#1e2633] p-3 rounded">
-            <span className="text-slate-400 block mb-1">Batas Transaksi Lanjutan (Tier 2)</span>
-            <span className="font-mono font-bold text-slate-200">Rp 500.000.000 / hari</span>
-          </div>
-        </div>
 
-        {user.kycStatus === 'approved' ? (
-          <div className="bg-emerald-950/30 border border-emerald-800/60 p-4 rounded text-xs text-emerald-300 space-y-1">
-            <div className="font-bold text-sm">Akun Anda Telah Terverifikasi!</div>
-            <div>Nama Lengkap: <span className="font-semibold text-white">{user.fullName || 'Terdaftar'}</span></div>
-            <div>Tingkat Limit: Tier 1 (Maksimal Rp 25.000.000 / hari)</div>
-          </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="space-y-4 text-xs">
-            {errorMessage && (
-              <div className="p-3 bg-red-950/40 border border-red-800 text-red-300 rounded">
-                {errorMessage}
+          {user.kycStatus === 'approved' ? (
+            <div className="bg-[#12392F] border border-[#16A879]/40 p-4 rounded-[7px] text-xs text-[#E4EBEF] space-y-1.5">
+              <div className="font-semibold text-sm text-[#16A879] flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4" />
+                Akun Anda Telah Terverifikasi
               </div>
-            )}
-            {successMessage && (
-              <div className="p-3 bg-emerald-950/40 border border-emerald-800 text-emerald-300 rounded">
-                {successMessage}
+              <div>
+                Nama Lengkap: <span className="font-semibold text-[#E4EBEF]">{user.fullName || 'Terdaftar'}</span>
               </div>
-            )}
+              <div className="text-[#A1AFB8]">Tingkat Limit: Tier 1 (Maksimal Rp 25.000.000 / hari)</div>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+              {errorMessage && (
+                <div className="p-3 bg-[#401F27] border border-[#EA5B65]/40 text-[#EA5B65] rounded-[7px]">
+                  {errorMessage}
+                </div>
+              )}
+              {successMessage && (
+                <div className="p-3 bg-[#12392F] border border-[#16A879]/40 text-[#16A879] rounded-[7px]">
+                  {successMessage}
+                </div>
+              )}
 
-            <div>
-              <label className="block text-slate-300 mb-1">Nama Lengkap (Sesuai KTP):</label>
-              <input
+              <Input
+                label="Nama Lengkap (Sesuai KTP)"
                 type="text"
                 required
                 value={fullName}
                 onChange={e => setFullName(e.target.value)}
                 placeholder="Contoh: Budi Santoso"
-                className="w-full bg-[#141a23] border border-[#1e2633] rounded p-2.5 text-slate-100 focus:outline-none focus:border-blue-500"
               />
-            </div>
 
-            <div>
-              <label className="block text-slate-300 mb-1">Nomor Induk Kependudukan (NIK - 16 Digit):</label>
-              <input
+              <Input
+                label="Nomor Induk Kependudukan (NIK - 16 Digit)"
                 type="text"
                 required
                 maxLength={16}
                 value={nik}
                 onChange={e => setNik(e.target.value.replace(/\D/g, ''))}
                 placeholder="3273012908850003"
-                className="w-full bg-[#141a23] border border-[#1e2633] rounded p-2.5 font-mono text-slate-100 focus:outline-none focus:border-blue-500"
+                className="font-mono tabular-nums"
               />
-            </div>
 
-            <div>
-              <label className="block text-slate-300 mb-1">Tanggal Lahir:</label>
-              <input
+              <Input
+                label="Tanggal Lahir"
                 type="date"
                 required
                 value={birthDate}
                 onChange={e => setBirthDate(e.target.value)}
-                className="w-full bg-[#141a23] border border-[#1e2633] rounded p-2.5 text-slate-100 focus:outline-none focus:border-blue-500"
               />
-            </div>
 
-            <div className="grid grid-cols-2 gap-4 pt-2">
-              <div className="border border-dashed border-[#1e2633] p-4 rounded text-center bg-[#101622]/50">
-                <span className="text-slate-400 block mb-1">Foto KTP Fisik</span>
-                <span className="text-[11px] text-emerald-400">✓ Dokumen KTP Terlampir</span>
+              <div className="grid grid-cols-2 gap-4 pt-1">
+                <div className="border border-dashed border-[#2B3944] p-4 rounded-[7px] text-center bg-[#111820]">
+                  <span className="text-[#A1AFB8] block mb-1">Foto KTP Fisik</span>
+                  <span className="text-[11px] text-[#16A879]">Dokumen KTP Terlampir</span>
+                </div>
+                <div className="border border-dashed border-[#2B3944] p-4 rounded-[7px] text-center bg-[#111820]">
+                  <span className="text-[#A1AFB8] block mb-1">Foto Selfie + Liveness</span>
+                  <span className="text-[11px] text-[#16A879]">Liveness Check Siap</span>
+                </div>
               </div>
-              <div className="border border-dashed border-[#1e2633] p-4 rounded text-center bg-[#101622]/50">
-                <span className="text-slate-400 block mb-1">Foto Selfie + Liveness</span>
-                <span className="text-[11px] text-emerald-400">✓ Liveness Check Siap</span>
-              </div>
-            </div>
 
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded transition-colors"
-            >
-              {isSubmitting ? 'Memverifikasi Data Dukcapil...' : 'Kirim Verifikasi Identitas'}
-            </button>
-          </form>
-        )}
+              <Button type="submit" variant="primary" size="lg" className="w-full" isLoading={isSubmitting}>
+                {isSubmitting ? 'Memverifikasi Data Dukcapil...' : 'Kirim Verifikasi Identitas'}
+              </Button>
+            </form>
+          )}
+        </div>
       </div>
     </div>
   );

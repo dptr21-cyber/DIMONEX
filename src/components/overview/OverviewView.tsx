@@ -1,34 +1,33 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * src/components/overview/OverviewView.tsx
- * DOMINEX Master Homepage & Exchange Overview — Obsidian Glass Architecture
+ * DIMONEX Master Homepage & Exchange Overview — Obsidian Iridium Institutional Architecture
  */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   TrendingUp,
   TrendingDown,
   Zap,
   ShieldCheck,
-  Flame,
-  ArrowUpRight,
-  Sparkles,
+  Hexagon,
   ChevronRight,
   Globe,
-  Lock,
   Layers,
   Clock,
   Activity,
-  Bot,
-  Users,
-  Award,
-  ArrowRight
+  ArrowRight,
+  Wallet,
 } from 'lucide-react';
 import { TradingPairItem, UserBalance, UserProfile } from '../../types/index.js';
-import { formatIDR, formatCrypto } from '../../lib/formatters.js';
+import { formatQuotePrice, formatPairVolume, formatCrypto, formatIDR } from '../../lib/formatters.js';
 import { Button } from '../ui/Button.js';
+import { AssetIcon } from '../ui/AssetIcon.js';
+import { PercentageChange } from '../ui/PriceDisplay.js';
+import { StatusBadge } from '../ui/StatusBadge.js';
+import { LoadingState, EmptyState } from '../ui/StateViews.js';
 
 interface OverviewProps {
   pairs: TradingPairItem[];
@@ -45,99 +44,107 @@ export const OverviewView: React.FC<OverviewProps> = ({
   onNavigate,
   onOpenAuthModal,
 }) => {
-  // Live ticker assets with sparkline points
-  const tickers = [
-    {
-      symbol: 'BTC/USDT',
-      name: 'Bitcoin',
-      price: '$91,840.50',
-      change: '+4.28%',
-      isPositive: true,
-      sparkline: [88000, 89200, 88900, 90100, 91200, 90800, 91840],
-      icon: '₿',
-      pairId: 'BTC-IDR'
-    },
-    {
-      symbol: 'ETH/USDT',
-      name: 'Ethereum',
-      price: '$2,842.10',
-      change: '+3.15%',
-      isPositive: true,
-      sparkline: [2720, 2750, 2790, 2770, 2810, 2830, 2842],
-      icon: 'Ξ',
-      pairId: 'ETH-IDR'
-    },
-    {
-      symbol: 'SOL/USDT',
-      name: 'Solana',
-      price: '$188.45',
-      change: '+8.92%',
-      isPositive: true,
-      sparkline: [172, 175, 178, 181, 185, 184, 188.45],
-      icon: '◎',
-      pairId: 'SOL-IDR'
-    },
-    {
-      symbol: 'BNB/USDT',
-      name: 'BNB',
-      price: '$645.20',
-      change: '-0.85%',
-      isPositive: false,
-      sparkline: [652, 650, 648, 649, 647, 646, 645.2],
-      icon: 'BNB',
-      pairId: 'BNB-IDR'
-    },
-    {
-      symbol: 'XRP/USDT',
-      name: 'Ripple',
-      price: '$2.14',
-      change: '+14.60%',
-      isPositive: true,
-      sparkline: [1.82, 1.88, 1.94, 1.99, 2.05, 2.08, 2.14],
-      icon: '✕',
-      pairId: 'XRP-IDR'
+  // Select up to 5 featured live pairs directly from authoritative exchange pairs
+  const featuredTickers = useMemo(() => {
+    const preferredOrder = ['BTC-IDR', 'ETH-IDR', 'SOL-IDR', 'BTC-USDT', 'ETH-USDT'];
+    const map = new Map(pairs.map(p => [p.id, p]));
+    const selected: TradingPairItem[] = [];
+
+    for (const id of preferredOrder) {
+      const found = map.get(id);
+      if (found) selected.push(found);
     }
-  ];
+    for (const p of pairs) {
+      if (selected.length >= 5) break;
+      if (!selected.some(s => s.id === p.id)) selected.push(p);
+    }
+    return selected;
+  }, [pairs]);
 
-  // Market overview stats
-  const marketCap = '$2.84 Trillion';
-  const volume24h = '$98.40 Billion';
-  const btcDominance = '56.8%';
-  const fearGreed = { score: 68, label: 'Greed' };
+  const topGainers = useMemo(() => {
+    return [...pairs]
+      .sort((a, b) => {
+        const chgA = parseFloat(a.priceChangePercent24h || a.priceChange24h?.replace('+', '') || '0');
+        const chgB = parseFloat(b.priceChangePercent24h || b.priceChange24h?.replace('+', '') || '0');
+        return chgB - chgA;
+      })
+      .slice(0, 5);
+  }, [pairs]);
 
-  // Top Gainers & Losers from pairs
-  const topGainers = [...pairs].sort((a, b) => {
-    const chgA = parseFloat(a.priceChangePercent24h || a.priceChange24h?.replace('+', '') || '0');
-    const chgB = parseFloat(b.priceChangePercent24h || b.priceChange24h?.replace('+', '') || '0');
-    return chgB - chgA;
-  }).slice(0, 5);
+  const topLosers = useMemo(() => {
+    return [...pairs]
+      .sort((a, b) => {
+        const chgA = parseFloat(a.priceChangePercent24h || a.priceChange24h?.replace('+', '') || '0');
+        const chgB = parseFloat(b.priceChangePercent24h || b.priceChange24h?.replace('+', '') || '0');
+        return chgA - chgB;
+      })
+      .slice(0, 5);
+  }, [pairs]);
 
-  const topLosers = [...pairs].sort((a, b) => {
-    const chgA = parseFloat(a.priceChangePercent24h || a.priceChange24h?.replace('+', '') || '0');
-    const chgB = parseFloat(b.priceChangePercent24h || b.priceChange24h?.replace('+', '') || '0');
-    return chgA - chgB;
-  }).slice(0, 5);
+  const exchangeMetrics = useMemo(() => {
+    const activeCount = pairs.filter(p => p.isActive && !p.isHalted).length;
+    const idrCount = pairs.filter(p => p.quoteCurrency === 'IDR').length;
+    const usdtCount = pairs.filter(p => p.quoteCurrency === 'USDT').length;
+    const leadGainer = topGainers[0];
+    const leadChg = leadGainer
+      ? parseFloat(leadGainer.priceChangePercent24h || leadGainer.priceChange24h?.replace('+', '') || '0')
+      : 0;
 
-  // Mini sparkline SVG generator
-  const renderSparkline = (points: number[], isPositive: boolean) => {
-    const min = Math.min(...points);
-    const max = Math.max(...points);
+    return { activeCount, idrCount, usdtCount, leadGainer, leadChg };
+  }, [pairs, topGainers]);
+
+  // Real authenticated user available IDR + active asset count
+  const userSummary = useMemo(() => {
+    if (!user) return null;
+    const idrBal = balances.find(b => b.currency === 'IDR');
+    const usdtBal = balances.find(b => b.currency === 'USDT');
+    const nonZeroAssets = balances.filter(b => {
+      try {
+        return (
+          BigInt(b.balanceAvailable || b.available || '0') > 0n ||
+          BigInt(b.balanceLocked || b.locked || '0') > 0n
+        );
+      } catch {
+        return false;
+      }
+    }).length;
+    return {
+      idrAvailable: idrBal ? formatIDR(idrBal.balanceAvailable || idrBal.available || '0') : 'Rp 0',
+      usdtAvailable: usdtBal ? formatCrypto(usdtBal.balanceAvailable || usdtBal.available || '0', 6) : '0.00',
+      nonZeroAssets,
+    };
+  }, [user, balances]);
+
+  // Deterministic 24h range SVG curve from low/high/last
+  const renderRangeCurve = (pair: TradingPairItem, isPositive: boolean) => {
+    const low = parseFloat(pair.low24h || pair.lastPrice || '0');
+    const high = parseFloat(pair.high24h || pair.lastPrice || '1');
+    const last = parseFloat(pair.lastPrice || '0');
+    const mid = (low + high) / 2;
+    const pts = isPositive
+      ? [low || last * 0.98, mid * 0.99, mid, (mid + high) / 2, last]
+      : [high || last * 1.02, (mid + high) / 2, mid, mid * 0.99, last];
+
+    const min = Math.min(...pts);
+    const max = Math.max(...pts);
     const range = max - min || 1;
-    const width = 80;
-    const height = 24;
+    const width = 76;
+    const height = 22;
 
-    const coords = points.map((p, i) => {
-      const x = (i / (points.length - 1)) * width;
-      const y = height - ((p - min) / range) * (height - 4) - 2;
-      return `${x},${y}`;
-    }).join(' ');
+    const coords = pts
+      .map((p, i) => {
+        const x = (i / (pts.length - 1)) * width;
+        const y = height - ((p - min) / range) * (height - 4) - 2;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(' ');
 
     return (
       <svg width={width} height={height} className="overflow-visible">
         <polyline
           fill="none"
-          stroke={isPositive ? '#16C784' : '#EA3943'}
-          strokeWidth="2"
+          stroke={isPositive ? '#16A879' : '#EA5B65'}
+          strokeWidth="1.75"
           strokeLinecap="round"
           strokeLinejoin="round"
           points={coords}
@@ -147,31 +154,27 @@ export const OverviewView: React.FC<OverviewProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col p-4 lg:p-6 bg-[#08090D] overflow-y-auto space-y-8">
-      {/* 1. HERO SECTION — Obsidian Glass */}
-      <div className="rounded-2xl obsidian-glass border border-white/10 p-6 lg:p-10 relative overflow-hidden">
-        {/* Soft Magenta/Violet Ambient Lighting */}
-        <div className="absolute top-0 right-10 w-[500px] h-[500px] bg-[#FF087F]/12 rounded-full blur-[120px] pointer-events-none" />
-        <div className="absolute -bottom-20 right-60 w-[400px] h-[400px] bg-[#D926FF]/10 rounded-full blur-[100px] pointer-events-none" />
-
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center relative z-10">
+    <div className="flex-1 flex flex-col p-4 lg:p-6 bg-[#090D12] overflow-y-auto space-y-6">
+      {/* 1. HERO SECTION — Obsidian Iridium Matte Instrument */}
+      <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-6 lg:p-8 shadow-sm">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
           <div className="lg:col-span-7 space-y-4">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-white/5 border border-white/10 text-xs font-semibold text-[#FF087F]">
-              <Sparkles className="w-3.5 h-3.5 text-[#FF087F]" />
-              DOMINEX · Next-Generation Cryptocurrency Exchange
+            <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-[5px] bg-[#17212B] border border-[#2B3944] text-[11px] font-mono font-medium text-[#A5BAC4] uppercase tracking-wider">
+              <Hexagon className="w-3.5 h-3.5 text-[#8DA5B1]" />
+              <span>DIMONEX OBSIDIAN IRIDIUM · SPOT & QUANT EXCHANGE</span>
             </div>
 
-            <h1 className="text-3xl sm:text-4xl lg:text-5xl font-display font-extrabold text-[#F5F5F7] tracking-tight leading-tight">
-              Trade Beyond <span className="text-gradient-magenta">Limits.</span>
+            <h1 className="text-3xl sm:text-4xl lg:text-[42px] font-bold text-[#E4EBEF] tracking-tight leading-[1.15]">
+              Precision in Every Trade.
             </h1>
 
-            <p className="text-sm lg:text-base text-[#9298A6] max-w-xl leading-relaxed">
-              Discover a smarter way to trade digital assets. Access global crypto markets through one powerful trading platform with institutional-grade matching and zero compromise.
+            <p className="text-sm text-[#A1AFB8] max-w-xl leading-relaxed">
+              Institutional cryptocurrency spot exchange powered by a zero-float BigInt atomic ledger, price-time priority matching, and direct IDR & USDT settlement.
             </p>
 
-            <div className="pt-2 flex flex-wrap items-center gap-3">
+            <div className="pt-1 flex flex-wrap items-center gap-3">
               <Button
-                variant="gradient"
+                variant="primary"
                 size="lg"
                 icon={<TrendingUp className="w-4 h-4" />}
                 onClick={() => onNavigate('TRADE')}
@@ -187,333 +190,405 @@ export const OverviewView: React.FC<OverviewProps> = ({
                 Explore Markets
               </Button>
               {!user && (
-                <Button
-                  variant="outline"
-                  size="lg"
-                  onClick={onOpenAuthModal}
-                >
-                  Create Account
+                <Button variant="outline" size="lg" onClick={onOpenAuthModal}>
+                  Sign In / Register
                 </Button>
               )}
             </div>
 
-            {/* Quick Proof Badges */}
-            <div className="pt-4 flex items-center gap-6 text-xs text-[#9298A6] font-mono border-t border-white/5">
+            {/* Architecture Specs */}
+            <div className="pt-4 grid grid-cols-3 gap-4 border-t border-[#202B34] max-w-lg font-mono tabular-nums">
               <div>
-                <span className="block text-[#F5F5F7] font-bold text-sm">99.999%</span>
-                <span className="text-[10px]">Uptime SLA</span>
+                <span className="block text-[#E4EBEF] font-semibold text-sm">
+                  {pairs.length > 0 ? `${pairs.length} Pairs` : 'Live'}
+                </span>
+                <span className="text-[11px] text-[#71818B] font-sans">Active Markets</span>
               </div>
-              <div className="w-px h-6 bg-white/10" />
               <div>
-                <span className="block text-[#F5F5F7] font-bold text-sm">&lt; 1.2 ms</span>
-                <span className="text-[10px]">Order Execution</span>
+                <span className="block text-[#E4EBEF] font-semibold text-sm">FIFO BigInt</span>
+                <span className="text-[11px] text-[#71818B] font-sans">Zero-Float Matching</span>
               </div>
-              <div className="w-px h-6 bg-white/10" />
               <div>
-                <span className="block text-[#16C784] font-bold text-sm">104.2%</span>
-                <span className="text-[10px]">Proof of Reserves</span>
+                <span className="block text-[#35B887] font-semibold text-sm">Double-Entry</span>
+                <span className="text-[11px] text-[#71818B] font-sans">Immutable Ledger</span>
               </div>
             </div>
           </div>
 
-          {/* Hero Emblem Graphic — Obsidian Glass Geometric Core */}
-          <div className="lg:col-span-5 flex justify-center">
-            <div className="relative w-72 h-72 sm:w-80 sm:h-80 flex items-center justify-center">
-              {/* Outer smoked glass ring */}
-              <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-[#171923] via-[#0D1017] to-[#171923] border border-white/15 backdrop-blur-2xl shadow-2xl rotate-6 group-hover:rotate-0 transition-transform duration-500" />
-              <div className="absolute inset-2 rounded-2xl bg-[#08090D]/90 border border-[#FF087F]/30 -rotate-3" />
-
-              {/* Inner metallic emblem */}
-              <div className="relative z-10 flex flex-col items-center justify-center p-6 text-center space-y-3">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-[#FF087F] to-[#D926FF] flex items-center justify-center shadow-lg shadow-[#FF087F]/40">
-                  <Flame className="w-9 h-9 text-white fill-white" />
+          {/* Right Panel: Live Primary Pair + Session Summary */}
+          <div className="lg:col-span-5">
+            <div className="rounded-[10px] bg-[#111820] border border-[#2B3944] p-5 space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-[#202B34]">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-[7px] bg-[#1D2832] border border-[#40515D] flex items-center justify-center">
+                    <Hexagon className="w-4 h-4 text-[#C1D0D6]" />
+                  </div>
+                  <div>
+                    <span className="text-xs font-semibold text-[#E4EBEF] block">DIMONEX Core</span>
+                    <span className="text-[10px] font-mono text-[#71818B] uppercase tracking-wider">
+                      IDR & USDT Execution
+                    </span>
+                  </div>
                 </div>
-                <div>
-                  <span className="font-display font-extrabold text-xl text-white tracking-wider block">DOMINEX</span>
-                  <span className="text-[10px] font-mono text-[#FF087F] tracking-widest uppercase">Obsidian Core Engine</span>
-                </div>
-                <div className="px-3 py-1 rounded-full bg-white/5 border border-white/10 text-[10px] font-mono text-[#9298A6]">
-                  Matching Engine v4.2 Active
-                </div>
+                <StatusBadge tone="success" dot>
+                  Operational
+                </StatusBadge>
               </div>
 
-              {/* Floating badges */}
-              <div className="absolute -top-3 -left-3 px-3 py-1.5 rounded-lg obsidian-glass border border-white/10 text-xs font-mono font-bold text-[#16C784] shadow-lg">
-                BTC $91,840.50
-              </div>
-              <div className="absolute -bottom-3 -right-3 px-3 py-1.5 rounded-lg obsidian-glass border border-white/10 text-xs font-mono font-bold text-[#FF087F] shadow-lg">
-                50x Perpetual
-              </div>
+              {userSummary ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-[#71818B] flex items-center gap-1.5">
+                      <Wallet className="w-3.5 h-3.5 text-[#8DA5B1]" />
+                      Account Balances
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onNavigate('WALLET')}
+                      className="text-[11px] font-medium text-[#8DA5B1] hover:text-[#C1D0D6] cursor-pointer"
+                    >
+                      Open Wallet →
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2.5 font-mono tabular-nums">
+                    <div className="p-3 rounded-[7px] bg-[#141C24] border border-[#202B34]">
+                      <span className="text-[10px] text-[#71818B] block">IDR Available</span>
+                      <span className="text-xs sm:text-sm font-semibold text-[#E4EBEF] mt-0.5 block truncate">
+                        {userSummary.idrAvailable}
+                      </span>
+                    </div>
+                    <div className="p-3 rounded-[7px] bg-[#141C24] border border-[#202B34]">
+                      <span className="text-[10px] text-[#71818B] block">USDT Available</span>
+                      <span className="text-xs sm:text-sm font-semibold text-[#E4EBEF] mt-0.5 block truncate">
+                        {userSummary.usdtAvailable} USDT
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-[11px] font-mono text-[#71818B] flex items-center justify-between">
+                    <span>Funded Asset Balances</span>
+                    <span className="text-[#E4EBEF] font-semibold">{userSummary.nonZeroAssets} Assets</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  <span className="text-[11px] font-mono text-[#71818B] uppercase tracking-wider block">
+                    Live Reference Markets
+                  </span>
+                  {featuredTickers.slice(0, 3).map(p => {
+                    const chg = p.priceChangePercent24h || p.priceChange24h?.replace('+', '') || '0';
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => onNavigate('TRADE', p.id)}
+                        className="w-full flex items-center justify-between p-2.5 rounded-[7px] bg-[#141C24] hover:bg-[#17212B] border border-[#202B34] hover:border-[#2B3944] transition-colors cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2">
+                          <AssetIcon symbol={p.baseCurrency} size="xs" />
+                          <span className="text-xs font-mono font-semibold text-[#E4EBEF]">
+                            {p.symbol || `${p.baseCurrency}/${p.quoteCurrency}`}
+                          </span>
+                        </div>
+                        <div className="text-right font-mono tabular-nums">
+                          <span className="text-xs font-semibold text-[#E4EBEF] mr-2">
+                            {formatQuotePrice(p.lastPrice, p.quoteCurrency, p.quoteDecimals, true)}
+                          </span>
+                          <PercentageChange value={chg} size="xs" />
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>
       </div>
 
-      {/* 2. LIVE MARKET TICKER STRIP */}
+      {/* 2. LIVE MARKET TICKER STRIP (REAL EXCHANGE PAIRS) */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="font-display font-bold text-sm text-[#F5F5F7] flex items-center gap-2">
-            <Activity className="w-4 h-4 text-[#FF087F]" />
-            Live Market Ticker
-          </h3>
+          <h2 className="font-semibold text-sm text-[#E4EBEF] flex items-center gap-2">
+            <Activity className="w-4 h-4 text-[#8DA5B1]" />
+            <span>Live Exchange Markets</span>
+          </h2>
           <button
+            type="button"
             onClick={() => onNavigate('MARKETS')}
-            className="text-xs font-semibold text-[#FF087F] hover:text-[#D926FF] flex items-center gap-1"
+            className="text-xs font-medium text-[#8DA5B1] hover:text-[#C1D0D6] flex items-center gap-1 cursor-pointer"
           >
-            All Markets <ChevronRight className="w-3.5 h-3.5" />
+            <span>All Markets</span>
+            <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-          {tickers.map(ticker => (
-            <div
-              key={ticker.symbol}
-              onClick={() => onNavigate('TRADE', ticker.pairId)}
-              className="p-3.5 rounded-xl obsidian-glass border border-white/10 hover:border-[#FF087F]/40 cursor-pointer transition-all duration-150 group"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <div className="w-6 h-6 rounded-md bg-[#171923] border border-white/10 flex items-center justify-center font-bold text-xs text-[#F5F5F7]">
-                    {ticker.icon}
-                  </div>
-                  <div>
-                    <span className="font-display font-bold text-xs text-[#F5F5F7] group-hover:text-white block">
-                      {ticker.symbol}
-                    </span>
-                    <span className="text-[10px] text-[#9298A6]">{ticker.name}</span>
-                  </div>
-                </div>
-
-                <span className={`text-xs font-mono font-bold ${ticker.isPositive ? 'text-[#16C784]' : 'text-[#EA3943]'}`}>
-                  {ticker.change}
-                </span>
-              </div>
-
-              <div className="flex items-end justify-between mt-2 pt-2 border-t border-white/5 font-mono">
-                <span className="text-sm font-extrabold text-[#F5F5F7]">
-                  {ticker.price}
-                </span>
-                <div className="opacity-80 group-hover:opacity-100 transition-opacity">
-                  {renderSparkline(ticker.sparkline, ticker.isPositive)}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* 3. MARKET OVERVIEW & METRICS */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="p-4 rounded-xl obsidian-glass border border-white/10">
-          <span className="text-[11px] text-[#9298A6] block">Crypto Market Cap</span>
-          <span className="text-lg font-mono font-extrabold text-[#F5F5F7] mt-1 block">
-            {marketCap}
-          </span>
-          <span className="text-[10px] font-mono text-[#16C784] mt-0.5 block">+3.82% today</span>
-        </div>
-
-        <div className="p-4 rounded-xl obsidian-glass border border-white/10">
-          <span className="text-[11px] text-[#9298A6] block">24h Global Volume</span>
-          <span className="text-lg font-mono font-extrabold text-[#F5F5F7] mt-1 block">
-            {volume24h}
-          </span>
-          <span className="text-[10px] font-mono text-[#16C784] mt-0.5 block">High Liquidity</span>
-        </div>
-
-        <div className="p-4 rounded-xl obsidian-glass border border-white/10">
-          <span className="text-[11px] text-[#9298A6] block">BTC Dominance</span>
-          <span className="text-lg font-mono font-extrabold text-[#F5F5F7] mt-1 block">
-            {btcDominance}
-          </span>
-          <span className="text-[10px] font-mono text-[#9298A6] mt-0.5 block">Market Leader</span>
-        </div>
-
-        <div className="p-4 rounded-xl obsidian-glass border border-white/10">
-          <span className="text-[11px] text-[#9298A6] block">Fear & Greed Index</span>
-          <div className="flex items-center gap-2 mt-1">
-            <span className="text-lg font-mono font-extrabold text-[#16C784]">
-              {fearGreed.score}
-            </span>
-            <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-[#16C784]/20 text-[#16C784]">
-              {fearGreed.label}
-            </span>
+        {featuredTickers.length === 0 ? (
+          <div className="rounded-[10px] bg-[#141C24] border border-[#202B34]">
+            <LoadingState label="Synchronizing live market pairs..." />
           </div>
-          <span className="text-[10px] font-mono text-[#9298A6] mt-0.5 block">Bullish Momentum</span>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+            {featuredTickers.map(pair => {
+              const sym = pair.symbol || `${pair.baseCurrency}/${pair.quoteCurrency}`;
+              const chgStr = pair.priceChangePercent24h || pair.priceChange24h?.replace('+', '') || '0';
+              const chgNum = parseFloat(chgStr);
+              const isPositive = chgNum >= 0;
+
+              return (
+                <button
+                  key={pair.id}
+                  type="button"
+                  onClick={() => onNavigate('TRADE', pair.id)}
+                  className="text-left p-3.5 rounded-[10px] bg-[#141C24] hover:bg-[#17212B] border border-[#202B34] hover:border-[#2B3944] transition-colors cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <AssetIcon symbol={pair.baseCurrency} size="sm" />
+                      <div className="min-w-0">
+                        <span className="font-mono font-semibold text-xs text-[#E4EBEF] block truncate">
+                          {sym}
+                        </span>
+                        <span className="text-[10px] font-mono text-[#71818B]">{pair.quoteCurrency} Spot</span>
+                      </div>
+                    </div>
+                    <PercentageChange value={chgNum} size="xs" />
+                  </div>
+
+                  <div className="flex items-end justify-between mt-2.5 pt-2.5 border-t border-[#202B34] font-mono tabular-nums">
+                    <div>
+                      <span className="text-[10px] text-[#71818B] block">Last Price</span>
+                      <span className="text-sm font-semibold text-[#E4EBEF]">
+                        {formatQuotePrice(pair.lastPrice, pair.quoteCurrency, pair.quoteDecimals, true)}
+                      </span>
+                    </div>
+                    {renderRangeCurve(pair, isPositive)}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* 3. AUTHORITATIVE EXCHANGE METRICS */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+          <span className="text-[11px] text-[#71818B] block">Active Spot Markets</span>
+          <span className="text-lg font-mono tabular-nums font-semibold text-[#E4EBEF] mt-1 block">
+            {exchangeMetrics.activeCount} / {pairs.length}
+          </span>
+          <span className="text-[10px] font-mono text-[#8DA5B1] mt-0.5 block">Verified Order Books</span>
+        </div>
+
+        <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+          <span className="text-[11px] text-[#71818B] block">Quote Coverage</span>
+          <span className="text-lg font-mono tabular-nums font-semibold text-[#E4EBEF] mt-1 block">
+            {exchangeMetrics.idrCount} IDR · {exchangeMetrics.usdtCount} USDT
+          </span>
+          <span className="text-[10px] font-mono text-[#A1AFB8] mt-0.5 block">Multi-Quote Settlement</span>
+        </div>
+
+        <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+          <span className="text-[11px] text-[#71818B] block">24h Leading Gainer</span>
+          <span className="text-lg font-mono tabular-nums font-semibold text-[#E4EBEF] mt-1 block truncate">
+            {exchangeMetrics.leadGainer
+              ? exchangeMetrics.leadGainer.symbol || exchangeMetrics.leadGainer.id
+              : '—'}
+          </span>
+          {exchangeMetrics.leadGainer && (
+            <PercentageChange value={exchangeMetrics.leadChg} size="xs" />
+          )}
+        </div>
+
+        <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+          <span className="text-[11px] text-[#71818B] block">Accounting Engine</span>
+          <span className="text-lg font-mono font-semibold text-[#35B887] mt-1 block">
+            Zero-Float BigInt
+          </span>
+          <span className="text-[10px] font-mono text-[#71818B] mt-0.5 block">SHA-256 Audit Trail</span>
         </div>
       </div>
 
-      {/* 4. TOP GAINERS & HOT MARKETS */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {/* 4. TOP GAINERS & DIP OPPORTUNITIES */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Top Gainers */}
-        <div className="rounded-2xl obsidian-glass border border-white/10 p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="font-display font-bold text-sm text-[#F5F5F7] flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-[#16C784]" />
-              Top Gainers (24h)
+        <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-5 space-y-3">
+          <div className="flex items-center justify-between pb-2 border-b border-[#202B34]">
+            <h3 className="font-semibold text-sm text-[#E4EBEF] flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-[#16A879]" />
+              <span>Top Gainers (24h)</span>
             </h3>
             <button
+              type="button"
               onClick={() => onNavigate('MARKETS')}
-              className="text-xs text-[#FF087F] hover:text-[#D926FF]"
+              className="text-xs text-[#8DA5B1] hover:text-[#C1D0D6] cursor-pointer"
             >
               View All
             </button>
           </div>
 
-          <div className="divide-y divide-white/5">
-            {topGainers.map(p => {
-              const chg = parseFloat(p.priceChangePercent24h || p.priceChange24h?.replace('+', '') || '0');
-              const sym = p.symbol || `${p.baseCurrency}/${p.quoteCurrency}`;
+          {topGainers.length === 0 ? (
+            <EmptyState title="No market data" description="Market feed will populate once pairs load." />
+          ) : (
+            <div className="divide-y divide-[#202B34]">
+              {topGainers.map(p => {
+                const chg = parseFloat(p.priceChangePercent24h || p.priceChange24h?.replace('+', '') || '0');
+                const sym = p.symbol || `${p.baseCurrency}/${p.quoteCurrency}`;
 
-              return (
-                <div
-                  key={p.id}
-                  onClick={() => onNavigate('TRADE', p.id)}
-                  className="flex items-center justify-between py-2.5 cursor-pointer hover:bg-white/5 px-2 rounded-lg transition-colors font-mono text-xs"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-7 h-7 rounded-lg bg-[#171923] border border-white/10 flex items-center justify-center font-bold text-white text-xs">
-                      {p.baseCurrency.slice(0, 3)}
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => onNavigate('TRADE', p.id)}
+                    className="w-full flex items-center justify-between py-2.5 px-2 rounded-[7px] hover:bg-[#17212B] transition-colors font-mono text-xs cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <AssetIcon symbol={p.baseCurrency} size="sm" />
+                      <div className="text-left">
+                        <span className="font-semibold text-[#E4EBEF] block">{sym}</span>
+                        <span className="text-[10px] text-[#71818B]">
+                          Vol {formatPairVolume(p.quoteVolume24h || p.volume24h || '0', p.quoteCurrency, p.quoteDecimals)}
+                        </span>
+                      </div>
                     </div>
-                    <div>
-                      <span className="font-bold text-[#F5F5F7] block">{sym}</span>
-                      <span className="text-[10px] text-[#9298A6]">{p.baseCurrency}</span>
-                    </div>
-                  </div>
 
-                  <div className="text-right">
-                    <span className="font-bold text-[#F5F5F7] block">
-                      Rp {(parseFloat(p.lastPrice) / 100).toLocaleString()}
-                    </span>
-                    <span className="text-[11px] font-bold text-[#16C784]">
-                      +{chg.toFixed(2)}%
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                    <div className="text-right tabular-nums">
+                      <span className="font-semibold text-[#E4EBEF] block">
+                        {formatQuotePrice(p.lastPrice, p.quoteCurrency, p.quoteDecimals, true)}
+                      </span>
+                      <PercentageChange value={chg} size="xs" />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
-        {/* Top Losers / Opportunities */}
-        <div className="rounded-2xl obsidian-glass border border-white/10 p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="font-display font-bold text-sm text-[#F5F5F7] flex items-center gap-2">
-              <TrendingDown className="w-4 h-4 text-[#EA3943]" />
-              Dip Opportunities
+        {/* Top Losers / Watchlist */}
+        <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-5 space-y-3">
+          <div className="flex items-center justify-between pb-2 border-b border-[#202B34]">
+            <h3 className="font-semibold text-sm text-[#E4EBEF] flex items-center gap-2">
+              <TrendingDown className="w-4 h-4 text-[#EA5B65]" />
+              <span>24h Market Pullbacks</span>
             </h3>
             <button
+              type="button"
               onClick={() => onNavigate('MARKETS')}
-              className="text-xs text-[#FF087F] hover:text-[#D926FF]"
+              className="text-xs text-[#8DA5B1] hover:text-[#C1D0D6] cursor-pointer"
             >
               View All
             </button>
           </div>
 
-          <div className="divide-y divide-white/5">
-            {topLosers.map(p => {
-              const chg = parseFloat(p.priceChangePercent24h || p.priceChange24h?.replace('+', '') || '0');
-              const sym = p.symbol || `${p.baseCurrency}/${p.quoteCurrency}`;
+          {topLosers.length === 0 ? (
+            <EmptyState title="No market data" description="Market feed will populate once pairs load." />
+          ) : (
+            <div className="divide-y divide-[#202B34]">
+              {topLosers.map(p => {
+                const chg = parseFloat(p.priceChangePercent24h || p.priceChange24h?.replace('+', '') || '0');
+                const sym = p.symbol || `${p.baseCurrency}/${p.quoteCurrency}`;
 
-              return (
-                <div
-                  key={p.id}
-                  onClick={() => onNavigate('TRADE', p.id)}
-                  className="flex items-center justify-between py-2.5 cursor-pointer hover:bg-white/5 px-2 rounded-lg transition-colors font-mono text-xs"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-7 h-7 rounded-lg bg-[#171923] border border-white/10 flex items-center justify-center font-bold text-white text-xs">
-                      {p.baseCurrency.slice(0, 3)}
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => onNavigate('TRADE', p.id)}
+                    className="w-full flex items-center justify-between py-2.5 px-2 rounded-[7px] hover:bg-[#17212B] transition-colors font-mono text-xs cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <AssetIcon symbol={p.baseCurrency} size="sm" />
+                      <div className="text-left">
+                        <span className="font-semibold text-[#E4EBEF] block">{sym}</span>
+                        <span className="text-[10px] text-[#71818B]">
+                          Vol {formatPairVolume(p.quoteVolume24h || p.volume24h || '0', p.quoteCurrency, p.quoteDecimals)}
+                        </span>
+                      </div>
                     </div>
-                    <div>
-                      <span className="font-bold text-[#F5F5F7] block">{sym}</span>
-                      <span className="text-[10px] text-[#9298A6]">{p.baseCurrency}</span>
-                    </div>
-                  </div>
 
-                  <div className="text-right">
-                    <span className="font-bold text-[#F5F5F7] block">
-                      Rp {(parseFloat(p.lastPrice) / 100).toLocaleString()}
-                    </span>
-                    <span className="text-[11px] font-bold text-[#EA3943]">
-                      {chg.toFixed(2)}%
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                    <div className="text-right tabular-nums">
+                      <span className="font-semibold text-[#E4EBEF] block">
+                        {formatQuotePrice(p.lastPrice, p.quoteCurrency, p.quoteDecimals, true)}
+                      </span>
+                      <PercentageChange value={chg} size="xs" />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* 5. INSTITUTIONAL FEATURE HIGHLIGHTS */}
-      <div className="rounded-2xl obsidian-glass border border-white/10 p-6 lg:p-8 space-y-6">
+      {/* 5. INSTITUTIONAL INFRASTRUCTURE HIGHLIGHTS */}
+      <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-6 space-y-5">
         <div>
-          <h2 className="font-display font-extrabold text-xl text-[#F5F5F7]">
-            Built for Serious Institutional & Retail Traders
+          <h2 className="font-semibold text-base sm:text-lg text-[#E4EBEF]">
+            Institutional Infrastructure & Financial Integrity
           </h2>
-          <p className="text-xs text-[#9298A6] mt-1">
-            Engineered from first principles with double-entry immutability, zero-loss liquidation cascades, and ultra-high throughput.
+          <p className="text-xs text-[#A1AFB8] mt-1">
+            Engineered with double-entry ledger immutability, deterministic FIFO matching, and real-time market depth synchronization.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="p-5 rounded-xl bg-[#0D1017] border border-white/5 space-y-2">
-            <div className="w-9 h-9 rounded-lg bg-[#FF087F]/15 flex items-center justify-center text-[#FF087F]">
-              <Zap className="w-5 h-5" />
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="p-4 rounded-[10px] bg-[#111820] border border-[#202B34] space-y-2">
+            <div className="w-8 h-8 rounded-[7px] bg-[#1D2832] border border-[#2B3944] flex items-center justify-center text-[#8DA5B1]">
+              <Zap className="w-4 h-4" />
             </div>
-            <h4 className="font-display font-bold text-sm text-[#F5F5F7]">Advanced Trading Engine</h4>
-            <p className="text-xs text-[#9298A6] leading-relaxed">
-              Price-time priority matching with sub-millisecond execution and WebSocket order book feeds.
+            <h4 className="font-semibold text-sm text-[#E4EBEF]">FIFO Matching Engine</h4>
+            <p className="text-xs text-[#71818B] leading-relaxed">
+              Price-time priority order matching with WebSocket order book updates and strict tick/lot validation.
             </p>
           </div>
 
-          <div className="p-5 rounded-xl bg-[#0D1017] border border-white/5 space-y-2">
-            <div className="w-9 h-9 rounded-lg bg-[#16C784]/15 flex items-center justify-center text-[#16C784]">
-              <ShieldCheck className="w-5 h-5" />
+          <div className="p-4 rounded-[10px] bg-[#111820] border border-[#202B34] space-y-2">
+            <div className="w-8 h-8 rounded-[7px] bg-[#12392F] border border-[#16A879]/30 flex items-center justify-center text-[#16A879]">
+              <ShieldCheck className="w-4 h-4" />
             </div>
-            <h4 className="font-display font-bold text-sm text-[#F5F5F7]">Institutional-Grade Security</h4>
-            <p className="text-xs text-[#9298A6] leading-relaxed">
-              Double-entry atomic ledger, cold wallet multi-sig isolation, and certified proof-of-reserves.
+            <h4 className="font-semibold text-sm text-[#E4EBEF]">Double-Entry Atomic Ledger</h4>
+            <p className="text-xs text-[#71818B] leading-relaxed">
+              Every trade, deposit, and fee settlement balances identically to zero using fixed-precision BigInt math.
             </p>
           </div>
 
-          <div className="p-5 rounded-xl bg-[#0D1017] border border-white/5 space-y-2">
-            <div className="w-9 h-9 rounded-lg bg-[#D926FF]/15 flex items-center justify-center text-[#D926FF]">
-              <Layers className="w-5 h-5" />
+          <div className="p-4 rounded-[10px] bg-[#111820] border border-[#202B34] space-y-2">
+            <div className="w-8 h-8 rounded-[7px] bg-[#162436] border border-[#6D9FE8]/30 flex items-center justify-center text-[#6D9FE8]">
+              <Layers className="w-4 h-4" />
             </div>
-            <h4 className="font-display font-bold text-sm text-[#F5F5F7]">Deep Market Liquidity</h4>
-            <p className="text-xs text-[#9298A6] leading-relaxed">
-              Integrated market-making bots and aggregated global liquidity pools ensure tight spreads.
+            <h4 className="font-semibold text-sm text-[#E4EBEF]">Quantitative Market Making</h4>
+            <p className="text-xs text-[#71818B] leading-relaxed">
+              Built-in HFT ladder, external follow liquidity, portfolio rebalance, and ledger backtesting engines.
             </p>
           </div>
 
-          <div className="p-5 rounded-xl bg-[#0D1017] border border-white/5 space-y-2">
-            <div className="w-9 h-9 rounded-lg bg-[#5B9DFF]/15 flex items-center justify-center text-[#5B9DFF]">
-              <Globe className="w-5 h-5" />
+          <div className="p-4 rounded-[10px] bg-[#111820] border border-[#202B34] space-y-2">
+            <div className="w-8 h-8 rounded-[7px] bg-[#1D2832] border border-[#2B3944] flex items-center justify-center text-[#A5BAC4]">
+              <Globe className="w-4 h-4" />
             </div>
-            <h4 className="font-display font-bold text-sm text-[#F5F5F7]">Global Market Access</h4>
-            <p className="text-xs text-[#9298A6] leading-relaxed">
-              Trade spot pairs, perpetual contracts with up to 50x leverage, and automated grid strategies seamlessly.
+            <h4 className="font-semibold text-sm text-[#E4EBEF]">Dual IDR & USDT Pairs</h4>
+            <p className="text-xs text-[#71818B] leading-relaxed">
+              Seamlessly quote and settle across Indonesian Rupiah (2 decimals) and Tether USD (6 decimals).
             </p>
           </div>
 
-          <div className="p-5 rounded-xl bg-[#0D1017] border border-white/5 space-y-2">
-            <div className="w-9 h-9 rounded-lg bg-[#F5B942]/15 flex items-center justify-center text-[#F5B942]">
-              <Activity className="w-5 h-5" />
+          <div className="p-4 rounded-[10px] bg-[#111820] border border-[#202B34] space-y-2">
+            <div className="w-8 h-8 rounded-[7px] bg-[#2C2415] border border-[#D6A85C]/30 flex items-center justify-center text-[#D6A85C]">
+              <Activity className="w-4 h-4" />
             </div>
-            <h4 className="font-display font-bold text-sm text-[#F5F5F7]">Ultra-Fast Execution</h4>
-            <p className="text-xs text-[#9298A6] leading-relaxed">
-              Low-latency memory-mapped book depth handles over 100,000 orders per second per market pair.
+            <h4 className="font-semibold text-sm text-[#E4EBEF]">Maker-Checker Governance</h4>
+            <p className="text-xs text-[#71818B] leading-relaxed">
+              Role-isolated administrative workflows and automated AML compliance screening for token listings.
             </p>
           </div>
 
-          <div className="p-5 rounded-xl bg-[#0D1017] border border-white/5 space-y-2">
-            <div className="w-9 h-9 rounded-lg bg-[#FF087F]/15 flex items-center justify-center text-[#FF087F]">
-              <Clock className="w-5 h-5" />
+          <div className="p-4 rounded-[10px] bg-[#111820] border border-[#202B34] space-y-2">
+            <div className="w-8 h-8 rounded-[7px] bg-[#1D2832] border border-[#2B3944] flex items-center justify-center text-[#8DA5B1]">
+              <Clock className="w-4 h-4" />
             </div>
-            <h4 className="font-display font-bold text-sm text-[#F5F5F7]">24/7 Global Support</h4>
-            <p className="text-xs text-[#9298A6] leading-relaxed">
-              Dedicated institutional account managers and 24/7 multilingual technical assistance.
+            <h4 className="font-semibold text-sm text-[#E4EBEF]">24/7 Telemetry & Audit</h4>
+            <p className="text-xs text-[#71818B] leading-relaxed">
+              Real-time execution latency telemetry, cryptographic log trails, and automated snapshot recovery.
             </p>
           </div>
         </div>

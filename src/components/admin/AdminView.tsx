@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  * 
  * src/components/admin/AdminView.tsx
- * DOMINEX Master Admin & Operations Console — Complete Multi-Feature Control Center
+ * DIMONEX Master Admin & Operations Console — Complete Multi-Feature Control Center
  * 
  * Feature Modules:
  * 1. Overview & System Health (24h Volume, Orders, Trades, Solvency Liabilities, Invariants)
@@ -49,10 +49,18 @@ import {
   Percent,
   Sliders,
   Radio,
-  Trash2
+  Trash2,
+  Scale,
+  User,
+  Sparkles,
+  Hash
 } from 'lucide-react';
 import { UserProfile, TradingPairItem, ExternalWsWhitelistEntry } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
+import { Button } from '../ui/Button.js';
+import { Modal } from '../ui/Modal.js';
+import { ConfirmationDialog, DialogField } from '../ui/ConfirmationDialog.js';
+import { StatusBadge } from '../ui/StatusBadge.js';
 import { ListingManagementView } from './listing/ListingManagementView.js';
 
 interface Props {
@@ -79,6 +87,16 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
   const [activeTab, setActiveTab] = useState<AdminTab>('OVERVIEW');
   const [isLoading, setIsLoading] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [confirmConfig, setConfirmConfig] = useState<{
+    isOpen: boolean;
+    title: string;
+    description: string;
+    confirmLabel?: string;
+    tone?: 'brand' | 'danger' | 'warning' | 'buy';
+    fields?: DialogField[];
+    onSubmit: (values: Record<string, string>) => Promise<void>;
+  } | null>(null);
+  const [isConfirmBusy, setIsConfirmBusy] = useState(false);
 
   // Data states
   const [stats, setStats] = useState<any>(null);
@@ -277,21 +295,18 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
   // Auth Guard
   if (!user || !isAdmin) {
     return (
-      <div className="p-8 max-w-lg mx-auto mt-12 text-center bg-[#08090D] border border-white/10 rounded-2xl shadow-2xl space-y-4">
-        <div className="w-12 h-12 rounded-xl bg-[#FF087F]/10 border border-[#FF087F]/30 flex items-center justify-center mx-auto text-[#FF087F]">
-          <ShieldAlert className="w-6 h-6" />
+      <div className="p-8 max-w-lg mx-auto mt-12 text-center bg-[#141C24] border border-[#202B34] rounded-[10px] shadow-xl space-y-4">
+        <div className="w-11 h-11 rounded-[10px] bg-[#17212B] border border-[#2B3944] flex items-center justify-center mx-auto text-[#8DA5B1]">
+          <ShieldAlert className="w-5 h-5" />
         </div>
-        <h2 className="text-lg font-bold text-[#F5F5F7] font-display">Konsol Operator Khusus Administrator</h2>
-        <p className="text-xs text-[#9298A6] leading-relaxed">
+        <h2 className="text-lg font-semibold text-[#E4EBEF]">Konsol Operator Khusus Administrator</h2>
+        <p className="text-xs text-[#A1AFB8] leading-relaxed">
           Area ini dibatasi ketat khusus untuk Tim Administrator, Super Admin, dan Kepatuhan Bursa DIMONEX.
           Silakan masuk dengan kredensial administrator resmi.
         </p>
-        <button
-          onClick={onOpenAuthModal}
-          className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#FF087F] to-[#D926FF] text-white font-semibold text-xs shadow-lg shadow-[#FF087F]/30 hover:brightness-110 transition-all"
-        >
+        <Button variant="primary" size="md" onClick={onOpenAuthModal}>
           Masuk sebagai Admin
-        </button>
+        </Button>
       </div>
     );
   }
@@ -318,34 +333,38 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
     }
   };
 
-  const handleUpdateFees = async (pairId: string, currentMaker: number, currentTaker: number) => {
-    const makerStr = prompt(`Masukkan Maker Fee baru untuk ${pairId} (basis points, 10 bps = 0.10%):`, String(currentMaker));
-    if (makerStr === null) return;
-    const takerStr = prompt(`Masukkan Taker Fee baru untuk ${pairId} (basis points, 20 bps = 0.20%):`, String(currentTaker));
-    if (takerStr === null) return;
-
-    try {
-      const token = localStorage.getItem('dimonex_auth_token');
-      const res = await fetch('/api/admin/pairs/update-fees', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          pairId,
-          makerFeeBps: parseInt(makerStr, 10),
-          takerFeeBps: parseInt(takerStr, 10)
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast('success', data.message);
-        onRefreshPairs();
-        loadAllData();
-      } else {
-        showToast('error', data.error);
+  const handleUpdateFees = (pairId: string, currentMaker: number, currentTaker: number) => {
+    setConfirmConfig({
+      isOpen: true,
+      title: `Ubah Fee Trading: ${pairId}`,
+      description: 'Masukkan tarif Maker & Taker fee dalam satuan basis points (10 bps = 0.10%).',
+      confirmLabel: 'Simpan Fee',
+      tone: 'brand',
+      fields: [
+        { key: 'makerFeeBps', label: 'Maker Fee (bps)', type: 'number', defaultValue: String(currentMaker), required: true },
+        { key: 'takerFeeBps', label: 'Taker Fee (bps)', type: 'number', defaultValue: String(currentTaker), required: true }
+      ],
+      onSubmit: async (values) => {
+        const token = localStorage.getItem('dimonex_auth_token');
+        const res = await fetch('/api/admin/pairs/update-fees', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            pairId,
+            makerFeeBps: parseInt(values.makerFeeBps, 10),
+            takerFeeBps: parseInt(values.takerFeeBps, 10)
+          })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast('success', data.message);
+          onRefreshPairs();
+          loadAllData();
+        } else {
+          showToast('error', data.error);
+        }
       }
-    } catch (e: any) {
-      showToast('error', e.message);
-    }
+    });
   };
 
   const handleCreatePair = async (e: React.FormEvent) => {
@@ -440,139 +459,200 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
     }
   };
 
-  const handleChangeRole = async (userId: string, newRole: string) => {
-    if (!confirm(`Konfirmasi perubahan role pengguna menjadi ${newRole}?`)) return;
-    try {
-      const token = localStorage.getItem('dimonex_auth_token');
-      const res = await fetch('/api/admin/users/role', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ userId, role: newRole })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast('success', data.message);
-        loadAllData();
-      } else {
-        showToast('error', data.error);
+  const handleChangeRole = (userId: string, newRole: string) => {
+    setConfirmConfig({
+      isOpen: true,
+      title: 'Konfirmasi Perubahan Role RBAC',
+      description: `Apakah Anda yakin ingin mengubah hak akses pengguna ini menjadi ${newRole}? Perubahan dicatat dalam audit trail.`,
+      confirmLabel: 'Ubah Role',
+      tone: 'warning',
+      onSubmit: async () => {
+        const token = localStorage.getItem('dimonex_auth_token');
+        const res = await fetch('/api/admin/users/role', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ userId, role: newRole })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast('success', data.message);
+          loadAllData();
+        } else {
+          showToast('error', data.error);
+        }
       }
-    } catch (e: any) {
-      showToast('error', e.message);
-    }
+    });
   };
 
-  const handleReset2fa = async (userId: string, userEmail: string) => {
-    if (!confirm(`Apakah Anda yakin ingin menonaktifkan 2FA TOTP untuk ${userEmail}? Tindakan ini dicatat dalam audit.`)) return;
-    try {
-      const token = localStorage.getItem('dimonex_auth_token');
-      const res = await fetch('/api/admin/users/reset-2fa', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ userId, reason: 'Emergency 2FA reset by Administrator' })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast('success', data.message);
-        loadAllData();
-      } else {
-        showToast('error', data.error);
+  const handleReset2fa = (userId: string, userEmail: string) => {
+    setConfirmConfig({
+      isOpen: true,
+      title: 'Reset Darurat 2FA TOTP',
+      description: `Nonaktifkan 2FA TOTP untuk akun ${userEmail}? Tindakan ini bersifat sensitif dan dicatat permanen dalam audit log.`,
+      confirmLabel: 'Nonaktifkan 2FA',
+      tone: 'danger',
+      onSubmit: async () => {
+        const token = localStorage.getItem('dimonex_auth_token');
+        const res = await fetch('/api/admin/users/reset-2fa', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ userId, reason: 'Emergency 2FA reset by Administrator' })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast('success', data.message);
+          loadAllData();
+        } else {
+          showToast('error', data.error);
+        }
       }
-    } catch (e: any) {
-      showToast('error', e.message);
-    }
+    });
   };
 
-  const handleToggleFreeze = async (userId: string, currentStatus: string) => {
+  const handleToggleFreeze = (userId: string, currentStatus: string) => {
     const isFrozen = currentStatus === 'frozen';
-    const reason = prompt(
-      isFrozen ? 'Alasan membuka kembali pembekuan akun:' : 'Alasan pembekuan akun (AML / Fraud / Permintaan Kepatuhan):',
-      isFrozen ? 'Pemeriksaan kepatuhan selesai' : 'Investigasi kepatuhan AML'
-    );
-    if (!reason) return;
-
-    try {
-      const token = localStorage.getItem('dimonex_auth_token');
-      const res = await fetch('/api/risk/account-freeze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ userId, freeze: !isFrozen, reason })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast('success', `Akun berhasil ${!isFrozen ? 'DIBEKUKAN' : 'DIBUKA KEMBALI'}`);
-        loadAllData();
-      } else {
-        showToast('error', data.error);
+    setConfirmConfig({
+      isOpen: true,
+      title: isFrozen ? 'Buka Pembekuan Akun Pengguna' : 'Bekukan Akun Pengguna (AML / Risk)',
+      description: isFrozen
+        ? 'Masukkan alasan membuka kembali akses akun pengguna ini:'
+        : 'Masukkan alasan pembekuan akun (AML / Fraud / Permintaan Kepatuhan):',
+      confirmLabel: isFrozen ? 'Buka Pembekuan' : 'Bekukan Akun',
+      tone: isFrozen ? 'brand' : 'danger',
+      fields: [
+        {
+          key: 'reason',
+          label: 'Alasan Kepatuhan (Audit Trail)',
+          defaultValue: isFrozen ? 'Pemeriksaan kepatuhan selesai' : 'Investigasi kepatuhan AML',
+          required: true
+        }
+      ],
+      onSubmit: async (values) => {
+        const reason = (values.reason || '').trim();
+        if (!reason) return;
+        const token = localStorage.getItem('dimonex_auth_token');
+        const res = await fetch('/api/risk/account-freeze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ userId, freeze: !isFrozen, reason })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast('success', `Akun berhasil ${!isFrozen ? 'DIBEKUKAN' : 'DIBUKA KEMBALI'}`);
+          loadAllData();
+        } else {
+          showToast('error', data.error);
+        }
       }
-    } catch (e: any) {
-      showToast('error', e.message);
-    }
+    });
   };
 
   const handleReviewKyc = async (userId: string, action: 'APPROVE' | 'REJECT') => {
-    const reason = action === 'REJECT' ? prompt('Alasan penolakan KYC:', 'Foto identitas buram atau tidak sesuai') : undefined;
-    if (action === 'REJECT' && !reason) return;
-
-    try {
-      const token = localStorage.getItem('dimonex_auth_token');
-      const res = await fetch('/api/admin/kyc/review', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ userId, action, rejectionReason: reason, tierLevel: action === 'APPROVE' ? 2 : 0 })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast('success', `KYC berhasil di-${action === 'APPROVE' ? 'Setujui (Tier 2)' : 'Tolak'}`);
-        loadAllData();
-      } else {
-        showToast('error', data.error);
+    const submitKyc = async (rejectionReason?: string) => {
+      try {
+        const token = localStorage.getItem('dimonex_auth_token');
+        const res = await fetch('/api/admin/kyc/review', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ userId, action, rejectionReason, tierLevel: action === 'APPROVE' ? 2 : 0 })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast('success', `KYC berhasil di-${action === 'APPROVE' ? 'Setujui (Tier 2)' : 'Tolak'}`);
+          loadAllData();
+        } else {
+          showToast('error', data.error);
+        }
+      } catch (e: any) {
+        showToast('error', e.message);
       }
-    } catch (e: any) {
-      showToast('error', e.message);
+    };
+
+    if (action === 'APPROVE') {
+      await submitKyc(undefined);
+      return;
     }
+
+    setConfirmConfig({
+      isOpen: true,
+      title: 'Tolak Verifikasi KYC',
+      description: 'Masukkan alasan penolakan KYC agar pengguna dapat memperbaiki dokumen identitasnya:',
+      confirmLabel: 'Tolak KYC',
+      tone: 'danger',
+      fields: [
+        {
+          key: 'rejectionReason',
+          label: 'Alasan Penolakan KYC',
+          defaultValue: 'Foto identitas buram atau tidak sesuai',
+          required: true
+        }
+      ],
+      onSubmit: async (values) => {
+        const reason = (values.rejectionReason || '').trim();
+        if (!reason) return;
+        await submitKyc(reason);
+      }
+    });
   };
 
-  const handleApproveWd = async (txId: string, txType: 'FIAT' | 'CRYPTO') => {
-    if (!confirm(`Konfirmasi persetujuan penarikan ${txType} ini? Dana akan dilepas secara permanen.`)) return;
-    try {
-      const token = localStorage.getItem('dimonex_auth_token');
-      const res = await fetch('/api/admin/withdrawals/approve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ txId, txType })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast('success', data.message);
-        loadAllData();
-      } else {
-        showToast('error', data.error);
+  const handleApproveWd = (txId: string, txType: 'FIAT' | 'CRYPTO') => {
+    setConfirmConfig({
+      isOpen: true,
+      title: `Setujui Penarikan ${txType}`,
+      description: `Konfirmasi persetujuan penarikan ${txType} ini? Dana akan dilepas secara permanen dan dicatat di buku besar.`,
+      confirmLabel: 'Setujui Penarikan',
+      tone: 'warning',
+      onSubmit: async () => {
+        const token = localStorage.getItem('dimonex_auth_token');
+        const res = await fetch('/api/admin/withdrawals/approve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ txId, txType })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast('success', data.message);
+          loadAllData();
+        } else {
+          showToast('error', data.error);
+        }
       }
-    } catch (e: any) {
-      showToast('error', e.message);
-    }
+    });
   };
 
-  const handleRejectWd = async (txId: string, txType: 'FIAT' | 'CRYPTO') => {
-    const reason = prompt('Alasan penolakan penarikan (dana terkunci akan dikembalikan ke saldo user):', 'Verifikasi data bank tidak valid');
-    if (!reason) return;
-    try {
-      const token = localStorage.getItem('dimonex_auth_token');
-      const res = await fetch('/api/admin/withdrawals/reject', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ txId, txType, reason })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast('success', data.message);
-        loadAllData();
-      } else {
-        showToast('error', data.error);
+  const handleRejectWd = (txId: string, txType: 'FIAT' | 'CRYPTO') => {
+    setConfirmConfig({
+      isOpen: true,
+      title: `Tolak Penarikan ${txType} & Refund`,
+      description: 'Dana terkunci akan dikembalikan ke saldo tersedia pengguna. Masukkan alasan penolakan:',
+      confirmLabel: 'Tolak & Refund',
+      tone: 'danger',
+      fields: [
+        {
+          key: 'reason',
+          label: 'Alasan Penolakan Penarikan',
+          defaultValue: 'Verifikasi data bank tidak valid',
+          required: true
+        }
+      ],
+      onSubmit: async (values) => {
+        const reason = (values.reason || '').trim();
+        if (!reason) return;
+        const token = localStorage.getItem('dimonex_auth_token');
+        const res = await fetch('/api/admin/withdrawals/reject', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ txId, txType, reason })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast('success', data.message);
+          loadAllData();
+        } else {
+          showToast('error', data.error);
+        }
       }
-    } catch (e: any) {
-      showToast('error', e.message);
-    }
+    });
   };
 
   const handleAdjustLedger = async (e: React.FormEvent) => {
@@ -603,29 +683,31 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
     }
   };
 
-  const handleEmergencyStopBots = async (botId?: string) => {
-    const confirmMsg = botId
-      ? 'Hentikan seketika bot ini?'
-      : '⚠️ PERINGATAN DARURAT: Hentikan SEMUA bot trading yang sedang berjalan di seluruh bursa?';
-    if (!confirm(confirmMsg)) return;
-
-    try {
-      const token = localStorage.getItem('dimonex_auth_token');
-      const res = await fetch('/api/admin/bots/emergency-stop', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ botId })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast('success', data.message);
-        loadAllData();
-      } else {
-        showToast('error', data.error);
+  const handleEmergencyStopBots = (botId?: string) => {
+    setConfirmConfig({
+      isOpen: true,
+      title: botId ? 'Hentikan Bot Trading' : 'Emergency Kill-Switch Seluruh Bot Bursa',
+      description: botId
+        ? 'Hentikan seketika bot trading ini dan batalkan order aktifnya?'
+        : 'PERINGATAN DARURAT: Hentikan SEMUA bot trading yang sedang berjalan di seluruh bursa DIMONEX?',
+      confirmLabel: botId ? 'Stop Bot' : 'Hentikan Semua Bot',
+      tone: 'danger',
+      onSubmit: async () => {
+        const token = localStorage.getItem('dimonex_auth_token');
+        const res = await fetch('/api/admin/bots/emergency-stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ botId })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast('success', data.message);
+          loadAllData();
+        } else {
+          showToast('error', data.error);
+        }
       }
-    } catch (e: any) {
-      showToast('error', e.message);
-    }
+    });
   };
 
   const handleUpdateFxRate = async (e: React.FormEvent) => {
@@ -653,26 +735,32 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
     }
   };
 
-  const handleUpdateStakingPool = async (poolId: string, currentApy: number) => {
-    const apyStr = prompt(`Masukkan APY baru untuk staking pool ${poolId} (%):`, String(currentApy));
-    if (apyStr === null) return;
-    try {
-      const token = localStorage.getItem('dimonex_auth_token');
-      const res = await fetch('/api/admin/earn/pools/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ poolId, apy: parseFloat(apyStr) })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast('success', data.message);
-        loadAllData();
-      } else {
-        showToast('error', data.error);
+  const handleUpdateStakingPool = (poolId: string, currentApy: number) => {
+    setConfirmConfig({
+      isOpen: true,
+      title: `Ubah APY Staking Pool: ${poolId}`,
+      description: 'Masukkan nilai Annual Percentage Yield (APY) tahunan baru dalam persen (%).',
+      confirmLabel: 'Perbarui APY',
+      tone: 'brand',
+      fields: [
+        { key: 'apy', label: 'APY Tahunan (%)', type: 'number', defaultValue: String(currentApy), required: true }
+      ],
+      onSubmit: async (values) => {
+        const token = localStorage.getItem('dimonex_auth_token');
+        const res = await fetch('/api/admin/earn/pools/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ poolId, apy: parseFloat(values.apy) })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast('success', data.message);
+          loadAllData();
+        } else {
+          showToast('error', data.error);
+        }
       }
-    } catch (e: any) {
-      showToast('error', e.message);
-    }
+    });
   };
 
   const handleUpdateMasterTrader = async (masterId: string, currentStatus: string) => {
@@ -696,29 +784,37 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
     }
   };
 
-  const handleUpdateVipTier = async (tier: number, currentMaker: number, currentTaker: number) => {
-    const mStr = prompt(`VIP Tier ${tier}: Masukkan Maker Fee (bps):`, String(currentMaker));
-    if (mStr === null) return;
-    const tStr = prompt(`VIP Tier ${tier}: Masukkan Taker Fee (bps):`, String(currentTaker));
-    if (tStr === null) return;
-
-    try {
-      const token = localStorage.getItem('dimonex_auth_token');
-      const res = await fetch('/api/admin/vip-tiers/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ tier, makerFeeBps: parseInt(mStr, 10), takerFeeBps: parseInt(tStr, 10) })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast('success', data.message);
-        loadAllData();
-      } else {
-        showToast('error', data.error);
+  const handleUpdateVipTier = (tier: number, currentMaker: number, currentTaker: number) => {
+    setConfirmConfig({
+      isOpen: true,
+      title: `Ubah Fee Schedule VIP Tier ${tier}`,
+      description: 'Masukkan diskon Maker dan Taker fee untuk level VIP ini (satuan basis points / bps).',
+      confirmLabel: 'Simpan Fee VIP',
+      tone: 'brand',
+      fields: [
+        { key: 'makerFeeBps', label: 'Maker Fee (bps)', type: 'number', defaultValue: String(currentMaker), required: true },
+        { key: 'takerFeeBps', label: 'Taker Fee (bps)', type: 'number', defaultValue: String(currentTaker), required: true }
+      ],
+      onSubmit: async (values) => {
+        const token = localStorage.getItem('dimonex_auth_token');
+        const res = await fetch('/api/admin/vip-tiers/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            tier,
+            makerFeeBps: parseInt(values.makerFeeBps, 10),
+            takerFeeBps: parseInt(values.takerFeeBps, 10)
+          })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast('success', data.message);
+          loadAllData();
+        } else {
+          showToast('error', data.error);
+        }
       }
-    } catch (e: any) {
-      showToast('error', e.message);
-    }
+    });
   };
 
   const handleAddWsWhitelist = async (symbol: string, providers?: ('binance' | 'bybit')[], label?: string) => {
@@ -835,70 +931,72 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
       {/* Toast Alert */}
       {feedbackMsg && (
         <div
-          className={`fixed top-16 right-6 z-50 p-4 rounded-xl border text-xs font-semibold shadow-2xl flex items-center gap-3 animate-in fade-in slide-in-from-top-4 duration-200 ${
+          className={`fixed top-16 right-6 z-50 p-3.5 rounded-[10px] border text-xs font-semibold shadow-2xl flex items-center gap-3 ${
             feedbackMsg.type === 'success'
-              ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200'
-              : 'bg-red-950/90 border-red-500/50 text-red-200'
+              ? 'bg-[#17212B] border-[#16A879]/50 text-[#35B887]'
+              : 'bg-[#17212B] border-[#EA5B65]/50 text-[#EA5B65]'
           }`}
         >
-          {feedbackMsg.type === 'success' ? <CheckCircle2 className="w-5 h-5 text-emerald-400" /> : <AlertTriangle className="w-5 h-5 text-red-400" />}
-          <span>{feedbackMsg.text}</span>
-          <button onClick={() => setFeedbackMsg(null)} className="ml-2 hover:opacity-80">
+          {feedbackMsg.type === 'success' ? (
+            <CheckCircle2 className="w-4 h-4 text-[#35B887]" />
+          ) : (
+            <AlertTriangle className="w-4 h-4 text-[#EA5B65]" />
+          )}
+          <span className="text-[#E4EBEF]">{feedbackMsg.text}</span>
+          <button type="button" onClick={() => setFeedbackMsg(null)} className="ml-2 text-[#A1AFB8] hover:text-[#E4EBEF] cursor-pointer">
             <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
       {/* Top Header Card */}
-      <div className="p-5 rounded-2xl bg-[#0D1017] border border-white/10 shadow-xl flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#FF087F] to-[#D926FF] flex items-center justify-center shadow-lg shadow-[#FF087F]/30 text-white">
-              <ShieldCheck className="w-5 h-5" />
+      <div className="p-5 rounded-[10px] bg-[#141C24] border border-[#202B34] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-[10px] bg-[#17212B] border border-[#2B3944] flex items-center justify-center text-[#8DA5B1] shrink-0">
+            <ShieldCheck className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-lg font-semibold text-[#E4EBEF]">DIMONEX Exchange Operations Console</h1>
+              <StatusBadge tone="brand">Superadmin RBAC</StatusBadge>
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-lg font-bold font-display text-[#F5F5F7]">DOMINEX Exchange Operations Console</h1>
-                <span className="px-2 py-0.5 text-[10px] font-mono font-bold rounded bg-[#FF087F]/15 text-[#FF087F] border border-[#FF087F]/30 uppercase">
-                  Superadmin RBAC
-                </span>
-              </div>
-              <span className="text-xs text-[#9298A6] font-mono">
-                Operator: {user.email} · Peran: <span className="text-emerald-400 font-bold">{user.role}</span>
-              </span>
-            </div>
+            <span className="text-xs text-[#A1AFB8] font-mono">
+              Operator: {user.email} · Peran: <span className="text-[#35B887] font-semibold">{user.role}</span>
+            </span>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={loadAllData}
             disabled={isLoading}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#171923] hover:bg-white/10 border border-white/10 text-xs font-semibold text-[#F5F5F7] transition-all"
+            icon={<RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />}
             title="Segarkan Semua Data"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-[#FF087F]' : 'text-[#9298A6]'}`} />
-            <span>Segarkan</span>
-          </button>
+            Segarkan
+          </Button>
 
-          <button
+          <Button
+            variant="danger"
+            size="sm"
             onClick={() => handleEmergencyStopBots()}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600/20 hover:bg-red-600/30 border border-red-500/40 text-xs font-bold text-red-300 transition-all shadow-lg shadow-red-900/20"
+            icon={<AlertTriangle className="w-3.5 h-3.5" />}
           >
-            <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
-            <span>Kill-Switch Semua Bot</span>
-          </button>
+            Kill-Switch Semua Bot
+          </Button>
         </div>
       </div>
 
       {/* Navigation Tabs Bar */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none border-b border-white/10">
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-2 border-b border-[#202B34]">
         {[
           { id: 'OVERVIEW', label: 'Ringkasan Eksekutif', icon: LayoutDashboard },
           { id: 'PAIRS', label: `Pasar & Fee (${tradingPairs.length})`, icon: Coins },
           { id: 'LISTING', label: 'Initial Token Listing', icon: Rocket },
           { id: 'USERS', label: `Pengguna & KYC (${usersList.length})`, icon: Users, badge: pendingKycCount > 0 ? pendingKycCount : undefined },
-          { id: 'WITHDRAWALS', label: `Antrean Penarikan`, icon: ArrowUpRight, badge: pendingWithdrawalCount > 0 ? pendingWithdrawalCount : undefined },
+          { id: 'WITHDRAWALS', label: 'Antrean Penarikan', icon: ArrowUpRight, badge: pendingWithdrawalCount > 0 ? pendingWithdrawalCount : undefined },
           { id: 'LEDGER', label: 'Buku Besar & Solvensi', icon: Wallet },
           { id: 'BOTS', label: `Bot & MM (${botsList.length})`, icon: Bot },
           { id: 'FX', label: `FX Engine & WS Pairs (${wsWhitelist.filter(w => w.enabled).length})`, icon: TrendingUp },
@@ -911,17 +1009,18 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
           return (
             <button
               key={t.id}
+              type="button"
               onClick={() => setActiveTab(t.id as AdminTab)}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all duration-150 ${
+              className={`flex items-center gap-2 px-3 py-2 rounded-[7px] text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
                 isActive
-                  ? 'bg-gradient-to-r from-[#FF087F]/20 to-[#D926FF]/15 text-white border border-[#FF087F]/40 shadow-sm'
-                  : 'text-[#9298A6] hover:text-[#F5F5F7] hover:bg-[#171923] border border-transparent'
+                  ? 'bg-[#1D2832] text-[#E4EBEF] border border-[#40515D]'
+                  : 'text-[#A1AFB8] hover:text-[#E4EBEF] hover:bg-[#17212B] border border-transparent'
               }`}
             >
-              <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-[#FF087F]' : 'text-[#686D7A]'}`} />
+              <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-[#8DA5B1]' : 'text-[#71818B]'}`} />
               <span>{t.label}</span>
               {t.badge !== undefined && (
-                <span className="px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-[#FF087F] text-white font-mono">
+                <span className="px-1.5 py-0.5 rounded bg-[#D6A85C] text-[#090D12] text-[10px] font-bold font-mono">
                   {t.badge}
                 </span>
               )}
@@ -937,61 +1036,61 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         <div className="space-y-6">
           {/* Key Stat Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="p-4 rounded-2xl bg-[#0D1017] border border-white/10">
-              <span className="text-[11px] text-[#9298A6] font-medium block">Total Pengguna Terdaftar</span>
-              <span className="text-xl font-bold font-mono text-[#F5F5F7] mt-1 block">
+            <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+              <span className="text-[11px] text-[#A1AFB8] font-medium block">Total Pengguna Terdaftar</span>
+              <span className="text-xl font-bold font-mono tabular-nums text-[#E4EBEF] mt-1 block">
                 {stats?.totalUsers || usersList.length} Akun
               </span>
-              <span className="text-[10px] text-emerald-400 font-mono mt-1 block">
+              <span className="text-[10px] text-[#35B887] font-mono tabular-nums mt-1 block">
                 ● {usersList.filter(u => u.status === 'active').length} Akun Aktif
               </span>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#0D1017] border border-white/10">
-              <span className="text-[11px] text-[#9298A6] font-medium block">Estimasi Volume 24 Jam</span>
-              <span className="text-xl font-bold font-mono text-[#F5F5F7] mt-1 block">
+            <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+              <span className="text-[11px] text-[#A1AFB8] font-medium block">Estimasi Volume 24 Jam</span>
+              <span className="text-xl font-bold font-mono tabular-nums text-[#E4EBEF] mt-1 block">
                 {stats?.volume24hIdr ? formatIDR(stats.volume24hIdr, true) : 'Rp 0'}
               </span>
-              <span className="text-[10px] text-purple-400 font-mono mt-1 block">
+              <span className="text-[10px] text-[#8DA5B1] font-mono tabular-nums mt-1 block">
                 Dari {stats?.totalTrades || 0} transaksi executed
               </span>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#0D1017] border border-white/10">
-              <span className="text-[11px] text-[#9298A6] font-medium block">Matching Engine Orders</span>
-              <span className="text-xl font-bold font-mono text-[#F5F5F7] mt-1 block">
+            <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+              <span className="text-[11px] text-[#A1AFB8] font-medium block">Matching Engine Orders</span>
+              <span className="text-xl font-bold font-mono tabular-nums text-[#E4EBEF] mt-1 block">
                 {stats?.openOrdersCount || 0} Resting
               </span>
-              <span className="text-[10px] text-blue-400 font-mono mt-1 block">
+              <span className="text-[10px] text-[#6D9FE8] font-mono tabular-nums mt-1 block">
                 Total {stats?.totalOrders || 0} order lifetime
               </span>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#0D1017] border border-white/10">
-              <span className="text-[11px] text-[#9298A6] font-medium block">Automated Trading Bots</span>
-              <span className="text-xl font-bold font-mono text-[#F5F5F7] mt-1 block">
+            <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+              <span className="text-[11px] text-[#A1AFB8] font-medium block">Automated Trading Bots</span>
+              <span className="text-xl font-bold font-mono tabular-nums text-[#E4EBEF] mt-1 block">
                 {stats?.activeBots || 0} Berjalan
               </span>
-              <span className="text-[10px] text-amber-400 font-mono mt-1 block">
+              <span className="text-[10px] text-[#D6A85C] font-mono tabular-nums mt-1 block">
                 Total {stats?.totalBots || botsList.length} terkonfigurasi
               </span>
             </div>
           </div>
 
           {/* Double-Entry Ledger Invariant Verification */}
-          <div className="p-5 rounded-2xl bg-[#0D1017] border border-white/10 space-y-4">
-            <div className="flex items-center justify-between">
+          <div className="p-5 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                <h3 className="text-sm font-bold text-[#F5F5F7] font-display">
+                <CheckCircle2 className="w-5 h-5 text-[#35B887]" />
+                <h3 className="text-sm font-semibold text-[#E4EBEF]">
                   Status Verifikasi Invarian Buku Besar (Atomic Ledger Solvency)
                 </h3>
               </div>
-              <span className="px-2.5 py-1 text-[11px] font-mono font-bold rounded-lg bg-emerald-950/60 border border-emerald-500/40 text-emerald-300">
+              <StatusBadge tone="success">
                 100% KONSISTEN (Sum Debits == Sum Credits)
-              </span>
+              </StatusBadge>
             </div>
-            <p className="text-xs text-[#9298A6] leading-relaxed">
+            <p className="text-xs text-[#A1AFB8] leading-relaxed">
               Seluruh transaksi saldo pengguna dijamin oleh sistem pencatatan ganda (*double-entry bookkeeping*).
               Tidak ada pencetakan saldo sintetik atau modifikasi floating point lepas. Setiap kredit harus memiliki debit tandingan pada rekening cadangan perbendaharaan (*Treasury Reserve*).
             </p>
@@ -1000,12 +1099,12 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
             {stats?.liabilitiesByCurrency && (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
                 {Object.entries(stats.liabilitiesByCurrency).map(([curr, val]: [string, any]) => (
-                  <div key={curr} className="p-3 rounded-xl bg-[#171923] border border-white/5 font-mono text-xs">
-                    <span className="text-[#9298A6] text-[10px] block">{curr} Liabilitas Sirkulasi</span>
-                    <span className="font-bold text-[#F5F5F7] text-sm block mt-0.5">
+                  <div key={curr} className="p-3 rounded-[10px] bg-[#17212B] border border-[#202B34] font-mono tabular-nums text-xs">
+                    <span className="text-[#A1AFB8] text-[10px] block">{curr} Liabilitas Sirkulasi</span>
+                    <span className="font-bold text-[#E4EBEF] text-sm block mt-0.5">
                       {curr === 'IDR' ? formatIDR(val.total) : `${(Number(safeBigInt(val.total)) / 1e8).toLocaleString()} ${curr}`}
                     </span>
-                    <span className="text-[10px] text-[#686D7A] block mt-0.5">
+                    <span className="text-[10px] text-[#71818B] block mt-0.5">
                       Terkunci order: {curr === 'IDR' ? formatIDR(val.locked) : `${(Number(safeBigInt(val.locked)) / 1e8).toLocaleString()}`}
                     </span>
                   </div>
@@ -1016,62 +1115,62 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
 
           {/* Infrastructure Metrics */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="p-4 rounded-2xl bg-[#0D1017] border border-white/10">
-              <span className="text-xs font-bold text-[#F5F5F7] block mb-2 font-display">Sistem & Uptime Server</span>
-              <div className="space-y-1.5 text-xs font-mono">
-                <div className="flex justify-between text-[#9298A6]">
+            <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+              <span className="text-xs font-semibold text-[#E4EBEF] block mb-2.5">Sistem & Uptime Server</span>
+              <div className="space-y-1.5 text-xs font-mono tabular-nums">
+                <div className="flex justify-between text-[#A1AFB8]">
                   <span>Server Uptime:</span>
-                  <span className="text-emerald-400 font-bold">{Math.floor((stats?.uptimeSeconds || 0) / 3600)}j {Math.floor(((stats?.uptimeSeconds || 0) % 3600) / 60)}m</span>
+                  <span className="text-[#35B887] font-bold">{Math.floor((stats?.uptimeSeconds || 0) / 3600)}j {Math.floor(((stats?.uptimeSeconds || 0) % 3600) / 60)}m</span>
                 </div>
-                <div className="flex justify-between text-[#9298A6]">
+                <div className="flex justify-between text-[#A1AFB8]">
                   <span>Heap Used:</span>
-                  <span className="text-[#F5F5F7]">{Math.round((stats?.memoryUsage?.heapUsed || 0) / 1024 / 1024)} MB</span>
+                  <span className="text-[#E4EBEF]">{Math.round((stats?.memoryUsage?.heapUsed || 0) / 1024 / 1024)} MB</span>
                 </div>
-                <div className="flex justify-between text-[#9298A6]">
+                <div className="flex justify-between text-[#A1AFB8]">
                   <span>RSS Memory:</span>
-                  <span className="text-[#F5F5F7]">{Math.round((stats?.memoryUsage?.rss || 0) / 1024 / 1024)} MB</span>
+                  <span className="text-[#E4EBEF]">{Math.round((stats?.memoryUsage?.rss || 0) / 1024 / 1024)} MB</span>
                 </div>
               </div>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#0D1017] border border-white/10">
-              <span className="text-xs font-bold text-[#F5F5F7] block mb-2 font-display">Kepatuhan & Antrean</span>
-              <div className="space-y-1.5 text-xs font-mono">
-                <div className="flex justify-between text-[#9298A6]">
+            <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+              <span className="text-xs font-semibold text-[#E4EBEF] block mb-2.5">Kepatuhan & Antrean</span>
+              <div className="space-y-1.5 text-xs font-mono tabular-nums">
+                <div className="flex justify-between text-[#A1AFB8]">
                   <span>Review KYC Menunggu:</span>
-                  <span className={`font-bold ${pendingKycCount > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                  <span className={`font-bold ${pendingKycCount > 0 ? 'text-[#D6A85C]' : 'text-[#35B887]'}`}>
                     {pendingKycCount} Permintaan
                   </span>
                 </div>
-                <div className="flex justify-between text-[#9298A6]">
+                <div className="flex justify-between text-[#A1AFB8]">
                   <span>Antrean Penarikan IDR:</span>
-                  <span className={`font-bold ${pendingWd.fiat.length > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                  <span className={`font-bold ${pendingWd.fiat.length > 0 ? 'text-[#D6A85C]' : 'text-[#35B887]'}`}>
                     {pendingWd.fiat.length} Antrean
                   </span>
                 </div>
-                <div className="flex justify-between text-[#9298A6]">
+                <div className="flex justify-between text-[#A1AFB8]">
                   <span>Antrean Penarikan Kripto:</span>
-                  <span className={`font-bold ${pendingWd.crypto.length > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                  <span className={`font-bold ${pendingWd.crypto.length > 0 ? 'text-[#D6A85C]' : 'text-[#35B887]'}`}>
                     {pendingWd.crypto.length} Antrean
                   </span>
                 </div>
               </div>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#0D1017] border border-white/10">
-              <span className="text-xs font-bold text-[#F5F5F7] block mb-2 font-display">FX Engine & Feeds</span>
-              <div className="space-y-1.5 text-xs font-mono">
-                <div className="flex justify-between text-[#9298A6]">
+            <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+              <span className="text-xs font-semibold text-[#E4EBEF] block mb-2.5">FX Engine & Feeds</span>
+              <div className="space-y-1.5 text-xs font-mono tabular-nums">
+                <div className="flex justify-between text-[#A1AFB8]">
                   <span>Kurs USDT/IDR Efektif:</span>
-                  <span className="text-[#FF087F] font-bold">Rp {(fxStatus?.effectiveRateIdr || 16350).toLocaleString('id-ID')}</span>
+                  <span className="text-[#C1D0D6] font-bold">Rp {(fxStatus?.effectiveRateIdr || 16350).toLocaleString('id-ID')}</span>
                 </div>
-                <div className="flex justify-between text-[#9298A6]">
+                <div className="flex justify-between text-[#A1AFB8]">
                   <span>Sumber Kurs:</span>
-                  <span className="text-[#F5F5F7] font-semibold">{fxStatus?.source || 'COINMARKETCAP'}</span>
+                  <span className="text-[#E4EBEF] font-semibold">{fxStatus?.source || 'COINMARKETCAP'}</span>
                 </div>
-                <div className="flex justify-between text-[#9298A6]">
+                <div className="flex justify-between text-[#A1AFB8]">
                   <span>Aggregator Status:</span>
-                  <span className="text-emerald-400 font-bold">ACTIVE (0 bps drift)</span>
+                  <span className="text-[#35B887] font-bold">ACTIVE (0 bps drift)</span>
                 </div>
               </div>
             </div>
@@ -1086,103 +1185,92 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-bold text-[#F5F5F7] font-display">Daftar Pasangan Perdagangan & Fee Schedule</h3>
-              <p className="text-xs text-[#9298A6]">Kontrol operasional matching engine, emergency halt, dan penetapan Maker/Taker Fee bursa.</p>
+              <h3 className="text-sm font-semibold text-[#E4EBEF]">Daftar Pasangan Perdagangan & Fee Schedule</h3>
+              <p className="text-xs text-[#A1AFB8]">Kontrol operasional matching engine, emergency halt, dan penetapan Maker/Taker Fee bursa.</p>
             </div>
-            <button
+            <Button
+              variant="primary"
+              size="sm"
               onClick={() => setShowCreatePairModal(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-[#FF087F] to-[#D926FF] text-white text-xs font-bold shadow-lg shadow-[#FF087F]/30 hover:brightness-110 transition-all self-start"
+              icon={<Plus className="w-4 h-4" />}
+              className="self-start"
             >
-              <Plus className="w-4 h-4" />
-              <span>Tambah Trading Pair Baru</span>
-            </button>
+              Tambah Trading Pair Baru
+            </Button>
           </div>
 
-          <div className="rounded-2xl bg-[#0D1017] border border-white/10 overflow-hidden shadow-xl">
+          <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs font-mono tabular-nums">
-                <thead className="bg-[#171923] text-[11px] text-[#9298A6] border-b border-white/10 font-sans">
+                <thead className="bg-[#17212B] text-[11px] text-[#A1AFB8] border-b border-[#202B34] font-sans">
                   <tr>
-                    <th className="px-4 py-3">Trading Pair</th>
-                    <th className="px-4 py-3">Harga Terakhir</th>
-                    <th className="px-4 py-3">Limit Kuantitas Order (Min - Max)</th>
-                    <th className="px-4 py-3">Maker / Taker Fee</th>
-                    <th className="px-4 py-3">Status Matching Engine</th>
-                    <th className="px-4 py-3 text-right">Kontrol Operasional</th>
+                    <th className="px-4 py-3 font-semibold">Trading Pair</th>
+                    <th className="px-4 py-3 font-semibold">Harga Terakhir</th>
+                    <th className="px-4 py-3 font-semibold">Limit Kuantitas Order (Min - Max)</th>
+                    <th className="px-4 py-3 font-semibold">Maker / Taker Fee</th>
+                    <th className="px-4 py-3 font-semibold">Status Matching Engine</th>
+                    <th className="px-4 py-3 font-semibold text-right">Kontrol Operasional</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/5">
+                <tbody className="divide-y divide-[#202B34]">
                   {tradingPairs.map(p => (
-                    <tr key={p.id} className="hover:bg-white/[0.02] transition-colors">
+                    <tr key={p.id} className="hover:bg-[#17212B]/60 transition-colors">
                       <td className="px-4 py-3.5">
                         <div className="flex items-center gap-2">
-                          <span className="font-bold text-[#F5F5F7] text-sm">{p.id}</span>
+                          <span className="font-bold text-[#E4EBEF] text-sm">{p.id}</span>
                           {p.isNewListing && (
-                            <span className="px-1.5 py-0.2 rounded bg-[#FF087F]/20 text-[#FF087F] text-[9px] font-bold border border-[#FF087F]/30">
-                              NEW
-                            </span>
+                            <StatusBadge tone="brand">NEW</StatusBadge>
                           )}
                         </div>
-                        <span className="text-[10px] text-[#686D7A] block font-sans">
+                        <span className="text-[10px] text-[#71818B] block font-sans mt-0.5">
                           Decimals: Base {p.baseDecimals} / Quote {p.quoteDecimals}
                         </span>
                       </td>
-                      <td className="px-4 py-3.5 font-bold text-[#F5F5F7] font-mono">
+                      <td className="px-4 py-3.5 font-bold text-[#E4EBEF] font-mono">
                         {formatQuotePrice(p.lastPrice, p.quoteCurrency, p.quoteDecimals, true)}
                       </td>
                       <td className="px-4 py-3.5">
                         <div className="flex flex-col gap-0.5">
-                          <div className="flex items-center gap-1.5 font-bold text-[#F5F5F7] text-xs">
-                            <span className="text-emerald-400">Min: {formatAtomicToToken(p.minOrderSize, p.baseDecimals)} {p.baseCurrency}</span>
-                            <span className="text-[#686D7A]">—</span>
-                            <span className="text-blue-400">Max: {formatAtomicToToken(p.maxOrderSize, p.baseDecimals)} {p.baseCurrency}</span>
+                          <div className="flex items-center gap-1.5 font-semibold text-[#E4EBEF] text-xs">
+                            <span className="text-[#35B887]">Min: {formatAtomicToToken(p.minOrderSize, p.baseDecimals)} {p.baseCurrency}</span>
+                            <span className="text-[#71818B]">—</span>
+                            <span className="text-[#6D9FE8]">Max: {formatAtomicToToken(p.maxOrderSize, p.baseDecimals)} {p.baseCurrency}</span>
                           </div>
-                          <span className="text-[10px] text-[#686D7A] font-mono">
+                          <span className="text-[10px] text-[#71818B] font-mono">
                             Atomic: {p.minOrderSize || '0'} s/d {p.maxOrderSize || '0'} units
                           </span>
                         </div>
                       </td>
                       <td className="px-4 py-3.5">
-                        <div className="text-emerald-400 font-semibold text-xs">
+                        <div className="text-[#35B887] font-semibold text-xs">
                           Maker: {(p.makerFeeBps / 100).toFixed(2)}% ({p.makerFeeBps} bps)
                         </div>
-                        <div className="text-blue-400 font-semibold text-xs">
+                        <div className="text-[#6D9FE8] font-semibold text-xs">
                           Taker: {(p.takerFeeBps / 100).toFixed(2)}% ({p.takerFeeBps} bps)
                         </div>
                       </td>
                       <td className="px-4 py-3.5 font-sans">
-                        <span
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold ${
-                            p.isHalted
-                              ? 'bg-red-950/60 border border-red-500/40 text-red-300'
-                              : 'bg-emerald-950/60 border border-emerald-500/40 text-emerald-300'
-                          }`}
-                        >
-                          <span className={`w-2 h-2 rounded-full ${p.isHalted ? 'bg-red-400 animate-pulse' : 'bg-emerald-400'}`} />
+                        <StatusBadge tone={p.isHalted ? 'danger' : 'success'} dot>
                           {p.isHalted ? 'DIHENTIKAN (HALTED)' : 'BERJALAN NORMAL'}
-                        </span>
+                        </StatusBadge>
                       </td>
                       <td className="px-4 py-3.5 text-right space-x-2 font-sans whitespace-nowrap">
-                        <button
-                          type="button"
+                        <Button
+                          variant="secondary"
+                          size="sm"
                           onClick={() => handleOpenEditPairModal(p)}
-                          className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white border border-blue-400/30 text-xs font-bold transition-all shadow-sm inline-flex items-center gap-1.5"
+                          icon={<Sliders className="w-3.5 h-3.5" />}
                           title="Kelola limit kuantitas order (Token / Integer) & fee"
                         >
-                          <Sliders className="w-3.5 h-3.5" />
-                          <span>Kelola Limit & Fee</span>
-                        </button>
-                        <button
-                          type="button"
+                          Kelola Limit & Fee
+                        </Button>
+                        <Button
+                          variant={p.isHalted ? 'profit' : 'danger'}
+                          size="sm"
                           onClick={() => handleToggleHalt(p.id, p.isHalted)}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
-                            p.isHalted
-                              ? 'bg-emerald-950/40 border-emerald-600 text-emerald-300 hover:bg-emerald-900/50'
-                              : 'bg-red-950/40 border-red-700 text-red-300 hover:bg-red-900/50'
-                          }`}
                         >
                           {p.isHalted ? 'Buka Halt' : 'Circuit Breaker (Halt)'}
-                        </button>
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -1209,163 +1297,187 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-bold text-[#F5F5F7] font-display">Direktori Pengguna & Manajemen Hak Akses (RBAC)</h3>
-              <p className="text-xs text-[#9298A6]">Kelola status akun, review verifikasi KTP/KYC, reset 2FA darurat, dan pembekuan akun.</p>
+              <h3 className="text-sm font-semibold text-[#E4EBEF]">Direktori Pengguna & Manajemen Hak Akses (RBAC)</h3>
+              <p className="text-xs text-[#A1AFB8]">Kelola status akun, review verifikasi KTP/KYC, reset 2FA darurat, dan pembekuan akun.</p>
             </div>
             <div className="relative w-full sm:w-64">
-              <Search className="w-3.5 h-3.5 text-[#686D7A] absolute left-3 top-3 pointer-events-none" />
+              <Search className="w-3.5 h-3.5 text-[#71818B] absolute left-3 top-2.5 pointer-events-none" />
               <input
                 type="text"
                 placeholder="Cari email / nama / role..."
                 value={userSearch}
                 onChange={e => setUserSearch(e.target.value)}
-                className="w-full bg-[#0D1017] border border-white/10 rounded-xl pl-9 pr-3 py-2 text-xs text-[#F5F5F7] placeholder-[#686D7A] outline-none focus:border-[#FF087F] font-mono"
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] pl-9 pr-3 py-2 text-xs text-[#E4EBEF] placeholder-[#71818B] outline-none focus:border-[#8DA5B1] font-mono"
               />
             </div>
           </div>
 
           {/* Quick Test Accounts & Credentials Card */}
-          <div className="p-4 rounded-2xl bg-[#141a23] border border-blue-500/30 space-y-3">
+          <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#2B3944] space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="text-base">📋</span>
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-[7px] bg-[#17212B] border border-[#2B3944] flex items-center justify-center text-[#8DA5B1] shrink-0">
+                  <FileText className="w-4 h-4" />
+                </div>
                 <div>
-                  <h4 className="text-xs font-bold text-white flex items-center gap-2 font-display">
+                  <h4 className="text-xs font-semibold text-[#E4EBEF] flex items-center gap-2">
                     Cheatsheet Kredensial Akun Pengujian (Test Accounts & Passwords)
-                    <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-950 text-blue-300 border border-blue-800 font-mono">
-                      8 Akun Siap Uji
-                    </span>
+                    <StatusBadge tone="info">8 Akun Siap Uji</StatusBadge>
                   </h4>
-                  <p className="text-[11px] text-slate-400">
+                  <p className="text-[11px] text-[#A1AFB8]">
                     Gunakan kredensial resmi di bawah untuk menguji seluruh fitur platform (Admin, MM, Compliance, & Trading Spot).
                   </p>
                 </div>
               </div>
-              <span className="text-[10px] text-slate-400 font-mono bg-black/40 px-2 py-1 rounded border border-white/5">
+              <span className="text-[10px] text-[#A1AFB8] font-mono bg-[#111820] px-2.5 py-1 rounded-[7px] border border-[#202B34]">
                 Dokumentasi: README_AKUN_TEST.md
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-[11px]">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-[11px]">
               {/* 1. Admin */}
-              <div className="p-2.5 rounded-xl bg-[#0b0e14] border border-white/5 space-y-1">
+              <div className="p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-1">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-amber-400">🛡️ Super Admin</span>
-                  <span className="text-[9px] bg-red-950 text-red-300 px-1 rounded font-mono">ADMIN</span>
+                  <span className="font-semibold text-[#D6A85C] inline-flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    Super Admin
+                  </span>
+                  <StatusBadge tone="danger">ADMIN</StatusBadge>
                 </div>
-                <div className="text-[10px] text-slate-300 font-mono">admin@dimonex.id</div>
-                <div className="text-[10px] text-amber-300 font-mono">AdminDimonex2026!</div>
-                <div className="text-[9px] text-slate-500">Akses: Admin & MM Console</div>
+                <div className="text-[10px] text-[#E4EBEF] font-mono">admin@dimonex.id</div>
+                <div className="text-[10px] text-[#D6A85C] font-mono">AdminDimonex2026!</div>
+                <div className="text-[9px] text-[#71818B]">Akses: Admin & MM Console</div>
               </div>
 
               {/* 2. Compliance */}
-              <div className="p-2.5 rounded-xl bg-[#0b0e14] border border-white/5 space-y-1">
+              <div className="p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-1">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-purple-400">⚖️ Compliance Officer</span>
-                  <span className="text-[9px] bg-purple-950 text-purple-300 px-1 rounded font-mono">ADMIN</span>
+                  <span className="font-semibold text-[#C1D0D6] inline-flex items-center gap-1.5">
+                    <Scale className="w-3.5 h-3.5 text-[#8DA5B1]" />
+                    Compliance Officer
+                  </span>
+                  <StatusBadge tone="brand">ADMIN</StatusBadge>
                 </div>
-                <div className="text-[10px] text-slate-300 font-mono">compliance@dimonex.id</div>
-                <div className="text-[10px] text-purple-300 font-mono">ComplianceDimonex2026!</div>
-                <div className="text-[9px] text-slate-500">Akses: KYC & AML Checker</div>
+                <div className="text-[10px] text-[#E4EBEF] font-mono">compliance@dimonex.id</div>
+                <div className="text-[10px] text-[#A5BAC4] font-mono">ComplianceDimonex2026!</div>
+                <div className="text-[9px] text-[#71818B]">Akses: KYC & AML Checker</div>
               </div>
 
               {/* 3. MM */}
-              <div className="p-2.5 rounded-xl bg-[#0b0e14] border border-white/5 space-y-1">
+              <div className="p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-1">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-cyan-400">⚡ Market Maker</span>
-                  <span className="text-[9px] bg-cyan-950 text-cyan-300 px-1 rounded font-mono">MM</span>
+                  <span className="font-semibold text-[#6D9FE8] inline-flex items-center gap-1.5">
+                    <Bot className="w-3.5 h-3.5" />
+                    Market Maker
+                  </span>
+                  <StatusBadge tone="info">MM</StatusBadge>
                 </div>
-                <div className="text-[10px] text-slate-300 font-mono">mm@dimonex.id</div>
-                <div className="text-[10px] text-cyan-300 font-mono">MarketMaker2026!</div>
-                <div className="text-[9px] text-slate-500">Akses: Liquidity Bot Grid</div>
+                <div className="text-[10px] text-[#E4EBEF] font-mono">mm@dimonex.id</div>
+                <div className="text-[10px] text-[#6D9FE8] font-mono">MarketMaker2026!</div>
+                <div className="text-[9px] text-[#71818B]">Akses: Liquidity Bot Grid</div>
               </div>
 
               {/* 4. Trader Budi */}
-              <div className="p-2.5 rounded-xl bg-[#0b0e14] border border-white/5 space-y-1">
+              <div className="p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-1">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-blue-400">👤 Budi Santoso</span>
-                  <span className="text-[9px] bg-blue-950 text-blue-300 px-1 rounded font-mono">TRADER 1</span>
+                  <span className="font-semibold text-[#E4EBEF] inline-flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-[#8DA5B1]" />
+                    Budi Santoso
+                  </span>
+                  <StatusBadge tone="info">TRADER 1</StatusBadge>
                 </div>
-                <div className="text-[10px] text-slate-300 font-mono">budi@dimonex.id</div>
-                <div className="text-[10px] text-slate-300 font-mono">TraderDimonex123!</div>
-                <div className="text-[9px] text-slate-500">Saldo: Rp 10M, 10 BTC</div>
+                <div className="text-[10px] text-[#E4EBEF] font-mono">budi@dimonex.id</div>
+                <div className="text-[10px] text-[#A1AFB8] font-mono">TraderDimonex123!</div>
+                <div className="text-[9px] text-[#71818B]">Saldo: Rp 10M, 10 BTC</div>
               </div>
 
               {/* 5. Trader Siti */}
-              <div className="p-2.5 rounded-xl bg-[#0b0e14] border border-white/5 space-y-1">
+              <div className="p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-1">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-emerald-400">👤 Siti Rahmawati</span>
-                  <span className="text-[9px] bg-emerald-950 text-emerald-300 px-1 rounded font-mono">TRADER 2</span>
+                  <span className="font-semibold text-[#35B887] inline-flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5" />
+                    Siti Rahmawati
+                  </span>
+                  <StatusBadge tone="success">TRADER 2</StatusBadge>
                 </div>
-                <div className="text-[10px] text-slate-300 font-mono">siti@dimonex.id</div>
-                <div className="text-[10px] text-slate-300 font-mono">TraderDimonex123!</div>
-                <div className="text-[9px] text-slate-500">Saldo: Rp 5M, 20 BTC</div>
+                <div className="text-[10px] text-[#E4EBEF] font-mono">siti@dimonex.id</div>
+                <div className="text-[10px] text-[#A1AFB8] font-mono">TraderDimonex123!</div>
+                <div className="text-[9px] text-[#71818B]">Saldo: Rp 5M, 20 BTC</div>
               </div>
 
               {/* 6. User 1 */}
-              <div className="p-2.5 rounded-xl bg-[#0b0e14] border border-white/5 space-y-1">
+              <div className="p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-1">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-slate-200">👤 User Satu Trading</span>
-                  <span className="text-[9px] bg-slate-800 text-slate-300 px-1 rounded font-mono">USER 1</span>
+                  <span className="font-semibold text-[#E4EBEF] inline-flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-[#71818B]" />
+                    User Satu Trading
+                  </span>
+                  <StatusBadge tone="neutral">USER 1</StatusBadge>
                 </div>
-                <div className="text-[10px] text-slate-300 font-mono">user1@dimonex.id</div>
-                <div className="text-[10px] text-slate-300 font-mono">User1Dimonex2026!</div>
-                <div className="text-[9px] text-slate-500">Saldo: Rp 10M, 10 BTC</div>
+                <div className="text-[10px] text-[#E4EBEF] font-mono">user1@dimonex.id</div>
+                <div className="text-[10px] text-[#A1AFB8] font-mono">User1Dimonex2026!</div>
+                <div className="text-[9px] text-[#71818B]">Saldo: Rp 10M, 10 BTC</div>
               </div>
 
               {/* 7. User 2 */}
-              <div className="p-2.5 rounded-xl bg-[#0b0e14] border border-white/5 space-y-1">
+              <div className="p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-1">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-slate-200">👤 User Dua Trading</span>
-                  <span className="text-[9px] bg-slate-800 text-slate-300 px-1 rounded font-mono">USER 2</span>
+                  <span className="font-semibold text-[#E4EBEF] inline-flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-[#71818B]" />
+                    User Dua Trading
+                  </span>
+                  <StatusBadge tone="neutral">USER 2</StatusBadge>
                 </div>
-                <div className="text-[10px] text-slate-300 font-mono">user2@dimonex.id</div>
-                <div className="text-[10px] text-slate-300 font-mono">User2Dimonex2026!</div>
-                <div className="text-[9px] text-slate-500">Saldo: Rp 5M, 20 BTC</div>
+                <div className="text-[10px] text-[#E4EBEF] font-mono">user2@dimonex.id</div>
+                <div className="text-[10px] text-[#A1AFB8] font-mono">User2Dimonex2026!</div>
+                <div className="text-[9px] text-[#71818B]">Saldo: Rp 5M, 20 BTC</div>
               </div>
 
               {/* 8. Fresh Test User */}
-              <div className="p-2.5 rounded-xl bg-[#0b0e14] border border-white/5 space-y-1">
+              <div className="p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-1">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-indigo-400">✨ Akun Pengujian Baru</span>
-                  <span className="text-[9px] bg-indigo-950 text-indigo-300 px-1 rounded font-mono">FRESH</span>
+                  <span className="font-semibold text-[#8DA5B1] inline-flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    Akun Pengujian Baru
+                  </span>
+                  <StatusBadge tone="brand">FRESH</StatusBadge>
                 </div>
-                <div className="text-[10px] text-slate-300 font-mono">test@dimonex.id</div>
-                <div className="text-[10px] text-indigo-300 font-mono">TestDimonex2026!</div>
-                <div className="text-[9px] text-slate-500">Saldo: Rp 100jt, 1 BTC</div>
+                <div className="text-[10px] text-[#E4EBEF] font-mono">test@dimonex.id</div>
+                <div className="text-[10px] text-[#A5BAC4] font-mono">TestDimonex2026!</div>
+                <div className="text-[9px] text-[#71818B]">Saldo: Rp 100jt, 1 BTC</div>
               </div>
             </div>
           </div>
 
-          <div className="rounded-2xl bg-[#0D1017] border border-white/10 overflow-hidden shadow-xl">
+          <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs font-sans">
-                <thead className="bg-[#171923] text-[11px] text-[#9298A6] border-b border-white/10">
+                <thead className="bg-[#17212B] text-[11px] text-[#A1AFB8] border-b border-[#202B34]">
                   <tr>
-                    <th className="px-4 py-3">Pengguna</th>
-                    <th className="px-4 py-3">Nama Identitas (KTP)</th>
-                    <th className="px-4 py-3">Role RBAC</th>
-                    <th className="px-4 py-3">Status Akun</th>
-                    <th className="px-4 py-3">Verifikasi KYC</th>
-                    <th className="px-4 py-3">2FA TOTP</th>
-                    <th className="px-4 py-3 text-right">Aksi Administrator</th>
+                    <th className="px-4 py-3 font-semibold">Pengguna</th>
+                    <th className="px-4 py-3 font-semibold">Nama Identitas (KTP)</th>
+                    <th className="px-4 py-3 font-semibold">Role RBAC</th>
+                    <th className="px-4 py-3 font-semibold">Status Akun</th>
+                    <th className="px-4 py-3 font-semibold">Verifikasi KYC</th>
+                    <th className="px-4 py-3 font-semibold">2FA TOTP</th>
+                    <th className="px-4 py-3 font-semibold text-right">Aksi Administrator</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/5 font-mono">
+                <tbody className="divide-y divide-[#202B34] font-mono">
                   {filteredUsers.map(u => (
-                    <tr key={u.id} className="hover:bg-white/[0.02] transition-colors">
+                    <tr key={u.id} className="hover:bg-[#17212B]/60 transition-colors">
                       <td className="px-4 py-3.5">
-                        <span className="font-bold text-[#F5F5F7] block">{u.email}</span>
-                        <span className="text-[10px] text-[#686D7A] block font-mono">ID: {u.id}</span>
+                        <span className="font-semibold text-[#E4EBEF] block">{u.email}</span>
+                        <span className="text-[10px] text-[#71818B] block font-mono">ID: {u.id}</span>
                       </td>
-                      <td className="px-4 py-3.5 font-sans font-medium text-slate-200">
+                      <td className="px-4 py-3.5 font-sans font-medium text-[#E4EBEF]">
                         {u.fullName || '-'}
                       </td>
                       <td className="px-4 py-3.5">
                         <select
                           value={u.role}
                           onChange={e => handleChangeRole(u.id, e.target.value)}
-                          className="bg-[#171923] border border-white/10 rounded-lg px-2 py-1 text-xs text-[#F5F5F7] font-bold focus:border-[#FF087F] outline-none"
+                          className="bg-[#111820] border border-[#2B3944] rounded-[7px] px-2 py-1 text-xs text-[#E4EBEF] font-semibold focus:border-[#8DA5B1] outline-none"
                         >
                           <option value="USER">USER</option>
                           <option value="MM">MM (Market Maker)</option>
@@ -1375,75 +1487,65 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                         </select>
                       </td>
                       <td className="px-4 py-3.5 font-sans">
-                        <span
-                          className={`inline-flex px-2 py-0.5 rounded text-[11px] font-bold ${
-                            u.status === 'frozen'
-                              ? 'bg-red-950/60 border border-red-500/40 text-red-300'
-                              : 'bg-emerald-950/60 border border-emerald-500/40 text-emerald-300'
-                          }`}
-                        >
+                        <StatusBadge tone={u.status === 'frozen' ? 'danger' : 'success'}>
                           {u.status === 'frozen' ? 'DIBEKUKAN' : 'AKTIF'}
-                        </span>
+                        </StatusBadge>
                       </td>
                       <td className="px-4 py-3.5 font-sans">
-                        <span
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold ${
+                        <StatusBadge
+                          tone={
                             u.kycStatus === 'approved'
-                              ? 'bg-emerald-950/60 text-emerald-300'
+                              ? 'success'
                               : u.kycStatus === 'pending'
-                              ? 'bg-amber-950/60 text-amber-300 border border-amber-500/40'
-                              : 'bg-slate-800 text-slate-400'
-                          }`}
+                              ? 'warning'
+                              : 'neutral'
+                          }
                         >
-                          {u.kycStatus === 'approved' && <Check className="w-3 h-3 text-emerald-400" />}
+                          {u.kycStatus === 'approved' && <Check className="w-3 h-3" />}
                           {u.kycStatus} (Tier {u.kycTier})
-                        </span>
+                        </StatusBadge>
                       </td>
                       <td className="px-4 py-3.5 font-sans">
-                        <span className={u.isTotpEnabled ? 'text-emerald-400 font-bold' : 'text-[#686D7A]'}>
+                        <span className={u.isTotpEnabled ? 'text-[#35B887] font-semibold' : 'text-[#71818B]'}>
                           {u.isTotpEnabled ? 'AKTIF (RFC 6238)' : 'Non-aktif'}
                         </span>
                       </td>
                       <td className="px-4 py-3.5 text-right space-x-1.5 font-sans">
                         {u.kycStatus === 'pending' && (
-                          <div className="inline-flex gap-1">
-                            <button
-                              type="button"
+                          <div className="inline-flex gap-1.5">
+                            <Button
+                              variant="profit"
+                              size="sm"
                               onClick={() => handleReviewKyc(u.id, 'APPROVE')}
-                              className="px-2.5 py-1 text-[11px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg shadow-sm"
                             >
                               Approve Tier 2
-                            </button>
-                            <button
-                              type="button"
+                            </Button>
+                            <Button
+                              variant="danger"
+                              size="sm"
                               onClick={() => handleReviewKyc(u.id, 'REJECT')}
-                              className="px-2.5 py-1 text-[11px] font-bold bg-red-600/30 hover:bg-red-600/50 text-red-300 border border-red-500/40 rounded-lg"
                             >
                               Tolak
-                            </button>
+                            </Button>
                           </div>
                         )}
                         {u.isTotpEnabled && (
-                          <button
-                            type="button"
+                          <Button
+                            variant="secondary"
+                            size="sm"
                             onClick={() => handleReset2fa(u.id, u.email)}
-                            className="px-2.5 py-1 text-[11px] font-semibold bg-[#171923] hover:bg-amber-950/30 text-amber-300 border border-white/10 rounded-lg"
                             title="Reset 2FA TOTP jika pengguna kehilangan perangkat"
                           >
                             Reset 2FA
-                          </button>
+                          </Button>
                         )}
-                        <button
-                          type="button"
+                        <Button
+                          variant={u.status === 'frozen' ? 'secondary' : 'danger'}
+                          size="sm"
                           onClick={() => handleToggleFreeze(u.id, u.status)}
-                          className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-colors ${
-                            u.status === 'frozen'
-                              ? 'bg-blue-950/40 border-blue-600 text-blue-300 hover:bg-blue-900/50'
-                              : 'bg-red-950/40 border-red-700 text-red-300 hover:bg-red-900/50'
-                          }`}
                         >
                           {u.status === 'frozen' ? 'Buka Beku' : 'Bekukan Akun'}
-                        </button>
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -1460,85 +1562,81 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
       {activeTab === 'WITHDRAWALS' && (
         <div className="space-y-4">
           <div>
-            <h3 className="text-sm font-bold text-[#F5F5F7] font-display">Antrean Persetujuan Penarikan Dana (Withdrawals Queue)</h3>
-            <p className="text-xs text-[#9298A6]">Tinjau dan setujui penarikan fiat (Transfer Bank) dan kripto on-chain. Penolakan akan secara otomatis mengembalikan dana terkunci ke akun pengguna.</p>
+            <h3 className="text-sm font-semibold text-[#E4EBEF]">Antrean Persetujuan Penarikan Dana (Withdrawals Queue)</h3>
+            <p className="text-xs text-[#A1AFB8]">Tinjau dan setujui penarikan fiat (Transfer Bank) dan kripto on-chain. Penolakan akan secara otomatis mengembalikan dana terkunci ke akun pengguna.</p>
           </div>
 
           {pendingWithdrawalCount === 0 ? (
-            <div className="p-12 text-center rounded-2xl bg-[#0D1017] border border-white/10 space-y-2">
-              <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto" />
-              <h4 className="text-sm font-bold text-[#F5F5F7]">Semua Penarikan Telah Diproses</h4>
-              <p className="text-xs text-[#9298A6]">Tidak ada antrean penarikan yang menunggu persetujuan saat ini.</p>
+            <div className="p-12 text-center rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-2">
+              <CheckCircle2 className="w-8 h-8 text-[#35B887] mx-auto" />
+              <h4 className="text-sm font-semibold text-[#E4EBEF]">Semua Penarikan Telah Diproses</h4>
+              <p className="text-xs text-[#A1AFB8]">Tidak ada antrean penarikan yang menunggu persetujuan saat ini.</p>
             </div>
           ) : (
             <div className="space-y-3">
               {/* Fiat Pending */}
               {pendingWd.fiat.map(wd => (
-                <div key={wd.id} className="p-4 rounded-2xl bg-[#0D1017] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div key={wd.id} className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
-                      <span className="px-2 py-0.5 rounded bg-blue-950/60 text-blue-300 font-mono text-[10px] font-bold border border-blue-500/30">
-                        FIAT IDR
-                      </span>
-                      <span className="font-bold text-[#F5F5F7] text-sm font-mono">
+                      <StatusBadge tone="info">FIAT IDR</StatusBadge>
+                      <span className="font-bold text-[#E4EBEF] text-sm font-mono tabular-nums">
                         {formatIDR(wd.amount, true)}
                       </span>
-                      <span className="text-xs text-[#9298A6]">ke {wd.bankName}</span>
+                      <span className="text-xs text-[#A1AFB8]">ke {wd.bankName}</span>
                     </div>
-                    <div className="text-xs text-[#9298A6] font-mono">
-                      Rekening: <strong className="text-white">{wd.accountNumber}</strong> ({wd.accountHolderName}) · Pengguna ID: {wd.userId}
+                    <div className="text-xs text-[#A1AFB8] font-mono">
+                      Rekening: <strong className="text-[#E4EBEF]">{wd.accountNumber}</strong> ({wd.accountHolderName}) · Pengguna ID: {wd.userId}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button
-                      type="button"
+                    <Button
+                      variant="danger"
+                      size="sm"
                       onClick={() => handleRejectWd(wd.id, 'FIAT')}
-                      className="px-3 py-1.5 rounded-xl bg-red-950/40 border border-red-700 text-red-300 text-xs font-bold hover:bg-red-900/50"
                     >
                       Tolak & Refund
-                    </button>
-                    <button
-                      type="button"
+                    </Button>
+                    <Button
+                      variant="profit"
+                      size="sm"
                       onClick={() => handleApproveWd(wd.id, 'FIAT')}
-                      className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-900/30"
                     >
                       Setujui & Selesaikan
-                    </button>
+                    </Button>
                   </div>
                 </div>
               ))}
 
               {/* Crypto Pending */}
               {pendingWd.crypto.map(wd => (
-                <div key={wd.id} className="p-4 rounded-2xl bg-[#0D1017] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div key={wd.id} className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
-                      <span className="px-2 py-0.5 rounded bg-purple-950/60 text-purple-300 font-mono text-[10px] font-bold border border-purple-500/30">
-                        {wd.currency} ON-CHAIN
-                      </span>
-                      <span className="font-bold text-[#F5F5F7] text-sm font-mono">
+                      <StatusBadge tone="brand">{wd.currency} ON-CHAIN</StatusBadge>
+                      <span className="font-bold text-[#E4EBEF] text-sm font-mono tabular-nums">
                         {formatCrypto(wd.amount, 8)} {wd.currency}
                       </span>
                     </div>
-                    <div className="text-xs text-[#9298A6] font-mono truncate max-w-md">
-                      Address: <strong className="text-white">{wd.address}</strong> (Network: {wd.network || 'Mainnet'})
+                    <div className="text-xs text-[#A1AFB8] font-mono truncate max-w-md">
+                      Address: <strong className="text-[#E4EBEF]">{wd.address}</strong> (Network: {wd.network || 'Mainnet'})
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button
-                      type="button"
+                    <Button
+                      variant="danger"
+                      size="sm"
                       onClick={() => handleRejectWd(wd.id, 'CRYPTO')}
-                      className="px-3 py-1.5 rounded-xl bg-red-950/40 border border-red-700 text-red-300 text-xs font-bold hover:bg-red-900/50"
                     >
                       Tolak & Refund
-                    </button>
-                    <button
-                      type="button"
+                    </Button>
+                    <Button
+                      variant="profit"
+                      size="sm"
                       onClick={() => handleApproveWd(wd.id, 'CRYPTO')}
-                      className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-lg shadow-emerald-900/30"
                     >
                       Setujui & Broadcast
-                    </button>
+                    </Button>
                   </div>
                 </div>
               ))}
@@ -1554,44 +1652,46 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         <div className="space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-bold text-[#F5F5F7] font-display">Buku Besar Bersama & Penyesuaian Saldo (Double-Entry Ledger)</h3>
-              <p className="text-xs text-[#9298A6]">Alat penyesuaian administratif resmi berpasangan dengan rekening Treasury. Setiap jurnal tercatat permanen di audit trail.</p>
+              <h3 className="text-sm font-semibold text-[#E4EBEF]">Buku Besar Bersama & Penyesuaian Saldo (Double-Entry Ledger)</h3>
+              <p className="text-xs text-[#A1AFB8]">Alat penyesuaian administratif resmi berpasangan dengan rekening Treasury. Setiap jurnal tercatat permanen di audit trail.</p>
             </div>
-            <button
+            <Button
+              variant="primary"
+              size="sm"
               onClick={() => setShowAdjustLedgerModal(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-[#FF087F] to-[#D926FF] text-white text-xs font-bold shadow-lg shadow-[#FF087F]/30 hover:brightness-110 transition-all self-start"
+              icon={<Plus className="w-4 h-4" />}
+              className="self-start"
             >
-              <Plus className="w-4 h-4" />
-              <span>Entri Penyesuaian Saldo</span>
-            </button>
+              Entri Penyesuaian Saldo
+            </Button>
           </div>
 
           {/* Solvency Audit Status */}
-          <div className="p-5 rounded-2xl bg-[#0D1017] border border-white/10 space-y-3">
-            <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider font-mono">
+          <div className="p-5 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-3">
+            <h4 className="text-xs font-semibold text-[#C1D0D6] uppercase tracking-wider font-mono">
               Ringkasan Saldo Cadangan Treasury Bursa (Sistem Kepatuhan)
             </h4>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div className="p-3.5 rounded-xl bg-[#171923] border border-white/5 font-mono text-xs">
-                <span className="text-[#9298A6] block">Akun Cadangan Treasury IDR</span>
-                <span className="text-lg font-bold text-emerald-400 mt-1 block">
+              <div className="p-3.5 rounded-[10px] bg-[#17212B] border border-[#202B34] font-mono tabular-nums text-xs">
+                <span className="text-[#A1AFB8] block">Akun Cadangan Treasury IDR</span>
+                <span className="text-lg font-bold text-[#35B887] mt-1 block">
                   Rp 100.000.000.000,00
                 </span>
-                <span className="text-[10px] text-[#686D7A] mt-0.5 block">Penjamin likuiditas fiat bursa</span>
+                <span className="text-[10px] text-[#71818B] mt-0.5 block">Penjamin likuiditas fiat bursa</span>
               </div>
-              <div className="p-3.5 rounded-xl bg-[#171923] border border-white/5 font-mono text-xs">
-                <span className="text-[#9298A6] block">Akun Cadangan Treasury BTC</span>
-                <span className="text-lg font-bold text-amber-400 mt-1 block">
+              <div className="p-3.5 rounded-[10px] bg-[#17212B] border border-[#202B34] font-mono tabular-nums text-xs">
+                <span className="text-[#A1AFB8] block">Akun Cadangan Treasury BTC</span>
+                <span className="text-lg font-bold text-[#D6A85C] mt-1 block">
                   500.00000000 BTC
                 </span>
-                <span className="text-[10px] text-[#686D7A] mt-0.5 block">Cadangan cold storage dompet dingin</span>
+                <span className="text-[10px] text-[#71818B] mt-0.5 block">Cadangan cold storage dompet dingin</span>
               </div>
-              <div className="p-3.5 rounded-xl bg-[#171923] border border-white/5 font-mono text-xs">
-                <span className="text-[#9298A6] block">Akun Cadangan Treasury USDT</span>
-                <span className="text-lg font-bold text-blue-400 mt-1 block">
+              <div className="p-3.5 rounded-[10px] bg-[#17212B] border border-[#202B34] font-mono tabular-nums text-xs">
+                <span className="text-[#A1AFB8] block">Akun Cadangan Treasury USDT</span>
+                <span className="text-lg font-bold text-[#6D9FE8] mt-1 block">
                   5.000.000,00 USDT
                 </span>
-                <span className="text-[10px] text-[#686D7A] mt-0.5 block">Kolateral FX matching engine</span>
+                <span className="text-[10px] text-[#71818B] mt-0.5 block">Kolateral FX matching engine</span>
               </div>
             </div>
           </div>
@@ -1605,70 +1705,66 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-bold text-[#F5F5F7] font-display">Monitoring Seluruh Bot Trading Platform</h3>
-              <p className="text-xs text-[#9298A6]">Pantau aktivitas Spot Grid, DCA Layers, TWAP Slicer, Volume Maker, dan Depth & Liquidity di seluruh pengguna.</p>
+              <h3 className="text-sm font-semibold text-[#E4EBEF]">Monitoring Seluruh Bot Trading Platform</h3>
+              <p className="text-xs text-[#A1AFB8]">Pantau aktivitas Spot Grid, DCA Layers, TWAP Slicer, Volume Maker, dan Depth & Liquidity di seluruh pengguna.</p>
             </div>
-            <button
+            <Button
+              variant="danger"
+              size="sm"
               onClick={() => handleEmergencyStopBots()}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600/30 hover:bg-red-600/40 border border-red-500/50 text-red-200 text-xs font-bold transition-all shadow-lg"
+              icon={<AlertTriangle className="w-4 h-4" />}
+              className="self-start"
             >
-              <AlertTriangle className="w-4 h-4 text-red-400" />
-              <span>Hentikan Semua Bot (Emergency)</span>
-            </button>
+              Hentikan Semua Bot (Emergency)
+            </Button>
           </div>
 
-          <div className="rounded-2xl bg-[#0D1017] border border-white/10 overflow-hidden shadow-xl">
+          <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs font-mono">
-                <thead className="bg-[#171923] text-[11px] text-[#9298A6] border-b border-white/10 font-sans">
+              <table className="w-full text-left text-xs font-mono tabular-nums">
+                <thead className="bg-[#17212B] text-[11px] text-[#A1AFB8] border-b border-[#202B34] font-sans">
                   <tr>
-                    <th className="px-4 py-3">Nama Bot</th>
-                    <th className="px-4 py-3">Tipe Algoritma</th>
-                    <th className="px-4 py-3">Pasangan</th>
-                    <th className="px-4 py-3">Pemilik Akun</th>
-                    <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3">Order Aktif</th>
-                    <th className="px-4 py-3 text-right">Aksi</th>
+                    <th className="px-4 py-3 font-semibold">Nama Bot</th>
+                    <th className="px-4 py-3 font-semibold">Tipe Algoritma</th>
+                    <th className="px-4 py-3 font-semibold">Pasangan</th>
+                    <th className="px-4 py-3 font-semibold">Pemilik Akun</th>
+                    <th className="px-4 py-3 font-semibold">Status</th>
+                    <th className="px-4 py-3 font-semibold">Order Aktif</th>
+                    <th className="px-4 py-3 font-semibold text-right">Aksi</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/5">
+                <tbody className="divide-y divide-[#202B34]">
                   {botsList.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-[#686D7A]">
+                      <td colSpan={7} className="px-4 py-8 text-center text-[#71818B] font-sans">
                         Belum ada bot trading yang terkonfigurasi di bursa.
                       </td>
                     </tr>
                   ) : (
                     botsList.map(b => (
-                      <tr key={b.id} className="hover:bg-white/[0.02]">
+                      <tr key={b.id} className="hover:bg-[#17212B]/60 transition-colors">
                         <td className="px-4 py-3.5">
-                          <span className="font-bold text-[#F5F5F7] block">{b.name}</span>
-                          <span className="text-[10px] text-[#686D7A] block">ID: {b.id}</span>
+                          <span className="font-semibold text-[#E4EBEF] block">{b.name}</span>
+                          <span className="text-[10px] text-[#71818B] block">ID: {b.id}</span>
                         </td>
-                        <td className="px-4 py-3.5 text-purple-400 font-semibold">{b.botType}</td>
-                        <td className="px-4 py-3.5 font-bold text-[#F5F5F7]">{b.pairId}</td>
-                        <td className="px-4 py-3.5 text-slate-300">{b.ownerEmail}</td>
-                        <td className="px-4 py-3.5">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                              b.status === 'RUNNING'
-                                ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/40'
-                                : 'bg-slate-800 text-slate-400'
-                            }`}
-                          >
+                        <td className="px-4 py-3.5 text-[#8DA5B1] font-semibold">{b.botType}</td>
+                        <td className="px-4 py-3.5 font-semibold text-[#E4EBEF]">{b.pairId}</td>
+                        <td className="px-4 py-3.5 text-[#A1AFB8]">{b.ownerEmail}</td>
+                        <td className="px-4 py-3.5 font-sans">
+                          <StatusBadge tone={b.status === 'RUNNING' ? 'success' : 'neutral'}>
                             {b.status}
-                          </span>
+                          </StatusBadge>
                         </td>
-                        <td className="px-4 py-3.5 font-semibold text-[#F5F5F7]">{b.activeOrdersCount} level</td>
+                        <td className="px-4 py-3.5 font-semibold text-[#E4EBEF]">{b.activeOrdersCount} level</td>
                         <td className="px-4 py-3.5 text-right font-sans">
                           {b.status === 'RUNNING' && (
-                            <button
-                              type="button"
+                            <Button
+                              variant="danger"
+                              size="sm"
                               onClick={() => handleEmergencyStopBots(b.id)}
-                              className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-red-950/40 border border-red-700 text-red-300 hover:bg-red-900/50"
                             >
                               Stop Bot
-                            </button>
+                            </Button>
                           )}
                         </td>
                       </tr>
@@ -1688,99 +1784,93 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-bold text-[#F5F5F7] font-display">Mesin Konversi FX USDT/IDR & Sinkronisasi Feed</h3>
-              <p className="text-xs text-[#9298A6]">Formula konversi spot: BTC/IDR = BTC/USDT × USDT/IDR dengan kontrol manual admin dan rekam jejak audit.</p>
+              <h3 className="text-sm font-semibold text-[#E4EBEF]">Mesin Konversi FX USDT/IDR & Sinkronisasi Feed</h3>
+              <p className="text-xs text-[#A1AFB8]">Formula konversi spot: BTC/IDR = BTC/USDT × USDT/IDR dengan kontrol manual admin dan rekam jejak audit.</p>
             </div>
-            <button
+            <Button
+              variant="primary"
+              size="sm"
               onClick={() => setShowFxModal(true)}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-[#FF087F] to-[#D926FF] text-white text-xs font-bold shadow-lg shadow-[#FF087F]/30 hover:brightness-110 transition-all self-start"
+              icon={<Sliders className="w-4 h-4" />}
+              className="self-start"
             >
-              <Sliders className="w-4 h-4" />
-              <span>Override Kurs Manual</span>
-            </button>
+              Override Kurs Manual
+            </Button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="p-4 rounded-2xl bg-[#0D1017] border border-white/10 space-y-2">
-              <span className="text-[11px] text-[#9298A6]">Kurs Efektif USDT/IDR</span>
-              <span className="text-2xl font-bold font-mono text-emerald-400 block">
+            <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-2">
+              <span className="text-[11px] text-[#A1AFB8]">Kurs Efektif USDT/IDR</span>
+              <span className="text-2xl font-bold font-mono tabular-nums text-[#35B887] block">
                 Rp {(fxStatus?.effectiveRateIdr || 16350).toLocaleString('id-ID')}
               </span>
-              <span className="text-[10px] text-[#686D7A] font-mono block">
+              <span className="text-[10px] text-[#71818B] font-mono block">
                 Sumber aktif: {fxStatus?.source || 'COINMARKETCAP'}
               </span>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#0D1017] border border-white/10 space-y-2">
-              <span className="text-[11px] text-[#9298A6]">Penyedia Feed Eksternal</span>
-              <div className="space-y-1 text-xs font-mono">
+            <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-2">
+              <span className="text-[11px] text-[#A1AFB8]">Penyedia Feed Eksternal</span>
+              <div className="space-y-1 text-xs font-mono tabular-nums">
                 <div className="flex justify-between">
-                  <span className="text-[#9298A6]">CoinMarketCap:</span>
-                  <span className="text-emerald-400 font-bold">ONLINE (16.350)</span>
+                  <span className="text-[#A1AFB8]">CoinMarketCap:</span>
+                  <span className="text-[#35B887] font-bold">ONLINE (16.350)</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#9298A6]">Binance Spot:</span>
-                  <span className="text-emerald-400 font-bold">ONLINE</span>
+                  <span className="text-[#A1AFB8]">Binance Spot:</span>
+                  <span className="text-[#35B887] font-bold">ONLINE</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#9298A6]">Bybit Spot:</span>
-                  <span className="text-emerald-400 font-bold">ONLINE</span>
+                  <span className="text-[#A1AFB8]">Bybit Spot:</span>
+                  <span className="text-[#35B887] font-bold">ONLINE</span>
                 </div>
               </div>
             </div>
 
-            <div className="p-4 rounded-2xl bg-[#0D1017] border border-white/10 space-y-2">
-              <span className="text-[11px] text-[#9298A6]">Batas Deviasi & Keamanan</span>
-              <div className="space-y-1 text-xs font-mono">
+            <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-2">
+              <span className="text-[11px] text-[#A1AFB8]">Batas Deviasi & Keamanan</span>
+              <div className="space-y-1 text-xs font-mono tabular-nums">
                 <div className="flex justify-between">
-                  <span className="text-[#9298A6]">Max Tolerance Shift:</span>
-                  <span className="text-blue-400 font-bold">10.0% Max Jump</span>
+                  <span className="text-[#A1AFB8]">Max Tolerance Shift:</span>
+                  <span className="text-[#6D9FE8] font-bold">10.0% Max Jump</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#9298A6]">Aggregator Threshold:</span>
-                  <span className="text-purple-400 font-bold">200 BPS (2%)</span>
+                  <span className="text-[#A1AFB8]">Aggregator Threshold:</span>
+                  <span className="text-[#8DA5B1] font-bold">200 BPS (2%)</span>
                 </div>
               </div>
             </div>
           </div>
 
           {/* SECTION 2: WHITELIST PAIR WEBSOCKET BINANCE & BYBIT */}
-          <div className="p-5 rounded-2xl bg-[#0D1017] border border-cyan-500/20 space-y-5 shadow-xl">
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-white/10 pb-4">
+          <div className="p-5 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-5">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-[#202B34] pb-4">
               <div>
                 <div className="flex items-center gap-2">
-                  <Radio className="w-4 h-4 text-cyan-400" />
-                  <h4 className="text-sm font-bold text-[#F5F5F7] font-display">
+                  <Radio className="w-4 h-4 text-[#8DA5B1]" />
+                  <h4 className="text-sm font-semibold text-[#E4EBEF]">
                     Whitelist Pair WebSocket Binance &amp; Bybit (Acuan Pergerakan Bot)
                   </h4>
                 </div>
-                <p className="text-xs text-[#9298A6] mt-1">
+                <p className="text-xs text-[#A1AFB8] mt-1">
                   Kurasi daftar pair minimal yang di-subscribe ke stream WebSocket Binance &amp; Bybit. Hanya pair aktif di whitelist ini yang muncul di Bot Depth Movement (WS) agar konsumsi bandwidth &amp; RAM tetap ringan.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
-                <span className={`px-2.5 py-1 rounded-lg border ${
-                  wsFeedStatus?.binance?.status === 'CONNECTED'
-                    ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
-                    : 'bg-amber-950/50 border-amber-500/40 text-amber-300'
-                }`}>
+                <StatusBadge tone={wsFeedStatus?.binance?.status === 'CONNECTED' ? 'success' : 'warning'}>
                   Binance WS: {wsFeedStatus?.binance?.status || 'CONNECTING'} ({wsFeedStatus?.binance?.subscribedCount ?? 0} streams)
-                </span>
-                <span className={`px-2.5 py-1 rounded-lg border ${
-                  wsFeedStatus?.bybit?.status === 'CONNECTED'
-                    ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
-                    : 'bg-amber-950/50 border-amber-500/40 text-amber-300'
-                }`}>
+                </StatusBadge>
+                <StatusBadge tone={wsFeedStatus?.bybit?.status === 'CONNECTED' ? 'success' : 'warning'}>
                   Bybit WS: {wsFeedStatus?.bybit?.status || 'CONNECTING'} ({wsFeedStatus?.bybit?.subscribedCount ?? 0} streams)
-                </span>
+                </StatusBadge>
               </div>
             </div>
 
             {/* Quick Manual Add & Spot Catalog Search */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-              <div className="lg:col-span-5 p-4 rounded-xl bg-[#131722] border border-white/10 space-y-3">
-                <h5 className="text-xs font-bold text-[#F5F5F7] flex items-center gap-2">
-                  <Plus className="w-3.5 h-3.5 text-cyan-400" />
+              <div className="lg:col-span-5 p-4 rounded-[10px] bg-[#17212B] border border-[#202B34] space-y-3">
+                <h5 className="text-xs font-semibold text-[#E4EBEF] flex items-center gap-2">
+                  <Plus className="w-3.5 h-3.5 text-[#8DA5B1]" />
                   <span>Tambah Pair Manual ke Whitelist</span>
                 </h5>
                 <div className="flex gap-2">
@@ -1789,24 +1879,24 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                     value={wsManualSymbol}
                     onChange={e => setWsManualSymbol(e.target.value.toUpperCase())}
                     placeholder="Contoh: PEPEUSDT, SUIUSDT, ETHBTC"
-                    className="flex-1 bg-[#0D1017] border border-white/10 rounded-lg px-3 py-2 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                    className="flex-1 bg-[#111820] border border-[#2B3944] rounded-[7px] px-3 py-2 text-xs font-mono text-[#E4EBEF] placeholder-[#71818B] focus:outline-none focus:border-[#8DA5B1]"
                   />
-                  <button
-                    type="button"
+                  <Button
+                    variant="primary"
+                    size="sm"
                     disabled={wsActionBusy}
                     onClick={() => handleAddWsWhitelist(wsManualSymbol)}
-                    className="px-3.5 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-bold whitespace-nowrap"
                   >
                     + Tambah
-                  </button>
+                  </Button>
                 </div>
-                <div className="flex items-center gap-4 text-[11px] text-[#9298A6]">
+                <div className="flex items-center gap-4 text-[11px] text-[#A1AFB8]">
                   <label className="flex items-center gap-1.5 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={wsManualProviders.binance}
                       onChange={e => setWsManualProviders(prev => ({ ...prev, binance: e.target.checked }))}
-                      className="rounded border-slate-600"
+                      className="rounded border-[#40515D] bg-[#111820]"
                     />
                     <span>Subscribe Binance WS</span>
                   </label>
@@ -1815,28 +1905,28 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                       type="checkbox"
                       checked={wsManualProviders.bybit}
                       onChange={e => setWsManualProviders(prev => ({ ...prev, bybit: e.target.checked }))}
-                      className="rounded border-slate-600"
+                      className="rounded border-[#40515D] bg-[#111820]"
                     />
                     <span>Subscribe Bybit WS</span>
                   </label>
                 </div>
               </div>
 
-              <div className="lg:col-span-7 p-4 rounded-xl bg-[#131722] border border-white/10 space-y-3">
+              <div className="lg:col-span-7 p-4 rounded-[10px] bg-[#17212B] border border-[#202B34] space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h5 className="text-xs font-bold text-[#F5F5F7] flex items-center gap-2">
-                    <Search className="w-3.5 h-3.5 text-cyan-400" />
+                  <h5 className="text-xs font-semibold text-[#E4EBEF] flex items-center gap-2">
+                    <Search className="w-3.5 h-3.5 text-[#8DA5B1]" />
                     <span>Telusuri Katalog Spot Binance &amp; Bybit ({wsCatalogSource || 'LIVE'})</span>
                   </h5>
-                  <button
-                    type="button"
+                  <Button
+                    variant="secondary"
+                    size="sm"
                     onClick={() => loadWsCatalog(wsCatalogSearch, wsCatalogProvider, true)}
                     disabled={wsCatalogLoading}
-                    className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-[11px] text-slate-300 flex items-center gap-1"
+                    icon={<RefreshCw className={`w-3 h-3 ${wsCatalogLoading ? 'animate-spin' : ''}`} />}
                   >
-                    <RefreshCw className={`w-3 h-3 ${wsCatalogLoading ? 'animate-spin' : ''}`} />
-                    <span>Sync Katalog</span>
-                  </button>
+                    Sync Katalog
+                  </Button>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
@@ -1849,7 +1939,7 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                       loadWsCatalog(val, wsCatalogProvider, false);
                     }}
                     placeholder="Cari simbol Spot (mis. SOL, PEPE, SUI, TON, BTC)..."
-                    className="flex-1 min-w-[180px] bg-[#0D1017] border border-white/10 rounded-lg px-3 py-1.5 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                    className="flex-1 min-w-[180px] bg-[#111820] border border-[#2B3944] rounded-[7px] px-3 py-1.5 text-xs font-mono text-[#E4EBEF] placeholder-[#71818B] focus:outline-none focus:border-[#8DA5B1]"
                   />
                   <select
                     value={wsCatalogProvider}
@@ -1858,7 +1948,7 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                       setWsCatalogProvider(prov);
                       loadWsCatalog(wsCatalogSearch, prov, false);
                     }}
-                    className="bg-[#0D1017] border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 font-mono"
+                    className="bg-[#111820] border border-[#2B3944] rounded-[7px] px-2.5 py-1.5 text-xs text-[#E4EBEF] font-mono outline-none focus:border-[#8DA5B1]"
                   >
                     <option value="ALL">Binance + Bybit</option>
                     <option value="BINANCE">Binance Spot</option>
@@ -1868,39 +1958,37 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
 
                 <div className="max-h-40 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 gap-2 pr-1">
                   {wsCatalogLoading && wsCatalog.length === 0 ? (
-                    <div className="col-span-2 text-xs text-slate-400 py-4 text-center">Memuat katalog Spot Binance &amp; Bybit...</div>
+                    <div className="col-span-2 text-xs text-[#A1AFB8] py-4 text-center">Memuat katalog Spot Binance &amp; Bybit...</div>
                   ) : wsCatalog.length === 0 ? (
-                    <div className="col-span-2 text-xs text-slate-500 py-4 text-center">Tidak ada pair cocok. Gunakan input manual di sebelah kiri.</div>
+                    <div className="col-span-2 text-xs text-[#71818B] py-4 text-center">Tidak ada pair cocok. Gunakan input manual di sebelah kiri.</div>
                   ) : (
                     wsCatalog.slice(0, 20).map((item: any) => (
-                      <div key={item.symbol} className="flex items-center justify-between p-2 rounded-lg bg-[#0D1017] border border-white/5 text-[11px] font-mono">
+                      <div key={item.symbol} className="flex items-center justify-between p-2 rounded-[7px] bg-[#111820] border border-[#202B34] text-[11px] font-mono">
                         <div className="min-w-0">
-                          <div className="font-bold text-slate-200 flex items-center gap-1.5">
+                          <div className="font-bold text-[#E4EBEF] flex items-center gap-1.5">
                             <span>{item.symbol}</span>
                             {item.providers.includes('binance') && (
-                              <span className="px-1 py-0.2 rounded bg-amber-500/15 text-amber-300 text-[9px]">BN</span>
+                              <span className="px-1 py-0.5 rounded bg-[#D6A85C]/15 text-[#D6A85C] text-[9px]">BN</span>
                             )}
                             {item.providers.includes('bybit') && (
-                              <span className="px-1 py-0.2 rounded bg-cyan-500/15 text-cyan-300 text-[9px]">BY</span>
+                              <span className="px-1 py-0.5 rounded bg-[#6D9FE8]/15 text-[#6D9FE8] text-[9px]">BY</span>
                             )}
                           </div>
-                          <div className="text-[10px] text-slate-400 truncate">
+                          <div className="text-[10px] text-[#A1AFB8] truncate">
                             {item.binancePrice ? `BN: $${item.binancePrice}` : ''} {item.bybitPrice ? `BY: $${item.bybitPrice}` : ''}
                           </div>
                         </div>
                         {item.isWhitelisted ? (
-                          <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 text-[10px] font-bold">
-                            Di Whitelist
-                          </span>
+                          <StatusBadge tone="success">Di Whitelist</StatusBadge>
                         ) : (
-                          <button
-                            type="button"
+                          <Button
+                            variant="secondary"
+                            size="sm"
                             disabled={wsActionBusy}
                             onClick={() => handleAddWsWhitelist(item.symbol, item.providers, `${item.baseAsset} / ${item.quoteAsset}`)}
-                            className="px-2.5 py-1 rounded bg-cyan-600/20 hover:bg-cyan-600/40 border border-cyan-500/40 text-cyan-200 text-[10px] font-bold"
                           >
                             + Pilih
-                          </button>
+                          </Button>
                         )}
                       </div>
                     ))
@@ -1910,69 +1998,69 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
             </div>
 
             {/* Active Curated Whitelist Table */}
-            <div className="rounded-xl border border-white/10 overflow-hidden bg-[#131722]/60">
+            <div className="rounded-[10px] border border-[#202B34] overflow-hidden bg-[#17212B]">
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs font-mono">
-                  <thead className="bg-[#171923] text-[#9298A6] text-[10px] uppercase border-b border-white/10">
+                <table className="w-full text-left text-xs font-mono tabular-nums">
+                  <thead className="bg-[#1D2832] text-[#A1AFB8] text-[10px] uppercase border-b border-[#202B34]">
                     <tr>
-                      <th className="px-4 py-3">Pair WS</th>
-                      <th className="px-4 py-3">Label</th>
-                      <th className="px-4 py-3">Provider Subscribe</th>
-                      <th className="px-4 py-3">Harga Binance</th>
-                      <th className="px-4 py-3">Harga Bybit</th>
-                      <th className="px-4 py-3">Status</th>
-                      <th className="px-4 py-3 text-right">Aksi</th>
+                      <th className="px-4 py-3 font-semibold">Pair WS</th>
+                      <th className="px-4 py-3 font-semibold">Label</th>
+                      <th className="px-4 py-3 font-semibold">Provider Subscribe</th>
+                      <th className="px-4 py-3 font-semibold">Harga Binance</th>
+                      <th className="px-4 py-3 font-semibold">Harga Bybit</th>
+                      <th className="px-4 py-3 font-semibold">Status</th>
+                      <th className="px-4 py-3 font-semibold text-right">Aksi</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-white/5">
+                  <tbody className="divide-y divide-[#202B34]">
                     {wsWhitelist.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="px-4 py-6 text-center text-slate-500">
+                        <td colSpan={7} className="px-4 py-6 text-center text-[#71818B] font-sans">
                           Belum ada pair WebSocket dalam whitelist. Tambahkan dari katalog di atas.
                         </td>
                       </tr>
                     ) : (
                       wsWhitelist.map(entry => (
-                        <tr key={entry.symbol} className="hover:bg-white/5 transition-colors">
-                          <td className="px-4 py-3 font-bold text-white">{entry.symbol}</td>
-                          <td className="px-4 py-3 text-slate-300 font-sans">{entry.label || `${entry.baseAsset}/${entry.quoteAsset}`}</td>
+                        <tr key={entry.symbol} className="hover:bg-[#1D2832]/60 transition-colors">
+                          <td className="px-4 py-3 font-bold text-[#E4EBEF]">{entry.symbol}</td>
+                          <td className="px-4 py-3 text-[#A1AFB8] font-sans">{entry.label || `${entry.baseAsset}/${entry.quoteAsset}`}</td>
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-1.5">
                               {entry.providers.includes('binance') && (
-                                <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px]">Binance</span>
+                                <StatusBadge tone="warning">Binance</StatusBadge>
                               )}
                               {entry.providers.includes('bybit') && (
-                                <span className="px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-[10px]">Bybit</span>
+                                <StatusBadge tone="info">Bybit</StatusBadge>
                               )}
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-slate-200">
+                          <td className="px-4 py-3 text-[#E4EBEF]">
                             {entry.binancePrice ? (
-                              <span className={entry.binanceFresh ? 'text-emerald-300' : 'text-amber-300'}>
+                              <span className={entry.binanceFresh ? 'text-[#35B887]' : 'text-[#D6A85C]'}>
                                 {entry.binancePrice}
                               </span>
                             ) : (
-                              <span className="text-slate-500">-</span>
+                              <span className="text-[#71818B]">-</span>
                             )}
                           </td>
-                          <td className="px-4 py-3 text-slate-200">
+                          <td className="px-4 py-3 text-[#E4EBEF]">
                             {entry.bybitPrice ? (
-                              <span className={entry.bybitFresh ? 'text-emerald-300' : 'text-amber-300'}>
+                              <span className={entry.bybitFresh ? 'text-[#35B887]' : 'text-[#D6A85C]'}>
                                 {entry.bybitPrice}
                               </span>
                             ) : (
-                              <span className="text-slate-500">-</span>
+                              <span className="text-[#71818B]">-</span>
                             )}
                           </td>
-                          <td className="px-4 py-3">
+                          <td className="px-4 py-3 font-sans">
                             <button
                               type="button"
                               disabled={wsActionBusy}
                               onClick={() => handleToggleWsWhitelist(entry.symbol, !entry.enabled)}
-                              className={`px-2.5 py-0.5 rounded text-[10px] font-bold border ${
+                              className={`px-2.5 py-0.5 rounded-[7px] text-[10px] font-bold border transition-colors cursor-pointer ${
                                 entry.enabled
-                                  ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300 hover:bg-emerald-900/50'
-                                  : 'bg-slate-800 border-slate-600 text-slate-400 hover:bg-slate-700'
+                                  ? 'bg-[#12392F] border-[#16A879]/40 text-[#35B887] hover:bg-[#16A879]/20'
+                                  : 'bg-[#111820] border-[#2B3944] text-[#71818B] hover:text-[#E4EBEF]'
                               }`}
                             >
                               {entry.enabled ? 'AKTIF (WS ON)' : 'NONAKTIF'}
@@ -1983,7 +2071,7 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                               type="button"
                               disabled={wsActionBusy}
                               onClick={() => handleRemoveWsWhitelist(entry.symbol)}
-                              className="p-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/60 border border-red-500/30 text-red-300"
+                              className="p-1.5 rounded-[7px] bg-[#401F27] hover:bg-[#EA5B65]/30 border border-[#EA5B65]/30 text-[#EA5B65] transition-colors cursor-pointer"
                               title={`Hapus ${entry.symbol} dari whitelist WS`}
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -2007,24 +2095,25 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         <div className="space-y-6">
           {/* Section 1: Staking / Earn Pools */}
           <div className="space-y-3">
-            <h4 className="text-sm font-bold text-[#F5F5F7] font-display">Manajemen Pool Staking & Earn</h4>
+            <h4 className="text-sm font-semibold text-[#E4EBEF]">Manajemen Pool Staking & Earn</h4>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
               {earnpools.map(pool => (
-                <div key={pool.id} className="p-4 rounded-2xl bg-[#0D1017] border border-white/10 space-y-2">
+                <div key={pool.id} className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-[#F5F5F7] font-mono">{pool.asset} Pool</span>
-                    <span className="text-emerald-400 font-mono font-bold text-sm">{pool.apy}% APY</span>
+                    <span className="font-semibold text-[#E4EBEF] font-mono">{pool.asset} Pool</span>
+                    <span className="text-[#35B887] font-mono tabular-nums font-bold text-sm">{pool.apy}% APY</span>
                   </div>
-                  <div className="text-[11px] text-[#9298A6] font-mono">
+                  <div className="text-[11px] text-[#A1AFB8] font-mono">
                     Durasi: {pool.durationDays === 0 ? 'Fleksibel' : `${pool.durationDays} Hari`}
                   </div>
-                  <button
-                    type="button"
+                  <Button
+                    variant="secondary"
+                    size="sm"
                     onClick={() => handleUpdateStakingPool(pool.id, pool.apy)}
-                    className="w-full mt-2 py-1.5 rounded-lg bg-[#171923] hover:bg-white/10 text-xs font-semibold text-slate-200 border border-white/10"
+                    className="w-full mt-2"
                   >
                     Ubah APY
-                  </button>
+                  </Button>
                 </div>
               ))}
             </div>
@@ -2032,83 +2121,87 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
 
           {/* Section 2: Copy Trading Master Traders */}
           <div className="space-y-3">
-            <h4 className="text-sm font-bold text-[#F5F5F7] font-display">Manajemen Master Trader (Copy Trading)</h4>
-            <div className="rounded-2xl bg-[#0D1017] border border-white/10 overflow-hidden shadow-xl">
-              <table className="w-full text-left text-xs font-mono">
-                <thead className="bg-[#171923] text-[11px] text-[#9298A6] border-b border-white/10 font-sans">
-                  <tr>
-                    <th className="px-4 py-2.5">Master Trader</th>
-                    <th className="px-4 py-2.5">Pair</th>
-                    <th className="px-4 py-2.5">30d ROI</th>
-                    <th className="px-4 py-2.5">Followers</th>
-                    <th className="px-4 py-2.5">Profit Share</th>
-                    <th className="px-4 py-2.5">Status</th>
-                    <th className="px-4 py-2.5 text-right">Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {copyMasters.map(m => (
-                    <tr key={m.id} className="hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 font-bold text-[#F5F5F7]">{m.name}</td>
-                      <td className="px-4 py-3">{m.asset}</td>
-                      <td className="px-4 py-3 text-emerald-400 font-bold">+{m.roi30d}%</td>
-                      <td className="px-4 py-3">{m.followers} orang</td>
-                      <td className="px-4 py-3">{m.profitShareBps / 100}%</td>
-                      <td className="px-4 py-3">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${m.status === 'APPROVED' ? 'bg-emerald-950/60 text-emerald-300' : 'bg-red-950/60 text-red-300'}`}>
-                          {m.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right font-sans">
-                        <button
-                          type="button"
-                          onClick={() => handleUpdateMasterTrader(m.id, m.status)}
-                          className="px-2.5 py-1 rounded bg-[#171923] hover:bg-white/10 border border-white/10 text-[11px]"
-                        >
-                          {m.status === 'APPROVED' ? 'Jeda Master' : 'Aktifkan'}
-                        </button>
-                      </td>
+            <h4 className="text-sm font-semibold text-[#E4EBEF]">Manajemen Master Trader (Copy Trading)</h4>
+            <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs font-mono tabular-nums">
+                  <thead className="bg-[#17212B] text-[11px] text-[#A1AFB8] border-b border-[#202B34] font-sans">
+                    <tr>
+                      <th className="px-4 py-2.5 font-semibold">Master Trader</th>
+                      <th className="px-4 py-2.5 font-semibold">Pair</th>
+                      <th className="px-4 py-2.5 font-semibold">30d ROI</th>
+                      <th className="px-4 py-2.5 font-semibold">Followers</th>
+                      <th className="px-4 py-2.5 font-semibold">Profit Share</th>
+                      <th className="px-4 py-2.5 font-semibold">Status</th>
+                      <th className="px-4 py-2.5 font-semibold text-right">Aksi</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-[#202B34]">
+                    {copyMasters.map(m => (
+                      <tr key={m.id} className="hover:bg-[#17212B]/60 transition-colors">
+                        <td className="px-4 py-3 font-semibold text-[#E4EBEF]">{m.name}</td>
+                        <td className="px-4 py-3 text-[#A1AFB8]">{m.asset}</td>
+                        <td className="px-4 py-3 text-[#35B887] font-bold">+{m.roi30d}%</td>
+                        <td className="px-4 py-3 text-[#E4EBEF]">{m.followers} orang</td>
+                        <td className="px-4 py-3 text-[#E4EBEF]">{m.profitShareBps / 100}%</td>
+                        <td className="px-4 py-3 font-sans">
+                          <StatusBadge tone={m.status === 'APPROVED' ? 'success' : 'danger'}>
+                            {m.status}
+                          </StatusBadge>
+                        </td>
+                        <td className="px-4 py-3 text-right font-sans">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => handleUpdateMasterTrader(m.id, m.status)}
+                          >
+                            {m.status === 'APPROVED' ? 'Jeda Master' : 'Aktifkan'}
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
 
           {/* Section 3: VIP Tiers */}
           <div className="space-y-3">
-            <h4 className="text-sm font-bold text-[#F5F5F7] font-display">Tabel Diskon Fee VIP Level (VIP 0 - VIP 5)</h4>
-            <div className="rounded-2xl bg-[#0D1017] border border-white/10 overflow-hidden shadow-xl">
-              <table className="w-full text-left text-xs font-mono">
-                <thead className="bg-[#171923] text-[11px] text-[#9298A6] border-b border-white/10 font-sans">
-                  <tr>
-                    <th className="px-4 py-2.5">VIP Tier</th>
-                    <th className="px-4 py-2.5">Syarat Volume 30 Hari</th>
-                    <th className="px-4 py-2.5">Maker Fee</th>
-                    <th className="px-4 py-2.5">Taker Fee</th>
-                    <th className="px-4 py-2.5 text-right">Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {vipTiers.map(vt => (
-                    <tr key={vt.tier} className="hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 font-bold text-[#FF087F]">VIP {vt.tier}</td>
-                      <td className="px-4 py-3">{formatIDR(vt.minVolumeIdr, true)}</td>
-                      <td className="px-4 py-3 text-emerald-400">{(vt.makerFeeBps / 100).toFixed(2)}% ({vt.makerFeeBps} bps)</td>
-                      <td className="px-4 py-3 text-blue-400">{(vt.takerFeeBps / 100).toFixed(2)}% ({vt.takerFeeBps} bps)</td>
-                      <td className="px-4 py-3 text-right font-sans">
-                        <button
-                          type="button"
-                          onClick={() => handleUpdateVipTier(vt.tier, vt.makerFeeBps, vt.takerFeeBps)}
-                          className="px-2.5 py-1 rounded bg-[#171923] hover:bg-white/10 border border-white/10 text-[11px]"
-                        >
-                          Edit Fee
-                        </button>
-                      </td>
+            <h4 className="text-sm font-semibold text-[#E4EBEF]">Tabel Diskon Fee VIP Level (VIP 0 - VIP 5)</h4>
+            <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs font-mono tabular-nums">
+                  <thead className="bg-[#17212B] text-[11px] text-[#A1AFB8] border-b border-[#202B34] font-sans">
+                    <tr>
+                      <th className="px-4 py-2.5 font-semibold">VIP Tier</th>
+                      <th className="px-4 py-2.5 font-semibold">Syarat Volume 30 Hari</th>
+                      <th className="px-4 py-2.5 font-semibold">Maker Fee</th>
+                      <th className="px-4 py-2.5 font-semibold">Taker Fee</th>
+                      <th className="px-4 py-2.5 font-semibold text-right">Aksi</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-[#202B34]">
+                    {vipTiers.map(vt => (
+                      <tr key={vt.tier} className="hover:bg-[#17212B]/60 transition-colors">
+                        <td className="px-4 py-3 font-bold text-[#C1D0D6]">VIP {vt.tier}</td>
+                        <td className="px-4 py-3 text-[#E4EBEF]">{formatIDR(vt.minVolumeIdr, true)}</td>
+                        <td className="px-4 py-3 text-[#35B887]">{(vt.makerFeeBps / 100).toFixed(2)}% ({vt.makerFeeBps} bps)</td>
+                        <td className="px-4 py-3 text-[#6D9FE8]">{(vt.takerFeeBps / 100).toFixed(2)}% ({vt.takerFeeBps} bps)</td>
+                        <td className="px-4 py-3 text-right font-sans">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => handleUpdateVipTier(vt.tier, vt.makerFeeBps, vt.takerFeeBps)}
+                          >
+                            Edit Fee
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>
@@ -2120,30 +2213,30 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
       {activeTab === 'RISK' && (
         <div className="space-y-4">
           <div>
-            <h3 className="text-sm font-bold text-[#F5F5F7] font-display">Sistem Deteksi Anomali & Risiko Transaksi (Anti-Money Laundering)</h3>
-            <p className="text-xs text-[#9298A6]">Pemantauan otomatis terhadap pola wash trading, rapid cancellation spoofing, dan lonjakan penarikan tidak wajar.</p>
+            <h3 className="text-sm font-semibold text-[#E4EBEF]">Sistem Deteksi Anomali & Risiko Transaksi (Anti-Money Laundering)</h3>
+            <p className="text-xs text-[#A1AFB8]">Pemantauan otomatis terhadap pola wash trading, rapid cancellation spoofing, dan lonjakan penarikan tidak wajar.</p>
           </div>
 
           {riskAlerts.length === 0 ? (
-            <div className="p-8 text-center rounded-2xl bg-[#0D1017] border border-white/10 space-y-2">
-              <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto" />
-              <h4 className="text-sm font-bold text-[#F5F5F7]">Tidak Ada Peringatan Anomali</h4>
-              <p className="text-xs text-[#9298A6]">Sistem AML berjalan normal. Seluruh aktivitas perdagangan sesuai dengan parameter kepatuhan bursa.</p>
+            <div className="p-8 text-center rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-2">
+              <CheckCircle2 className="w-8 h-8 text-[#35B887] mx-auto" />
+              <h4 className="text-sm font-semibold text-[#E4EBEF]">Tidak Ada Peringatan Anomali</h4>
+              <p className="text-xs text-[#A1AFB8]">Sistem AML berjalan normal. Seluruh aktivitas perdagangan sesuai dengan parameter kepatuhan bursa.</p>
             </div>
           ) : (
             <div className="space-y-2">
               {riskAlerts.map(a => (
-                <div key={a.id} className="p-4 rounded-xl bg-[#0D1017] border border-white/10 flex items-center justify-between">
+                <div key={a.id} className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] flex items-center justify-between gap-4">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${a.severity === 'HIGH' ? 'bg-red-950 text-red-400' : 'bg-amber-950 text-amber-400'}`}>
+                      <StatusBadge tone={a.severity === 'HIGH' ? 'danger' : 'warning'}>
                         {a.severity}
-                      </span>
-                      <span className="font-bold text-[#F5F5F7] text-xs font-display">{a.category}</span>
+                      </StatusBadge>
+                      <span className="font-semibold text-[#E4EBEF] text-xs">{a.category}</span>
                     </div>
-                    <p className="text-xs text-[#9298A6]">{a.description}</p>
+                    <p className="text-xs text-[#A1AFB8]">{a.description}</p>
                   </div>
-                  <span className="text-[10px] font-mono text-[#686D7A]">{formatDateTime(a.createdAt)}</span>
+                  <span className="text-[10px] font-mono tabular-nums text-[#71818B] shrink-0">{formatDateTime(a.createdAt)}</span>
                 </div>
               ))}
             </div>
@@ -2158,38 +2251,36 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-bold text-[#F5F5F7] font-display">Audit Trail Append-Only (Aktivitas Sistem & Admin)</h3>
-              <p className="text-xs text-[#9298A6]">Catatan audit permanen yang tidak dapat dimanipulasi untuk setiap tindakan administratif dan kepatuhan.</p>
+              <h3 className="text-sm font-semibold text-[#E4EBEF]">Audit Trail Append-Only (Aktivitas Sistem & Admin)</h3>
+              <p className="text-xs text-[#A1AFB8]">Catatan audit permanen yang tidak dapat dimanipulasi untuk setiap tindakan administratif dan kepatuhan.</p>
             </div>
             <div className="relative w-full sm:w-64">
-              <Search className="w-3.5 h-3.5 text-[#686D7A] absolute left-3 top-3 pointer-events-none" />
+              <Search className="w-3.5 h-3.5 text-[#71818B] absolute left-3 top-2.5 pointer-events-none" />
               <input
                 type="text"
                 placeholder="Cari aksi audit / resource..."
                 value={auditSearch}
                 onChange={e => setAuditSearch(e.target.value)}
-                className="w-full bg-[#0D1017] border border-white/10 rounded-xl pl-9 pr-3 py-2 text-xs text-[#F5F5F7] placeholder-[#686D7A] outline-none focus:border-[#FF087F] font-mono"
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] pl-9 pr-3 py-2 text-xs text-[#E4EBEF] placeholder-[#71818B] outline-none focus:border-[#8DA5B1] font-mono"
               />
             </div>
           </div>
 
-          <div className="rounded-2xl bg-[#0D1017] border border-white/10 overflow-hidden shadow-xl">
-            <div className="max-h-[600px] overflow-y-auto divide-y divide-white/5 font-mono text-xs">
+          <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
+            <div className="max-h-[600px] overflow-y-auto divide-y divide-[#202B34] font-mono text-xs">
               {filteredAudits.length === 0 ? (
-                <div className="p-8 text-center text-[#686D7A]">Belum ada audit log yang sesuai</div>
+                <div className="p-8 text-center text-[#71818B] font-sans">Belum ada audit log yang sesuai</div>
               ) : (
                 filteredAudits.map((log, idx) => (
-                  <div key={idx} className="p-3.5 hover:bg-white/[0.02] transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div key={idx} className="p-3.5 hover:bg-[#17212B]/60 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div className="space-y-0.5">
                       <div className="flex items-center gap-2">
-                        <span className="px-1.5 py-0.5 rounded bg-blue-950/60 text-blue-300 text-[10px] font-bold border border-blue-500/30">
-                          {log.action}
-                        </span>
-                        <span className="text-[#F5F5F7] font-medium">{log.resource}</span>
+                        <StatusBadge tone="info">{log.action}</StatusBadge>
+                        <span className="text-[#E4EBEF] font-medium">{log.resource}</span>
                       </div>
-                      <p className="text-[11px] text-[#9298A6]">{log.details}</p>
+                      <p className="text-[11px] text-[#A1AFB8] font-sans">{log.details}</p>
                     </div>
-                    <span className="text-[10px] text-[#686D7A] whitespace-nowrap">
+                    <span className="text-[10px] text-[#71818B] tabular-nums whitespace-nowrap">
                       {formatDateTime(log.createdAt)}
                     </span>
                   </div>
@@ -2203,217 +2294,188 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
       {/* =========================================================================
           MODAL: CREATE NEW TRADING PAIR
           ========================================================================= */}
-      {showCreatePairModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#0D1017] border border-white/10 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex justify-between items-center pb-3 border-b border-white/10">
-              <h3 className="font-bold text-[#F5F5F7] text-sm font-display">Daftarkan Trading Pair Baru</h3>
-              <button onClick={() => setShowCreatePairModal(false)} className="text-[#9298A6] hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
+      <Modal
+        isOpen={showCreatePairModal}
+        onClose={() => setShowCreatePairModal(false)}
+        title="Daftarkan Trading Pair Baru"
+        maxWidth="max-w-md"
+      >
+        <form onSubmit={handleCreatePair} className="space-y-3 text-xs">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[#A1AFB8] block mb-1">Base Currency:</label>
+              <input
+                type="text"
+                required
+                placeholder="SOL"
+                value={newPairData.baseCurrency}
+                onChange={e => setNewPairData({ ...newPairData, baseCurrency: e.target.value.toUpperCase() })}
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono uppercase outline-none focus:border-[#8DA5B1]"
+              />
             </div>
+            <div>
+              <label className="text-[#A1AFB8] block mb-1">Quote Currency:</label>
+              <select
+                value={newPairData.quoteCurrency}
+                onChange={e => {
+                  const q = e.target.value;
+                  setNewPairData({
+                    ...newPairData,
+                    quoteCurrency: q,
+                    quoteDecimals: q === 'USDT' ? '6' : '2',
+                    initialPrice: q === 'USDT' ? '1000000' : '100000'
+                  });
+                }}
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono outline-none focus:border-[#8DA5B1]"
+              >
+                <option value="USDT">USDT (Tether USD)</option>
+                <option value="IDR">IDR (Indonesian Rupiah)</option>
+              </select>
+            </div>
+          </div>
 
-            <form onSubmit={handleCreatePair} className="space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[#9298A6] block mb-1">Base Currency:</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="SOL"
-                    value={newPairData.baseCurrency}
-                    onChange={e => setNewPairData({ ...newPairData, baseCurrency: e.target.value.toUpperCase() })}
-                    className="w-full bg-[#171923] border border-white/10 rounded-lg p-2 text-[#F5F5F7] font-mono uppercase"
-                  />
-                </div>
-                <div>
-                  <label className="text-[#9298A6] block mb-1">Quote Currency:</label>
-                  <select
-                    value={newPairData.quoteCurrency}
-                    onChange={e => {
-                      const q = e.target.value;
-                      setNewPairData({
-                        ...newPairData,
-                        quoteCurrency: q,
-                        quoteDecimals: q === 'USDT' ? '6' : '2',
-                        initialPrice: q === 'USDT' ? '1000000' : '100000'
-                      });
-                    }}
-                    className="w-full bg-[#171923] border border-white/10 rounded-lg p-2 text-[#F5F5F7] font-mono"
-                  >
-                    <option value="USDT">USDT (Tether USD)</option>
-                    <option value="IDR">IDR (Indonesian Rupiah)</option>
-                  </select>
-                </div>
-              </div>
+          <div>
+            <label className="text-[#A1AFB8] block mb-1">Harga Awal (Quote atomic units, contoh: 100000 = Rp 1.000,00):</label>
+            <input
+              type="text"
+              required
+              value={newPairData.initialPrice}
+              onChange={e => setNewPairData({ ...newPairData, initialPrice: e.target.value })}
+              className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono outline-none focus:border-[#8DA5B1]"
+            />
+          </div>
 
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[#A1AFB8] block mb-1">Maker Fee (bps):</label>
+              <input
+                type="number"
+                required
+                value={newPairData.makerFeeBps}
+                onChange={e => setNewPairData({ ...newPairData, makerFeeBps: e.target.value })}
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono outline-none focus:border-[#8DA5B1]"
+              />
+              <span className="text-[10px] text-[#71818B] mt-0.5 block">10 bps = 0.10%</span>
+            </div>
+            <div>
+              <label className="text-[#A1AFB8] block mb-1">Taker Fee (bps):</label>
+              <input
+                type="number"
+                required
+                value={newPairData.takerFeeBps}
+                onChange={e => setNewPairData({ ...newPairData, takerFeeBps: e.target.value })}
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono outline-none focus:border-[#8DA5B1]"
+              />
+              <span className="text-[10px] text-[#71818B] mt-0.5 block">20 bps = 0.20%</span>
+            </div>
+          </div>
+
+          <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-2">
+            <span className="text-[11px] font-semibold text-[#6D9FE8] block">Batas Kuantitas Order (Satuan Token):</span>
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-[#9298A6] block mb-1">Harga Awal (Quote atomic units, contoh: 100000 = Rp 1.000,00):</label>
+                <label className="text-[#A1AFB8] block mb-1 text-[11px]">Min Order (Tokens):</label>
                 <input
                   type="text"
                   required
-                  value={newPairData.initialPrice}
-                  onChange={e => setNewPairData({ ...newPairData, initialPrice: e.target.value })}
-                  className="w-full bg-[#171923] border border-white/10 rounded-lg p-2 text-[#F5F5F7] font-mono"
+                  value={newPairData.minOrderTokens}
+                  onChange={e => setNewPairData({ ...newPairData, minOrderTokens: e.target.value })}
+                  className="w-full bg-[#141C24] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono"
+                  placeholder="1"
                 />
               </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[#9298A6] block mb-1">Maker Fee (bps):</label>
-                  <input
-                    type="number"
-                    required
-                    value={newPairData.makerFeeBps}
-                    onChange={e => setNewPairData({ ...newPairData, makerFeeBps: e.target.value })}
-                    className="w-full bg-[#171923] border border-white/10 rounded-lg p-2 text-[#F5F5F7] font-mono"
-                  />
-                  <span className="text-[10px] text-[#686D7A] mt-0.5 block">10 bps = 0.10%</span>
-                </div>
-                <div>
-                  <label className="text-[#9298A6] block mb-1">Taker Fee (bps):</label>
-                  <input
-                    type="number"
-                    required
-                    value={newPairData.takerFeeBps}
-                    onChange={e => setNewPairData({ ...newPairData, takerFeeBps: e.target.value })}
-                    className="w-full bg-[#171923] border border-white/10 rounded-lg p-2 text-[#F5F5F7] font-mono"
-                  />
-                  <span className="text-[10px] text-[#686D7A] mt-0.5 block">20 bps = 0.20%</span>
-                </div>
+              <div>
+                <label className="text-[#A1AFB8] block mb-1 text-[11px]">Max Order (Tokens):</label>
+                <input
+                  type="text"
+                  required
+                  value={newPairData.maxOrderTokens}
+                  onChange={e => setNewPairData({ ...newPairData, maxOrderTokens: e.target.value })}
+                  className="w-full bg-[#141C24] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono"
+                  placeholder="10000000"
+                />
               </div>
-
-              {/* Order Quantity Limits in Tokens */}
-              <div className="p-3 rounded-xl bg-[#141824] border border-blue-500/20 space-y-2">
-                <span className="text-[11px] font-bold text-blue-300 block">Batas Kuantitas Order (Satuan Token):</span>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-[#9298A6] block mb-1 text-[11px]">Min Order (Tokens):</label>
-                    <input
-                      type="text"
-                      required
-                      value={newPairData.minOrderTokens}
-                      onChange={e => setNewPairData({ ...newPairData, minOrderTokens: e.target.value })}
-                      className="w-full bg-[#0D1017] border border-white/10 rounded-lg p-2 text-[#F5F5F7] font-mono"
-                      placeholder="1"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[#9298A6] block mb-1 text-[11px]">Max Order (Tokens):</label>
-                    <input
-                      type="text"
-                      required
-                      value={newPairData.maxOrderTokens}
-                      onChange={e => setNewPairData({ ...newPairData, maxOrderTokens: e.target.value })}
-                      className="w-full bg-[#0D1017] border border-white/10 rounded-lg p-2 text-[#F5F5F7] font-mono"
-                      placeholder="10000000"
-                    />
-                  </div>
-                </div>
-                <span className="text-[10px] text-blue-400 block font-mono">
-                  Sistem otomatis mengubah ke unit atomic integer sesuai desimal base currency.
-                </span>
-              </div>
-
-              <div className="pt-2">
-                <button
-                  type="submit"
-                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#FF087F] to-[#D926FF] text-white font-bold shadow-lg shadow-[#FF087F]/30 hover:brightness-110 transition-all"
-                >
-                  Buat & Aktifkan Pair
-                </button>
-              </div>
-            </form>
+            </div>
+            <span className="text-[10px] text-[#A1AFB8] block font-mono">
+              Sistem otomatis mengubah ke unit atomic integer sesuai desimal base currency.
+            </span>
           </div>
-        </div>
-      )}
+
+          <div className="pt-2">
+            <Button type="submit" variant="primary" size="md" className="w-full">
+              Buat &amp; Aktifkan Pair
+            </Button>
+          </div>
+        </form>
+      </Modal>
 
       {/* =========================================================================
           MODAL: TOKEN MANAGEMENT & ORDER QUANTITY LIMITS CONFIGURATION
           ========================================================================= */}
-      {showEditPairModal && editingPair && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-[#0D1017] border border-white/10 rounded-2xl max-w-xl w-full p-6 space-y-5 shadow-2xl my-8">
-            <div className="flex justify-between items-center pb-3 border-b border-white/10">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold">
-                  <Sliders className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-[#F5F5F7] text-sm font-display flex items-center gap-2">
-                    Kelola Limit & Fee Token: <span className="text-blue-400">{editingPair.id}</span>
-                  </h3>
-                  <p className="text-[11px] text-[#9298A6]">Atur batas kuantitas order (Min/Max), fee, dan circuit breaker</p>
-                </div>
-              </div>
-              <button 
-                onClick={() => setShowEditPairModal(false)} 
-                className="text-[#9298A6] hover:text-white p-1 rounded-lg hover:bg-white/5 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Token Decimal Info Banner */}
-            <div className="p-3 rounded-xl bg-blue-950/30 border border-blue-500/20 text-xs flex flex-wrap items-center justify-between gap-2">
+      <Modal
+        isOpen={showEditPairModal && Boolean(editingPair)}
+        onClose={() => setShowEditPairModal(false)}
+        title={editingPair ? `Kelola Limit & Fee Token: ${editingPair.id}` : 'Kelola Limit & Fee Token'}
+        subtitle="Atur batas kuantitas order (Min/Max), fee, dan circuit breaker"
+        maxWidth="max-w-xl"
+      >
+        {editingPair && (
+          <div className="space-y-4">
+            <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34] text-xs flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <span className="font-bold text-blue-300">Spesifikasi Token:</span>
-                <span className="text-[#F5F5F7]">Base <strong>{editingPair.baseCurrency}</strong> ({editingPair.baseDecimals} Decimals)</span>
-                <span className="text-[#686D7A]">|</span>
-                <span className="text-[#F5F5F7]">Quote <strong>{editingPair.quoteCurrency}</strong> ({editingPair.quoteDecimals} Decimals)</span>
+                <span className="font-semibold text-[#6D9FE8]">Spesifikasi Token:</span>
+                <span className="text-[#E4EBEF]">Base <strong>{editingPair.baseCurrency}</strong> ({editingPair.baseDecimals} Decimals)</span>
+                <span className="text-[#71818B]">|</span>
+                <span className="text-[#E4EBEF]">Quote <strong>{editingPair.quoteCurrency}</strong> ({editingPair.quoteDecimals} Decimals)</span>
               </div>
-              <div className="text-[11px] font-mono text-blue-300 bg-blue-900/40 px-2 py-0.5 rounded border border-blue-400/20">
+              <div className="text-[11px] font-mono text-[#8DA5B1] bg-[#17212B] px-2 py-0.5 rounded border border-[#2B3944]">
                 1 {editingPair.baseCurrency} = {(10 ** (editingPair.baseDecimals || 8)).toLocaleString('id-ID')} atomic units
               </div>
             </div>
 
-            {/* Mode Switcher */}
             <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-[#9298A6] block uppercase tracking-wider">
+              <label className="text-[11px] font-semibold text-[#A1AFB8] block uppercase tracking-wider">
                 Metode Input Kuantitas Order:
               </label>
-              <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-[#171923] border border-white/5">
+              <div className="grid grid-cols-2 gap-2 p-1 rounded-[7px] bg-[#111820] border border-[#202B34]">
                 <button
                   type="button"
                   onClick={() => setPairConfigForm(f => ({ ...f, inputMode: 'TOKENS' }))}
-                  className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  className={`py-2 px-3 rounded-[5px] text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer ${
                     pairConfigForm.inputMode === 'TOKENS'
-                      ? 'bg-blue-600 text-white shadow-md'
-                      : 'text-[#9298A6] hover:text-white hover:bg-white/5'
+                      ? 'bg-[#8DA5B1] text-[#090D12]'
+                      : 'text-[#A1AFB8] hover:text-[#E4EBEF] hover:bg-[#17212B]'
                   }`}
                 >
-                  <span>🪙 Mode Jumlah Token (Desimal)</span>
-                  <span className="text-[9px] px-1 py-0.2 rounded bg-blue-400/20 text-blue-200 uppercase">Mudah</span>
+                  <Coins className="w-3.5 h-3.5" />
+                  <span>Mode Jumlah Token (Desimal)</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setPairConfigForm(f => ({ ...f, inputMode: 'ATOMIC' }))}
-                  className={`py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                  className={`py-2 px-3 rounded-[5px] text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer ${
                     pairConfigForm.inputMode === 'ATOMIC'
-                      ? 'bg-purple-600 text-white shadow-md'
-                      : 'text-[#9298A6] hover:text-white hover:bg-white/5'
+                      ? 'bg-[#8DA5B1] text-[#090D12]'
+                      : 'text-[#A1AFB8] hover:text-[#E4EBEF] hover:bg-[#17212B]'
                   }`}
                 >
-                  <span>🔢 Mode Integer Atomic (BigInt)</span>
-                  <span className="text-[9px] px-1 py-0.2 rounded bg-purple-400/20 text-purple-200 uppercase">Raw</span>
+                  <Hash className="w-3.5 h-3.5" />
+                  <span>Mode Integer Atomic (BigInt)</span>
                 </button>
               </div>
             </div>
 
             <form onSubmit={handleSavePairConfig} className="space-y-4 text-xs">
               {pairConfigForm.inputMode === 'TOKENS' ? (
-                /* ================= TOKENS INPUT MODE ================= */
-                <div className="space-y-3.5 p-3.5 rounded-xl bg-[#141824] border border-blue-500/20">
+                <div className="space-y-3.5 p-3.5 rounded-[7px] bg-[#111820] border border-[#202B34]">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-blue-300 text-xs">Pengaturan Limit dalam Satuan Token ({editingPair.baseCurrency})</span>
-                    <span className="text-[10px] text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-500/30">
-                      Otomatis Dikonversi ke Integer Mesin
-                    </span>
+                    <span className="font-semibold text-[#E4EBEF] text-xs">Pengaturan Limit dalam Satuan Token ({editingPair.baseCurrency})</span>
+                    <StatusBadge tone="success">Konversi Otomatis</StatusBadge>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="text-[#9298A6] block mb-1 font-medium">
+                      <label className="text-[#A1AFB8] block mb-1 font-medium">
                         Min Order Quantity ({editingPair.baseCurrency}):
                       </label>
                       <input
@@ -2428,16 +2490,16 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                             minOrderSize: parseTokenToAtomic(val, editingPair.baseDecimals)
                           }));
                         }}
-                        className="w-full bg-[#0D1017] border border-white/10 rounded-lg p-2.5 text-[#F5F5F7] font-mono focus:border-blue-500 outline-none"
+                        className="w-full bg-[#141C24] border border-[#2B3944] rounded-[7px] p-2.5 text-[#E4EBEF] font-mono focus:border-[#8DA5B1] outline-none"
                         placeholder="1"
                       />
-                      <span className="text-[10px] text-[#686D7A] mt-1 block font-mono">
+                      <span className="text-[10px] text-[#71818B] mt-1 block font-mono">
                         ≈ {parseTokenToAtomic(pairConfigForm.minOrderTokens, editingPair.baseDecimals)} units atomic
                       </span>
                     </div>
 
                     <div>
-                      <label className="text-[#9298A6] block mb-1 font-medium">
+                      <label className="text-[#A1AFB8] block mb-1 font-medium">
                         Max Order Quantity ({editingPair.baseCurrency}):
                       </label>
                       <input
@@ -2452,18 +2514,17 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                             maxOrderSize: parseTokenToAtomic(val, editingPair.baseDecimals)
                           }));
                         }}
-                        className="w-full bg-[#0D1017] border border-white/10 rounded-lg p-2.5 text-[#F5F5F7] font-mono focus:border-blue-500 outline-none"
+                        className="w-full bg-[#141C24] border border-[#2B3944] rounded-[7px] p-2.5 text-[#E4EBEF] font-mono focus:border-[#8DA5B1] outline-none"
                         placeholder="10000000"
                       />
-                      <span className="text-[10px] text-[#686D7A] mt-1 block font-mono">
+                      <span className="text-[10px] text-[#71818B] mt-1 block font-mono">
                         ≈ {parseTokenToAtomic(pairConfigForm.maxOrderTokens, editingPair.baseDecimals)} units atomic
                       </span>
                     </div>
                   </div>
 
-                  {/* Quick Presets for Max Limit */}
                   <div className="pt-1">
-                    <label className="text-[10px] text-[#9298A6] block mb-1.5 font-medium">
+                    <label className="text-[10px] text-[#A1AFB8] block mb-1.5 font-medium">
                       Pilihan Cepat Batas Maksimum ({editingPair.baseCurrency}):
                     </label>
                     <div className="flex flex-wrap gap-1.5">
@@ -2478,10 +2539,10 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                               maxOrderSize: parseTokenToAtomic(preset, editingPair.baseDecimals)
                             }));
                           }}
-                          className={`px-2 py-1 rounded-md text-[11px] font-mono border transition-colors ${
+                          className={`px-2 py-1 rounded-[5px] text-[11px] font-mono border transition-colors cursor-pointer ${
                             pairConfigForm.maxOrderTokens === preset
-                              ? 'bg-blue-600 border-blue-400 text-white font-bold'
-                              : 'bg-[#0D1017] border-white/10 text-[#9298A6] hover:text-[#F5F5F7] hover:border-white/20'
+                              ? 'bg-[#8DA5B1] border-[#8DA5B1] text-[#090D12] font-semibold'
+                              : 'bg-[#141C24] border-[#202B34] text-[#A1AFB8] hover:text-[#E4EBEF] hover:border-[#2B3944]'
                           }`}
                         >
                           {Number(preset).toLocaleString('id-ID')}
@@ -2491,18 +2552,15 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                   </div>
                 </div>
               ) : (
-                /* ================= ATOMIC RAW INPUT MODE ================= */
-                <div className="space-y-3.5 p-3.5 rounded-xl bg-[#191526] border border-purple-500/20">
+                <div className="space-y-3.5 p-3.5 rounded-[7px] bg-[#111820] border border-[#202B34]">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-purple-300 text-xs">Pengaturan Unit Integer Atomic Raw (BigInt)</span>
-                    <span className="text-[10px] text-amber-400 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-500/30">
-                      Sesuai Format Internal Mesin
-                    </span>
+                    <span className="font-semibold text-[#E4EBEF] text-xs">Pengaturan Unit Integer Atomic Raw (BigInt)</span>
+                    <StatusBadge tone="warning">Format Internal Mesin</StatusBadge>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="text-[#9298A6] block mb-1 font-medium">
+                      <label className="text-[#A1AFB8] block mb-1 font-medium">
                         Min Order Size (Atomic Units):
                       </label>
                       <input
@@ -2517,16 +2575,16 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                             minOrderTokens: formatAtomicToToken(val, editingPair.baseDecimals).replace(/\./g, '')
                           }));
                         }}
-                        className="w-full bg-[#0D1017] border border-white/10 rounded-lg p-2.5 text-[#F5F5F7] font-mono focus:border-purple-500 outline-none"
+                        className="w-full bg-[#141C24] border border-[#2B3944] rounded-[7px] p-2.5 text-[#E4EBEF] font-mono focus:border-[#8DA5B1] outline-none"
                         placeholder="100000000"
                       />
-                      <span className="text-[10px] text-emerald-400 mt-1 block font-mono">
+                      <span className="text-[10px] text-[#35B887] mt-1 block font-mono">
                         = {formatAtomicToToken(pairConfigForm.minOrderSize, editingPair.baseDecimals)} {editingPair.baseCurrency}
                       </span>
                     </div>
 
                     <div>
-                      <label className="text-[#9298A6] block mb-1 font-medium">
+                      <label className="text-[#A1AFB8] block mb-1 font-medium">
                         Max Order Size (Atomic Units):
                       </label>
                       <input
@@ -2541,10 +2599,10 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                             maxOrderTokens: formatAtomicToToken(val, editingPair.baseDecimals).replace(/\./g, '')
                           }));
                         }}
-                        className="w-full bg-[#0D1017] border border-white/10 rounded-lg p-2.5 text-[#F5F5F7] font-mono focus:border-purple-500 outline-none"
+                        className="w-full bg-[#141C24] border border-[#2B3944] rounded-[7px] p-2.5 text-[#E4EBEF] font-mono focus:border-[#8DA5B1] outline-none"
                         placeholder="1000000000000000"
                       />
-                      <span className="text-[10px] text-emerald-400 mt-1 block font-mono">
+                      <span className="text-[10px] text-[#35B887] mt-1 block font-mono">
                         = {formatAtomicToToken(pairConfigForm.maxOrderSize, editingPair.baseDecimals)} {editingPair.baseCurrency}
                       </span>
                     </div>
@@ -2552,10 +2610,9 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                 </div>
               )}
 
-              {/* Fee Configuration */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-[#9298A6] block mb-1 font-medium">Maker Fee (basis points):</label>
+                  <label className="text-[#A1AFB8] block mb-1 font-medium">Maker Fee (basis points):</label>
                   <input
                     type="number"
                     required
@@ -2563,14 +2620,14 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                     max="1000"
                     value={pairConfigForm.makerFeeBps}
                     onChange={e => setPairConfigForm(f => ({ ...f, makerFeeBps: Number(e.target.value) }))}
-                    className="w-full bg-[#171923] border border-white/10 rounded-lg p-2 text-[#F5F5F7] font-mono"
+                    className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono outline-none focus:border-[#8DA5B1]"
                   />
-                  <span className="text-[10px] text-emerald-400 mt-0.5 block">
+                  <span className="text-[10px] text-[#35B887] mt-0.5 block">
                     {(Number(pairConfigForm.makerFeeBps) / 100).toFixed(2)}% (10 bps = 0.10%)
                   </span>
                 </div>
                 <div>
-                  <label className="text-[#9298A6] block mb-1 font-medium">Taker Fee (basis points):</label>
+                  <label className="text-[#A1AFB8] block mb-1 font-medium">Taker Fee (basis points):</label>
                   <input
                     type="number"
                     required
@@ -2578,19 +2635,18 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                     max="1000"
                     value={pairConfigForm.takerFeeBps}
                     onChange={e => setPairConfigForm(f => ({ ...f, takerFeeBps: Number(e.target.value) }))}
-                    className="w-full bg-[#171923] border border-white/10 rounded-lg p-2 text-[#F5F5F7] font-mono"
+                    className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono outline-none focus:border-[#8DA5B1]"
                   />
-                  <span className="text-[10px] text-blue-400 mt-0.5 block">
+                  <span className="text-[10px] text-[#6D9FE8] mt-0.5 block">
                     {(Number(pairConfigForm.takerFeeBps) / 100).toFixed(2)}% (20 bps = 0.20%)
                   </span>
                 </div>
               </div>
 
-              {/* Status Circuit Breaker Toggle */}
-              <div className="p-3 rounded-xl bg-[#171923] border border-white/10 flex items-center justify-between">
+              <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34] flex items-center justify-between">
                 <div>
-                  <span className="text-[#F5F5F7] font-bold block">Status Matching Engine:</span>
-                  <span className="text-[11px] text-[#9298A6]">
+                  <span className="text-[#E4EBEF] font-semibold block">Status Matching Engine:</span>
+                  <span className="text-[11px] text-[#A1AFB8]">
                     {pairConfigForm.isHalted
                       ? 'Perdagangan sedang dihentikan sementara (Order baru ditolak)'
                       : 'Perdagangan aktif normal (Order buy & sell dieksekusi)'}
@@ -2599,182 +2655,179 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                 <button
                   type="button"
                   onClick={() => setPairConfigForm(f => ({ ...f, isHalted: !f.isHalted }))}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${
+                  className={`px-3 py-1.5 rounded-[7px] text-xs font-semibold border transition-colors cursor-pointer ${
                     pairConfigForm.isHalted
-                      ? 'bg-red-950/60 border-red-500/50 text-red-300'
-                      : 'bg-emerald-950/60 border-emerald-500/50 text-emerald-300'
+                      ? 'bg-[#401F27] border-[#EA5B65]/50 text-[#EA5B65]'
+                      : 'bg-[#12392F] border-[#16A879]/50 text-[#35B887]'
                   }`}
                 >
                   {pairConfigForm.isHalted ? 'DIHENTIKAN (HALTED)' : 'AKTIF NORMAL'}
                 </button>
               </div>
 
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowEditPairModal(false)}
-                  className="w-1/3 py-2.5 rounded-xl bg-[#171923] hover:bg-white/10 text-[#9298A6] hover:text-white font-semibold transition-all"
-                >
+              <div className="flex gap-2 pt-2 border-t border-[#202B34]">
+                <Button type="button" variant="secondary" size="md" className="w-1/3" onClick={() => setShowEditPairModal(false)}>
                   Batal
-                </button>
-                <button
-                  type="submit"
-                  className="w-2/3 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white font-bold shadow-lg shadow-blue-600/30 hover:brightness-110 transition-all flex items-center justify-center gap-2"
-                >
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>Simpan Perubahan Limit & Fee</span>
-                </button>
+                </Button>
+                <Button type="submit" variant="primary" size="md" className="w-2/3" icon={<CheckCircle2 className="w-4 h-4" />}>
+                  Simpan Perubahan Limit &amp; Fee
+                </Button>
               </div>
             </form>
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
 
       {/* =========================================================================
           MODAL: LEDGER BALANCE ADJUSTMENT
           ========================================================================= */}
-      {showAdjustLedgerModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#0D1017] border border-white/10 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex justify-between items-center pb-3 border-b border-white/10">
-              <h3 className="font-bold text-[#F5F5F7] text-sm font-display">Entri Penyesuaian Saldo Buku Besar</h3>
-              <button onClick={() => setShowAdjustLedgerModal(false)} className="text-[#9298A6] hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleAdjustLedger} className="space-y-3 text-xs">
-              <div>
-                <label className="text-[#9298A6] block mb-1">Pilih Pengguna:</label>
-                <select
-                  required
-                  value={ledgerAdjData.userId}
-                  onChange={e => setLedgerAdjData({ ...ledgerAdjData, userId: e.target.value })}
-                  className="w-full bg-[#171923] border border-white/10 rounded-lg p-2 text-[#F5F5F7]"
-                >
-                  <option value="">-- Pilih Akun Pengguna --</option>
-                  {usersList.map(u => (
-                    <option key={u.id} value={u.id}>
-                      {u.email} ({u.fullName})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[#9298A6] block mb-1">Mata Uang:</label>
-                  <select
-                    value={ledgerAdjData.currency}
-                    onChange={e => setLedgerAdjData({ ...ledgerAdjData, currency: e.target.value })}
-                    className="w-full bg-[#171923] border border-white/10 rounded-lg p-2 text-[#F5F5F7]"
-                  >
-                    <option value="IDR">IDR (Rupiah)</option>
-                    <option value="BTC">BTC (Bitcoin)</option>
-                    <option value="ETH">ETH (Ethereum)</option>
-                    <option value="USDT">USDT (Tether)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[#9298A6] block mb-1">Arah Penyesuaian:</label>
-                  <select
-                    value={ledgerAdjData.direction}
-                    onChange={e => setLedgerAdjData({ ...ledgerAdjData, direction: e.target.value as any })}
-                    className="w-full bg-[#171923] border border-white/10 rounded-lg p-2 text-[#F5F5F7] font-bold"
-                  >
-                    <option value="CREDIT">CREDIT (Tambah Saldo)</option>
-                    <option value="DEBIT">DEBIT (Kurangi Saldo)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[#9298A6] block mb-1">
-                  Jumlah (Atomic Units):
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder={ledgerAdjData.currency === 'IDR' ? '100000000 (= Rp 1.000.000,00)' : '100000000 (= 1.0 Coin)'}
-                  value={ledgerAdjData.amountUnits}
-                  onChange={e => setLedgerAdjData({ ...ledgerAdjData, amountUnits: e.target.value.replace(/\D/g, '') })}
-                  className="w-full bg-[#171923] border border-white/10 rounded-lg p-2 text-[#F5F5F7] font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="text-[#9298A6] block mb-1">Alasan Penyesuaian (Wajib untuk Audit):</label>
-                <textarea
-                  required
-                  rows={2}
-                  placeholder="Koreksi transaksi manual / deposit simulasi / penyesuaian arbitrase"
-                  value={ledgerAdjData.reason}
-                  onChange={e => setLedgerAdjData({ ...ledgerAdjData, reason: e.target.value })}
-                  className="w-full bg-[#171923] border border-white/10 rounded-lg p-2 text-[#F5F5F7]"
-                />
-              </div>
-
-              <div className="pt-2">
-                <button
-                  type="submit"
-                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#FF087F] to-[#D926FF] text-white font-bold shadow-lg shadow-[#FF087F]/30 hover:brightness-110 transition-all"
-                >
-                  Eksekusi Penyesuaian Buku Besar
-                </button>
-              </div>
-            </form>
+      <Modal
+        isOpen={showAdjustLedgerModal}
+        onClose={() => setShowAdjustLedgerModal(false)}
+        title="Entri Penyesuaian Saldo Buku Besar"
+        maxWidth="max-w-md"
+      >
+        <form onSubmit={handleAdjustLedger} className="space-y-3 text-xs">
+          <div>
+            <label className="text-[#A1AFB8] block mb-1">Pilih Pengguna:</label>
+            <select
+              required
+              value={ledgerAdjData.userId}
+              onChange={e => setLedgerAdjData({ ...ledgerAdjData, userId: e.target.value })}
+              className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] outline-none focus:border-[#8DA5B1]"
+            >
+              <option value="">-- Pilih Akun Pengguna --</option>
+              {usersList.map(u => (
+                <option key={u.id} value={u.id}>
+                  {u.email} ({u.fullName})
+                </option>
+              ))}
+            </select>
           </div>
-        </div>
-      )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[#A1AFB8] block mb-1">Mata Uang:</label>
+              <select
+                value={ledgerAdjData.currency}
+                onChange={e => setLedgerAdjData({ ...ledgerAdjData, currency: e.target.value })}
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] outline-none focus:border-[#8DA5B1]"
+              >
+                <option value="IDR">IDR (Rupiah)</option>
+                <option value="BTC">BTC (Bitcoin)</option>
+                <option value="ETH">ETH (Ethereum)</option>
+                <option value="USDT">USDT (Tether)</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[#A1AFB8] block mb-1">Arah Penyesuaian:</label>
+              <select
+                value={ledgerAdjData.direction}
+                onChange={e => setLedgerAdjData({ ...ledgerAdjData, direction: e.target.value as any })}
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-semibold outline-none focus:border-[#8DA5B1]"
+              >
+                <option value="CREDIT">CREDIT (Tambah Saldo)</option>
+                <option value="DEBIT">DEBIT (Kurangi Saldo)</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-[#A1AFB8] block mb-1">Jumlah (Atomic Units):</label>
+            <input
+              type="text"
+              required
+              placeholder={ledgerAdjData.currency === 'IDR' ? '100000000 (= Rp 1.000.000,00)' : '100000000 (= 1.0 Coin)'}
+              value={ledgerAdjData.amountUnits}
+              onChange={e => setLedgerAdjData({ ...ledgerAdjData, amountUnits: e.target.value.replace(/\D/g, '') })}
+              className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono outline-none focus:border-[#8DA5B1]"
+            />
+          </div>
+
+          <div>
+            <label className="text-[#A1AFB8] block mb-1">Alasan Penyesuaian (Wajib untuk Audit):</label>
+            <textarea
+              required
+              rows={2}
+              placeholder="Koreksi transaksi manual / deposit simulasi / penyesuaian arbitrase"
+              value={ledgerAdjData.reason}
+              onChange={e => setLedgerAdjData({ ...ledgerAdjData, reason: e.target.value })}
+              className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] outline-none focus:border-[#8DA5B1]"
+            />
+          </div>
+
+          <div className="pt-2">
+            <Button type="submit" variant="primary" size="md" className="w-full">
+              Eksekusi Penyesuaian Buku Besar
+            </Button>
+          </div>
+        </form>
+      </Modal>
 
       {/* =========================================================================
           MODAL: MANUAL FX OVERRIDE
           ========================================================================= */}
-      {showFxModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-[#0D1017] border border-white/10 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
-            <div className="flex justify-between items-center pb-3 border-b border-white/10">
-              <h3 className="font-bold text-[#F5F5F7] text-sm font-display">Override Kurs FX USDT/IDR Manual</h3>
-              <button onClick={() => setShowFxModal(false)} className="text-[#9298A6] hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleUpdateFxRate} className="space-y-3 text-xs">
-              <div>
-                <label className="text-[#9298A6] block mb-1">Kurs Baru (IDR per 1 USDT):</label>
-                <input
-                  type="number"
-                  step="1"
-                  required
-                  value={manualFxRate}
-                  onChange={e => setManualFxRate(e.target.value)}
-                  className="w-full bg-[#171923] border border-white/10 rounded-lg p-2 text-[#F5F5F7] font-mono font-bold text-base"
-                />
-              </div>
-
-              <div>
-                <label className="text-[#9298A6] block mb-1">Alasan Penyesuaian (Audit Log):</label>
-                <input
-                  type="text"
-                  required
-                  value={fxReason}
-                  onChange={e => setFxReason(e.target.value)}
-                  className="w-full bg-[#171923] border border-white/10 rounded-lg p-2 text-[#F5F5F7]"
-                />
-              </div>
-
-              <div className="pt-2">
-                <button
-                  type="submit"
-                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#FF087F] to-[#D926FF] text-white font-bold shadow-lg shadow-[#FF087F]/30 hover:brightness-110 transition-all"
-                >
-                  Simpan Kurs Efektif
-                </button>
-              </div>
-            </form>
+      <Modal
+        isOpen={showFxModal}
+        onClose={() => setShowFxModal(false)}
+        title="Override Kurs FX USDT/IDR Manual"
+        maxWidth="max-w-md"
+      >
+        <form onSubmit={handleUpdateFxRate} className="space-y-3 text-xs">
+          <div>
+            <label className="text-[#A1AFB8] block mb-1">Kurs Baru (IDR per 1 USDT):</label>
+            <input
+              type="number"
+              step="1"
+              required
+              value={manualFxRate}
+              onChange={e => setManualFxRate(e.target.value)}
+              className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono font-semibold text-base outline-none focus:border-[#8DA5B1]"
+            />
           </div>
-        </div>
+
+          <div>
+            <label className="text-[#A1AFB8] block mb-1">Alasan Penyesuaian (Audit Log):</label>
+            <input
+              type="text"
+              required
+              value={fxReason}
+              onChange={e => setFxReason(e.target.value)}
+              className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] outline-none focus:border-[#8DA5B1]"
+            />
+          </div>
+
+          <div className="pt-2">
+            <Button type="submit" variant="primary" size="md" className="w-full">
+              Simpan Kurs Efektif
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* UNIFIED CONFIRMATION / PROMPT DIALOG */}
+      {confirmConfig && (
+        <ConfirmationDialog
+          isOpen={confirmConfig.isOpen}
+          onClose={() => setConfirmConfig(null)}
+          title={confirmConfig.title}
+          description={confirmConfig.description}
+          confirmLabel={confirmConfig.confirmLabel}
+          tone={confirmConfig.tone}
+          fields={confirmConfig.fields}
+          isLoading={isConfirmBusy}
+          onConfirm={async (values) => {
+            setIsConfirmBusy(true);
+            try {
+              await confirmConfig.onSubmit(values);
+              setConfirmConfig(null);
+            } catch (e: any) {
+              showToast('error', e?.message || 'Operasi gagal diproses');
+            } finally {
+              setIsConfirmBusy(false);
+            }
+          }}
+        />
       )}
     </div>
   );

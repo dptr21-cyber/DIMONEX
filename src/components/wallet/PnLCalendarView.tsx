@@ -1,34 +1,17 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * src/components/wallet/PnLCalendarView.tsx
- * Interactive PnL Calendar Heatmap & Daily Profit/Loss Inspector.
- * Strictly calculated from real user trade executions and ledger double-entry settlements.
+ * Interactive PnL Calendar Heatmap & Daily Profit/Loss Inspector in Obsidian Iridium matte theme.
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import {
-  Calendar as CalendarIcon,
-  ChevronLeft,
-  ChevronRight,
-  TrendingUp,
-  TrendingDown,
-  ArrowUpRight,
-  ArrowDownRight,
-  RefreshCw,
-  Award,
-  Layers,
-  Clock,
-  ExternalLink,
-  X,
-  Filter,
-  CheckCircle2,
-  AlertCircle
-} from 'lucide-react';
+import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import { formatIDR } from '../../lib/formatters.js';
 import { Modal } from '../ui/Modal.js';
 import { Button } from '../ui/Button.js';
+import { StatusBadge } from '../ui/StatusBadge.js';
 
 interface Props {
   onNavigateTrade?: (pairId: string) => void;
@@ -54,7 +37,7 @@ export interface DayTradeDetail {
 }
 
 export interface DayPnLRecord {
-  date: string; // 'YYYY-MM-DD'
+  date: string;
   timestamp: number;
   pnlIdr: number;
   pnlUsdt: number;
@@ -69,16 +52,14 @@ export interface DayPnLRecord {
   trades: DayTradeDetail[];
 }
 
-export const PnLCalendarView: React.FC<Props> = ({ onNavigateTrade, hideBalance = false }) => {
+export const PnLCalendarView: React.FC<Props> = ({ hideBalance = false }) => {
   const [currency, setCurrency] = useState<'IDR' | 'USDT'>('IDR');
   const [isLoading, setIsLoading] = useState(false);
   const [calendarMap, setCalendarMap] = useState<Record<string, DayPnLRecord>>({});
   const [selectedDayRecord, setSelectedDayRecord] = useState<DayPnLRecord | null>(null);
 
-  // Month navigation: year and month index (0 = Jan, 10 = Nov, 11 = Dec)
-  // Default to November 2026
   const [currentYear, setCurrentYear] = useState<number>(2026);
-  const [currentMonth, setCurrentMonth] = useState<number>(10); // 0-indexed: 10 = November
+  const [currentMonth, setCurrentMonth] = useState<number>(10);
 
   const monthNamesID = [
     'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
@@ -87,13 +68,11 @@ export const PnLCalendarView: React.FC<Props> = ({ onNavigateTrade, hideBalance 
 
   const dayNamesID = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
 
-  // Format month string YYYY-MM
   const currentMonthKey = useMemo(() => {
     const mStr = String(currentMonth + 1).padStart(2, '0');
     return `${currentYear}-${mStr}`;
   }, [currentYear, currentMonth]);
 
-  // Fetch PnL Analytics for calendar
   const fetchCalendarData = useCallback(async () => {
     const token = localStorage.getItem('dimonex_auth_token');
     if (!token) return;
@@ -120,7 +99,6 @@ export const PnLCalendarView: React.FC<Props> = ({ onNavigateTrade, hideBalance 
     fetchCalendarData();
   }, [fetchCalendarData]);
 
-  // Navigate months
   const handlePrevMonth = () => {
     if (currentMonth === 0) {
       setCurrentMonth(11);
@@ -145,7 +123,6 @@ export const PnLCalendarView: React.FC<Props> = ({ onNavigateTrade, hideBalance 
     setCurrentMonth(now.getMonth());
   };
 
-  // Format Value helper
   const formatVal = (valIdr: number, valUsdt: number, showSign = true): string => {
     if (hideBalance) return '••••••';
     const isIdr = currency === 'IDR';
@@ -158,24 +135,17 @@ export const PnLCalendarView: React.FC<Props> = ({ onNavigateTrade, hideBalance 
     return `${sign}$${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
   };
 
-  // Compute Calendar Grid Days
   const calendarGrid = useMemo(() => {
-    // Number of days in current month
     const totalDaysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-
-    // Day of the week for the 1st of the month (0 = Sun, 1 = Mon ... 6 = Sat)
     const firstDayIndexSunday = new Date(currentYear, currentMonth, 1).getDay();
-    // Convert to Monday-first (0 = Mon ... 6 = Sun)
     const startOffset = (firstDayIndexSunday + 6) % 7;
 
     const days = [];
 
-    // Preceding empty slots
     for (let i = 0; i < startOffset; i++) {
-      days.push({ isSpacer: true, dayNum: 0, dateKey: '' });
+      days.push({ isSpacer: true, dayNum: 0, dateKey: '', record: null as DayPnLRecord | null });
     }
 
-    // Actual calendar days
     for (let d = 1; d <= totalDaysInMonth; d++) {
       const dStr = String(d).padStart(2, '0');
       const dateKey = `${currentMonthKey}-${dStr}`;
@@ -191,7 +161,6 @@ export const PnLCalendarView: React.FC<Props> = ({ onNavigateTrade, hideBalance 
     return days;
   }, [currentYear, currentMonth, currentMonthKey, calendarMap]);
 
-  // Compute Monthly Summary Aggregates
   interface MonthSummaryData {
     totalPnlIdr: number;
     totalPnlUsdt: number;
@@ -256,49 +225,46 @@ export const PnLCalendarView: React.FC<Props> = ({ onNavigateTrade, hideBalance 
   const todayDateKey = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Jakarta' });
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Top Header: Month Navigation & Controls */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 rounded-xl bg-[#15171F] border border-[#292C38]">
-        {/* Month Selector */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 bg-[#0E1016] p-1 rounded-lg border border-[#292C38]">
+          <div className="flex items-center gap-1.5 bg-[#111820] p-1 rounded-[7px] border border-[#202B34]">
             <button
+              type="button"
               onClick={handlePrevMonth}
               title="Bulan Sebelumnya"
-              className="p-1 rounded text-[#9298A6] hover:text-[#F5F5F7] hover:bg-[#1C1F29] transition-colors"
+              className="p-1 rounded-[5px] text-[#A1AFB8] hover:text-[#E4EBEF] hover:bg-[#1D2832] transition-colors cursor-pointer"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
-            <div className="px-2 font-display font-bold text-sm text-[#F5F5F7] min-w-[140px] text-center">
+            <div className="px-2 font-semibold text-sm text-[#E4EBEF] min-w-[140px] text-center">
               {monthNamesID[currentMonth]} {currentYear}
             </div>
             <button
+              type="button"
               onClick={handleNextMonth}
               title="Bulan Berikutnya"
-              className="p-1 rounded text-[#9298A6] hover:text-[#F5F5F7] hover:bg-[#1C1F29] transition-colors"
+              className="p-1 rounded-[5px] text-[#A1AFB8] hover:text-[#E4EBEF] hover:bg-[#1D2832] transition-colors cursor-pointer"
             >
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>
 
-          <button
-            onClick={handleJumpToday}
-            className="px-2.5 py-1 text-xs font-mono font-semibold rounded-lg bg-[#1C1F29] text-[#9298A6] hover:text-[#F5F5F7] border border-[#292C38] transition-colors"
-          >
+          <Button variant="secondary" size="sm" onClick={handleJumpToday}>
             Hari Ini
-          </button>
+          </Button>
         </div>
 
-        {/* Currency Toggle & Quick Refresh */}
         <div className="flex items-center gap-2">
-          <div className="flex items-center bg-[#0E1016] p-0.5 rounded-lg border border-[#292C38] text-xs font-mono">
+          <div className="flex items-center bg-[#111820] p-0.5 rounded-[7px] border border-[#202B34] text-xs font-mono">
             <button
               type="button"
               onClick={() => setCurrency('IDR')}
-              className={`px-3 py-1 rounded font-bold transition-all ${
+              className={`px-3 py-1 rounded-[5px] font-medium transition-colors cursor-pointer ${
                 currency === 'IDR'
-                  ? 'bg-[#1C1F29] text-[#FF087F] border border-[#FF087F]/40 shadow-sm'
-                  : 'text-[#9298A6] hover:text-[#F5F5F7]'
+                  ? 'bg-[#1D2832] text-[#E4EBEF] border border-[#2B3944]'
+                  : 'text-[#71818B] hover:text-[#E4EBEF] border border-transparent'
               }`}
             >
               IDR (Rp)
@@ -306,71 +272,59 @@ export const PnLCalendarView: React.FC<Props> = ({ onNavigateTrade, hideBalance 
             <button
               type="button"
               onClick={() => setCurrency('USDT')}
-              className={`px-3 py-1 rounded font-bold transition-all ${
+              className={`px-3 py-1 rounded-[5px] font-medium transition-colors cursor-pointer ${
                 currency === 'USDT'
-                  ? 'bg-[#1C1F29] text-[#00C087] border border-[#00C087]/40 shadow-sm'
-                  : 'text-[#9298A6] hover:text-[#F5F5F7]'
+                  ? 'bg-[#1D2832] text-[#16A879] border border-[#16A879]/30'
+                  : 'text-[#71818B] hover:text-[#E4EBEF] border border-transparent'
               }`}
             >
               USDT ($)
             </button>
           </div>
 
-          <button
-            onClick={fetchCalendarData}
-            title="Segarkan kalender"
-            className="p-1.5 rounded-lg bg-[#0E1016] border border-[#292C38] hover:border-[#FF087F]/40 text-[#9298A6] hover:text-[#F5F5F7] transition-colors"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-[#FF087F]' : ''}`} />
-          </button>
+          <Button variant="secondary" size="sm" onClick={fetchCalendarData} title="Segarkan kalender">
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+          </Button>
         </div>
       </div>
 
-      {/* Monthly Performance Aggregates Banner */}
-      <div className="rounded-xl bg-[#15171F] border border-[#292C38] p-5 shadow-2xl">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {/* Monthly PnL */}
+      {/* Monthly Performance Aggregates */}
+      <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-5">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono tabular-nums">
           <div className="space-y-1">
-            <span className="text-xs font-semibold text-[#9298A6] block">Total PnL Bulan Ini</span>
-            <div className={`text-xl font-extrabold font-mono tracking-tight ${monthSummary.isProfit ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
+            <span className="text-xs font-sans font-medium text-[#A1AFB8] block">Total PnL Bulan Ini</span>
+            <div className={`text-xl font-semibold tracking-tight ${monthSummary.isProfit ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
               {formatVal(monthSummary.totalPnlIdr, monthSummary.totalPnlUsdt)}
             </div>
-            <span className="text-[11px] text-[#686D7A] font-mono block">
+            <span className="text-[11px] text-[#71818B] block">
               {monthNamesID[currentMonth]} {currentYear}
             </span>
           </div>
 
-          {/* Win Rate & Days */}
           <div className="space-y-1">
-            <span className="text-xs font-semibold text-[#9298A6] block">Rasio Kemenangan (Win Rate)</span>
-            <div className="text-xl font-extrabold font-mono text-[#00C087] tracking-tight">
-              {monthSummary.winRate}%
-            </div>
-            <div className="text-[11px] text-[#9298A6] font-mono">
-              <span className="text-[#00C087] font-bold">{monthSummary.winDays} Hari Untung</span>
-              <span className="text-[#686D7A]"> · </span>
-              <span className="text-[#EB3458] font-bold">{monthSummary.lossDays} Rugi</span>
+            <span className="text-xs font-sans font-medium text-[#A1AFB8] block">Win Rate</span>
+            <div className="text-xl font-semibold text-[#16A879] tracking-tight">{monthSummary.winRate}%</div>
+            <div className="text-[11px]">
+              <span className="text-[#16A879] font-semibold">{monthSummary.winDays} Hari Untung</span>
+              <span className="text-[#40515D]"> · </span>
+              <span className="text-[#EA5B65] font-semibold">{monthSummary.lossDays} Rugi</span>
             </div>
           </div>
 
-          {/* Total Monthly Trades */}
           <div className="space-y-1">
-            <span className="text-xs font-semibold text-[#9298A6] block">Aktivitas Transaksi</span>
-            <div className="text-xl font-extrabold font-mono text-[#F5F5F7] tracking-tight">
-              {monthSummary.totalTrades} Order
-            </div>
-            <span className="text-[11px] text-[#9298A6] font-mono block">
+            <span className="text-xs font-sans font-medium text-[#A1AFB8] block">Aktivitas Transaksi</span>
+            <div className="text-xl font-semibold text-[#E4EBEF] tracking-tight">{monthSummary.totalTrades} Order</div>
+            <span className="text-[11px] text-[#71818B] block">
               Vol: {formatVal(monthSummary.totalVolumeIdr, monthSummary.totalVolumeUsdt, false)}
             </span>
           </div>
 
-          {/* Best Day */}
           <div className="space-y-1">
-            <span className="text-xs font-semibold text-[#9298A6] block">Hari Terbaik Bulan Ini</span>
-            <div className="text-xl font-extrabold font-mono text-[#00C087] tracking-tight">
+            <span className="text-xs font-sans font-medium text-[#A1AFB8] block">Hari Terbaik Bulan Ini</span>
+            <div className="text-xl font-semibold text-[#16A879] tracking-tight">
               {monthSummary.bestDay != null ? formatVal(monthSummary.bestDay.pnlIdr, monthSummary.bestDay.pnlUsdt) : '-'}
             </div>
-            <span className="text-[11px] text-[#9298A6] font-mono block">
+            <span className="text-[11px] text-[#71818B] block">
               {monthSummary.bestDay != null ? monthSummary.bestDay.date : 'Belum ada'}
             </span>
           </div>
@@ -378,9 +332,8 @@ export const PnLCalendarView: React.FC<Props> = ({ onNavigateTrade, hideBalance 
       </div>
 
       {/* Interactive Calendar 7-Column Grid */}
-      <div className="rounded-xl bg-[#15171F] border border-[#292C38] p-4 lg:p-6 shadow-2xl">
-        {/* Day of Week Headers */}
-        <div className="grid grid-cols-7 gap-1.5 sm:gap-2 mb-2 text-center text-xs font-bold text-[#686D7A] font-mono">
+      <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4 lg:p-6">
+        <div className="grid grid-cols-7 gap-1.5 sm:gap-2 mb-2 text-center text-xs font-semibold text-[#71818B] font-mono">
           {dayNamesID.map(day => (
             <div key={day} className="py-1">
               {day}
@@ -388,14 +341,13 @@ export const PnLCalendarView: React.FC<Props> = ({ onNavigateTrade, hideBalance 
           ))}
         </div>
 
-        {/* Days Grid */}
         <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
           {calendarGrid.map((cell, idx) => {
             if (cell.isSpacer) {
               return (
                 <div
                   key={`spacer-${idx}`}
-                  className="h-20 sm:h-24 rounded-lg bg-[#0E1016]/30 border border-transparent opacity-30 pointer-events-none"
+                  className="h-20 sm:h-24 rounded-[7px] bg-[#111820]/40 border border-transparent opacity-40 pointer-events-none"
                 />
               );
             }
@@ -406,13 +358,12 @@ export const PnLCalendarView: React.FC<Props> = ({ onNavigateTrade, hideBalance 
             const isLoss = rec && rec.pnlIdr < 0;
             const isToday = cell.dateKey === todayDateKey;
 
-            // Cell Styles
-            let bgClass = 'bg-[#0E1016] border-[#292C38]/60 hover:border-[#FF087F]/50';
+            let bgClass = 'bg-[#111820] border-[#202B34] hover:border-[#40515D]';
             if (hasActivity) {
               if (isProfit) {
-                bgClass = 'bg-[#00C087]/10 border-[#00C087]/35 hover:border-[#00C087] hover:bg-[#00C087]/15';
+                bgClass = 'bg-[#12392F]/60 border-[#16A879]/35 hover:border-[#16A879] hover:bg-[#12392F]';
               } else if (isLoss) {
-                bgClass = 'bg-[#EB3458]/10 border-[#EB3458]/35 hover:border-[#EB3458] hover:bg-[#EB3458]/15';
+                bgClass = 'bg-[#401F27]/60 border-[#EA5B65]/35 hover:border-[#EA5B65] hover:bg-[#401F27]';
               }
             }
 
@@ -425,53 +376,47 @@ export const PnLCalendarView: React.FC<Props> = ({ onNavigateTrade, hideBalance 
                     setSelectedDayRecord(rec);
                   }
                 }}
-                className={`h-20 sm:h-24 p-1.5 sm:p-2 rounded-xl border flex flex-col justify-between text-left transition-all duration-150 group relative ${bgClass} ${
+                className={`h-20 sm:h-24 p-1.5 sm:p-2 rounded-[8px] border flex flex-col justify-between text-left transition-colors ${bgClass} ${
                   hasActivity ? 'cursor-pointer' : 'cursor-default'
                 }`}
               >
-                {/* Day Header: Day Number + Today Badge */}
                 <div className="flex items-center justify-between w-full">
-                  <span className={`text-xs font-bold font-mono ${
-                    isToday ? 'text-[#FF087F] font-extrabold' : 'text-[#F5F5F7]'
-                  }`}>
+                  <span className={`text-xs font-semibold font-mono ${isToday ? 'text-[#C1D0D6]' : 'text-[#E4EBEF]'}`}>
                     {cell.dayNum}
                   </span>
                   {isToday && (
-                    <span className="px-1 py-0.2 rounded text-[8px] font-bold bg-[#FF087F] text-white">
-                      HARI INI
+                    <span className="px-1.5 py-0.5 rounded-[4px] text-[8px] font-semibold bg-[#8DA5B1] text-[#090D12]">
+                      TODAY
                     </span>
                   )}
                 </div>
 
-                {/* Day Content: PnL & Trade Badge */}
                 {hasActivity ? (
-                  <div className="space-y-0.5 my-auto w-full">
-                    <div className={`text-[11px] sm:text-xs font-bold font-mono truncate ${
-                      isProfit ? 'text-[#00C087]' : (isLoss ? 'text-[#EB3458]' : 'text-[#F5F5F7]')
-                    }`}>
+                  <div className="space-y-0.5 my-auto w-full font-mono tabular-nums">
+                    <div
+                      className={`text-[11px] sm:text-xs font-semibold truncate ${
+                        isProfit ? 'text-[#16A879]' : isLoss ? 'text-[#EA5B65]' : 'text-[#E4EBEF]'
+                      }`}
+                    >
                       {formatVal(rec.pnlIdr, rec.pnlUsdt)}
                     </div>
-                    <div className="flex items-center justify-between text-[9px] sm:text-[10px] font-mono text-[#9298A6]">
-                      <span className={rec.returnPct >= 0 ? 'text-[#00C087]' : 'text-[#EB3458]'}>
-                        {rec.returnPct >= 0 ? '+' : ''}{rec.returnPct}%
+                    <div className="flex items-center justify-between text-[9px] sm:text-[10px] text-[#A1AFB8]">
+                      <span className={rec.returnPct >= 0 ? 'text-[#16A879]' : 'text-[#EA5B65]'}>
+                        {rec.returnPct >= 0 ? '+' : ''}
+                        {rec.returnPct}%
                       </span>
-                      <span className="text-[#686D7A] hidden sm:inline">
-                        {rec.tradesCount} tx
-                      </span>
+                      <span className="text-[#71818B] hidden sm:inline">{rec.tradesCount} tx</span>
                     </div>
                   </div>
                 ) : (
-                  <div className="text-[10px] text-[#686D7A] font-mono my-auto">
-                    -
-                  </div>
+                  <div className="text-[10px] text-[#53616A] font-mono my-auto">-</div>
                 )}
 
-                {/* Micro Win/Loss Dots */}
                 {hasActivity && (
-                  <div className="flex items-center gap-1 pt-1 border-t border-white/5 text-[9px] font-mono text-[#686D7A]">
-                    <span className="text-[#00C087] font-semibold">{rec.winCount}W</span>
+                  <div className="flex items-center gap-1 pt-1 border-t border-[#202B34] text-[9px] font-mono text-[#71818B]">
+                    <span className="text-[#16A879] font-semibold">{rec.winCount}W</span>
                     <span>/</span>
-                    <span className="text-[#EB3458] font-semibold">{rec.lossCount}L</span>
+                    <span className="text-[#EA5B65] font-semibold">{rec.lossCount}L</span>
                   </div>
                 )}
               </button>
@@ -479,30 +424,28 @@ export const PnLCalendarView: React.FC<Props> = ({ onNavigateTrade, hideBalance 
           })}
         </div>
 
-        {/* Legend & Help Footer */}
-        <div className="mt-5 pt-4 border-t border-[#292C38]/80 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
+        <div className="mt-5 pt-4 border-t border-[#202B34] flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded bg-[#00C087]/20 border border-[#00C087]" />
-              <span className="text-[#9298A6]">Profit (Untung)</span>
+              <span className="w-3 h-3 rounded-[3px] bg-[#12392F] border border-[#16A879]" />
+              <span className="text-[#A1AFB8]">Profit</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded bg-[#EB3458]/20 border border-[#EB3458]" />
-              <span className="text-[#9298A6]">Loss (Rugi)</span>
+              <span className="w-3 h-3 rounded-[3px] bg-[#401F27] border border-[#EA5B65]" />
+              <span className="text-[#A1AFB8]">Loss</span>
             </div>
             <div className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded bg-[#0E1016] border border-[#292C38]" />
-              <span className="text-[#686D7A]">Tidak Ada Order</span>
+              <span className="w-3 h-3 rounded-[3px] bg-[#111820] border border-[#202B34]" />
+              <span className="text-[#71818B]">No Activity</span>
             </div>
           </div>
 
-          <span className="text-[11px] text-[#686D7A]">
-            💡 Klik tanggal untuk membuka daftar riwayat transaksi & eksekusi order hari tersebut.
+          <span className="text-[11px] font-sans text-[#71818B]">
+            Klik tanggal untuk melihat daftar eksekusi order hari tersebut.
           </span>
         </div>
       </div>
 
-      {/* Day Detail Inspector Modal */}
       {selectedDayRecord && (
         <Modal
           isOpen={Boolean(selectedDayRecord)}
@@ -512,78 +455,73 @@ export const PnLCalendarView: React.FC<Props> = ({ onNavigateTrade, hideBalance 
           maxWidth="max-w-2xl"
         >
           <div className="space-y-4">
-            {/* Day Financial Summary Card */}
-            <div className="p-4 rounded-xl bg-[#0E1016] border border-[#292C38] grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
+            <div className="p-4 rounded-[10px] bg-[#111820] border border-[#202B34] grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono tabular-nums">
               <div>
-                <span className="text-[#686D7A] block text-[10px]">Total PnL Bersih</span>
-                <span className={`text-sm font-bold ${selectedDayRecord.pnlIdr >= 0 ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
+                <span className="text-[#71818B] font-sans block text-[10px]">Total PnL Bersih</span>
+                <span className={`text-sm font-semibold ${selectedDayRecord.pnlIdr >= 0 ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
                   {formatVal(selectedDayRecord.pnlIdr, selectedDayRecord.pnlUsdt)}
                 </span>
               </div>
               <div>
-                <span className="text-[#686D7A] block text-[10px]">Return Harian</span>
-                <span className={`text-sm font-bold ${selectedDayRecord.returnPct >= 0 ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
-                  {selectedDayRecord.returnPct >= 0 ? '+' : ''}{selectedDayRecord.returnPct}%
+                <span className="text-[#71818B] font-sans block text-[10px]">Return Harian</span>
+                <span className={`text-sm font-semibold ${selectedDayRecord.returnPct >= 0 ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
+                  {selectedDayRecord.returnPct >= 0 ? '+' : ''}
+                  {selectedDayRecord.returnPct}%
                 </span>
               </div>
               <div>
-                <span className="text-[#686D7A] block text-[10px]">Total Volume</span>
-                <span className="text-sm font-bold text-[#F5F5F7]">
+                <span className="text-[#71818B] font-sans block text-[10px]">Total Volume</span>
+                <span className="text-sm font-semibold text-[#E4EBEF]">
                   {formatVal(selectedDayRecord.volumeIdr, selectedDayRecord.volumeUsdt, false)}
                 </span>
               </div>
               <div>
-                <span className="text-[#686D7A] block text-[10px]">Total Fee Dibayar</span>
-                <span className="text-sm font-bold text-[#EB3458]">
+                <span className="text-[#71818B] font-sans block text-[10px]">Total Fee Dibayar</span>
+                <span className="text-sm font-semibold text-[#EA5B65]">
                   {formatVal(selectedDayRecord.feesIdr, selectedDayRecord.feesUsdt, false)}
                 </span>
               </div>
             </div>
 
-            {/* List of Executed Trades on this Date */}
             <div>
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-[#F5F5F7] font-display">
+                <span className="text-xs font-semibold text-[#E4EBEF]">
                   Daftar Transaksi Eksekusi ({selectedDayRecord.trades.length} Transaksi)
                 </span>
-                <span className="text-[11px] font-mono text-[#00C087]">
+                <span className="text-[11px] font-mono text-[#16A879]">
                   {selectedDayRecord.winCount} Menang · {selectedDayRecord.lossCount} Rugi
                 </span>
               </div>
 
-              <div className="max-h-64 overflow-y-auto rounded-lg border border-[#292C38]">
-                <table className="w-full text-left text-xs font-mono">
-                  <thead className="bg-[#0E1016] text-[#686D7A] text-[10px] border-b border-[#292C38] sticky top-0">
+              <div className="max-h-64 overflow-y-auto rounded-[10px] border border-[#202B34]">
+                <table className="w-full text-left text-xs font-mono tabular-nums">
+                  <thead className="bg-[#111820] text-[#71818B] text-[10px] uppercase tracking-wider border-b border-[#202B34] sticky top-0">
                     <tr>
-                      <th className="py-2.5 px-3">Waktu</th>
-                      <th className="py-2.5 px-3">Pair</th>
-                      <th className="py-2.5 px-3">Side</th>
-                      <th className="py-2.5 px-3 text-right">Harga</th>
-                      <th className="py-2.5 px-3 text-right">Jumlah</th>
-                      <th className="py-2.5 px-3 text-right">Total Nilai</th>
-                      <th className="py-2.5 px-3 text-right">PnL</th>
+                      <th className="py-2.5 px-3 font-sans font-medium">Waktu</th>
+                      <th className="py-2.5 px-3 font-sans font-medium">Pair</th>
+                      <th className="py-2.5 px-3 font-sans font-medium">Side</th>
+                      <th className="py-2.5 px-3 text-right font-sans font-medium">Harga</th>
+                      <th className="py-2.5 px-3 text-right font-sans font-medium">Jumlah</th>
+                      <th className="py-2.5 px-3 text-right font-sans font-medium">Total Nilai</th>
+                      <th className="py-2.5 px-3 text-right font-sans font-medium">PnL</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#292C38]/40 bg-[#0E1016]/30">
+                  <tbody className="divide-y divide-[#202B34] bg-[#141C24]">
                     {selectedDayRecord.trades.map(tx => {
                       const isBuy = tx.side === 'BUY';
                       const isUp = tx.pnlIdr >= 0;
 
                       return (
-                        <tr key={tx.id} className="hover:bg-[#1C1F29]/60 transition-colors">
-                          <td className="py-2.5 px-3 text-[#9298A6]">{tx.time}</td>
-                          <td className="py-2.5 px-3 font-bold text-[#F5F5F7]">{tx.pairId}</td>
-                          <td className="py-2.5 px-3">
-                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                              isBuy ? 'bg-[#00C087]/15 text-[#00C087]' : 'bg-[#EB3458]/15 text-[#EB3458]'
-                            }`}>
-                              {tx.side}
-                            </span>
+                        <tr key={tx.id} className="hover:bg-[#17212B] transition-colors">
+                          <td className="py-2.5 px-3 text-[#A1AFB8]">{tx.time}</td>
+                          <td className="py-2.5 px-3 font-semibold text-[#E4EBEF]">{tx.pairId}</td>
+                          <td className="py-2.5 px-3 font-sans">
+                            <StatusBadge tone={isBuy ? 'buy' : 'sell'}>{tx.side}</StatusBadge>
                           </td>
-                          <td className="py-2.5 px-3 text-right text-[#F5F5F7]">{tx.price}</td>
-                          <td className="py-2.5 px-3 text-right text-[#F5F5F7]">{tx.quantity}</td>
-                          <td className="py-2.5 px-3 text-right text-[#9298A6]">{tx.quoteVolume}</td>
-                          <td className={`py-2.5 px-3 text-right font-bold ${isUp ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
+                          <td className="py-2.5 px-3 text-right text-[#E4EBEF]">{tx.price}</td>
+                          <td className="py-2.5 px-3 text-right text-[#E4EBEF]">{tx.quantity}</td>
+                          <td className="py-2.5 px-3 text-right text-[#A1AFB8]">{tx.quoteVolume}</td>
+                          <td className={`py-2.5 px-3 text-right font-semibold ${isUp ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
                             {formatVal(tx.pnlIdr, tx.pnlUsdt)}
                           </td>
                         </tr>
@@ -595,11 +533,7 @@ export const PnLCalendarView: React.FC<Props> = ({ onNavigateTrade, hideBalance 
             </div>
 
             <div className="pt-2 flex justify-end">
-              <Button
-                variant="secondary"
-                size="md"
-                onClick={() => setSelectedDayRecord(null)}
-              >
+              <Button variant="secondary" size="md" onClick={() => setSelectedDayRecord(null)}>
                 Tutup
               </Button>
             </div>

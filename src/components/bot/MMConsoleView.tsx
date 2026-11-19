@@ -16,15 +16,52 @@
  * - Server-side Risk Controls and Emergency Kill-Switch.
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { UserProfile, TradingPairItem, BotInstance, OrderItem, TradeItem, Environment, BotStatus, BotType, ExternalWsWhitelistEntry, BacktestRequest } from '../../types/index.js';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  Activity,
+  BarChart3,
+  BellRing,
+  Bot,
+  CheckCircle2,
+  Coins,
+  Cpu,
+  Crosshair,
+  DollarSign,
+  FlaskConical,
+  Globe,
+  Layers,
+  Lock,
+  Pause,
+  Play,
+  Radio,
+  RefreshCw,
+  Scale,
+  Settings,
+  ShieldAlert,
+  ShieldCheck,
+  Sliders,
+  Square,
+  Trash2,
+  TrendingUp,
+  Unlock,
+  X,
+  Zap,
+  AlertTriangle
+} from 'lucide-react';
+import { UserProfile, TradingPairItem, BotInstance, OrderItem, TradeItem, Environment, BotStatus, BotType, ExternalWsWhitelistEntry, BacktestRequest, PriceThresholdTrigger, PriceThresholdEvent } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
+import { playThresholdSound } from '../../lib/thresholdAudio.js';
+import { Button } from '../ui/Button.js';
+import { Modal } from '../ui/Modal.js';
+import { StatusBadge } from '../ui/StatusBadge.js';
+import { useToast } from '../ui/Toast.js';
 import { SmartHftLadderSection } from './SmartHftLadderSection.js';
 import { HftBacktestSection } from './HftBacktestSection.js';
 import { AdvancedMarketMakerSection } from './AdvancedMarketMakerSection.js';
 import { PerformanceDashboardSection } from './PerformanceDashboardSection.js';
 import { PortfolioRebalanceSection } from './PortfolioRebalanceSection.js';
 import { HftEngineTelemetrySection } from './HftEngineTelemetrySection.js';
+import { PriceThresholdSection } from './PriceThresholdSection.js';
 
 interface Props {
   user: UserProfile | null;
@@ -41,6 +78,7 @@ type MMTab =
   | 'ADVANCED_MM'
   | 'SMART_HFT_LADDER'
   | 'HFT_BACKTEST'
+  | 'PRICE_THRESHOLDS'
   | 'QUANT_HFT_MM'
   | 'DEPTH_LIQUIDITY'
   | 'MOVEMENT_DEPTH'
@@ -63,6 +101,7 @@ export const MMConsoleView: React.FC<Props> = ({
   onOpenAuthModal,
   onOpenSecurityView
 }) => {
+  const { showToast } = useToast();
   const [activeTab, setActiveTabState] = useState<MMTab>(() => {
     return (localStorage.getItem('dimonex_mm_tab') as MMTab) || 'OVERVIEW';
   });
@@ -111,6 +150,15 @@ export const MMConsoleView: React.FC<Props> = ({
   const [isKillSwitchConfirmOpen, setIsKillSwitchConfirmOpen] = useState(false);
   const [backtestPreset, setBacktestPreset] = useState<Partial<BacktestRequest> | null>(null);
   const [deployPresetFromBacktest, setDeployPresetFromBacktest] = useState<BacktestRequest | null>(null);
+
+  // Price Threshold Alerts & Automated Ladder Adjustment State
+  const [thresholdTriggers, setThresholdTriggers] = useState<PriceThresholdTrigger[]>([]);
+  const [thresholdEvents, setThresholdEvents] = useState<PriceThresholdEvent[]>([]);
+  const [thresholdSoundMuted, setThresholdSoundMuted] = useState<boolean>(
+    () => localStorage.getItem('dimonex_threshold_muted') === '1'
+  );
+  const seenThresholdEventIdsRef = useRef<Set<string>>(new Set());
+  const thresholdInitializedRef = useRef<boolean>(false);
 
   // External Feeds & FX Rate State
   const [externalFeeds, setExternalFeeds] = useState<any>(null);
@@ -441,11 +489,48 @@ export const MMConsoleView: React.FC<Props> = ({
     }
   }, [user, currentEnv, selectedBotId]);
 
+  const loadThresholds = useCallback(async () => {
+    if (!user) return;
+    try {
+      const res = await fetch(`/api/mm/thresholds?environment=${currentEnv}`, {
+        headers: getAuthHeaders()
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const triggersList: PriceThresholdTrigger[] = Array.isArray(data.triggers) ? data.triggers : [];
+      const eventsList: PriceThresholdEvent[] = Array.isArray(data.events) ? data.events : [];
+      setThresholdTriggers(triggersList);
+      setThresholdEvents(eventsList);
+
+      if (!thresholdInitializedRef.current) {
+        eventsList.forEach(ev => seenThresholdEventIdsRef.current.add(ev.id));
+        thresholdInitializedRef.current = true;
+      } else {
+        const freshEvents = eventsList.filter(ev => !seenThresholdEventIdsRef.current.has(ev.id));
+        if (freshEvents.length > 0) {
+          freshEvents.forEach(ev => seenThresholdEventIdsRef.current.add(ev.id));
+          const latest = freshEvents[0];
+          if (latest.soundEnabled && !thresholdSoundMuted) {
+            playThresholdSound(latest.soundTone);
+          }
+          showToast(
+            'warning',
+            `[${latest.pairId}] ${latest.triggerName}: ${latest.adjustmentSummary}`
+          );
+        }
+      }
+    } catch {}
+  }, [user, currentEnv, thresholdSoundMuted, showToast]);
+
   useEffect(() => {
     loadData();
-    const timer = setInterval(loadData, 2500);
+    loadThresholds();
+    const timer = setInterval(() => {
+      loadData();
+      loadThresholds();
+    }, 2500);
     return () => clearInterval(timer);
-  }, [loadData]);
+  }, [loadData, loadThresholds]);
 
   // Load selected bot logs
   useEffect(() => {
@@ -1272,16 +1357,34 @@ export const MMConsoleView: React.FC<Props> = ({
     } catch (e) {}
   };
 
-  const handleExportCsv = (botType: 'ORDER_BOT' | 'VOLUME_BOT') => {
-    const token = localStorage.getItem('dimonex_auth_token');
-    window.open(`/api/mm/csv/export?botType=${botType}`, '_blank');
+  const handleExportCsv = async (botType: 'ORDER_BOT' | 'VOLUME_BOT') => {
+    try {
+      const token = localStorage.getItem('dimonex_auth_token');
+      const res = await fetch(`/api/mm/csv/export?botType=${botType}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setFeedbackMsg({ type: 'error', text: err.error || 'Gagal mengekspor konfigurasi CSV.' });
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `dimonex_${botType.toLowerCase()}_export.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      setFeedbackMsg({ type: 'success', text: `Ekspor CSV ${botType} selesai diunduh.` });
+    } catch (e: any) {
+      setFeedbackMsg({ type: 'error', text: e?.message || 'Gagal mengekspor CSV.' });
+    }
   };
 
-  const handleKillSwitch = async () => {
-    if (!window.confirm('PERINGATAN KRITIS: Aktifkan Emergency Kill-Switch? Semua bot yang sedang berjalan akan dihentikan dan seluruh order terbuka akan langsung dibatalkan.')) return;
-    try {
-      await handleAction('/api/mm/kill-switch', 'POST');
-    } catch (e) {}
+  const handleKillSwitch = () => {
+    setIsKillSwitchConfirmOpen(true);
   };
 
   const handleResetKillSwitch = async () => {
@@ -1292,51 +1395,81 @@ export const MMConsoleView: React.FC<Props> = ({
 
   if (!user) {
     return (
-      <div className="flex flex-col items-center justify-center p-12 bg-[#090d14] border border-[#1e293b] rounded-xl text-center">
-        <h2 className="text-xl font-bold text-white mb-2">Market Maker Console Memerlukan Login</h2>
-        <p className="text-sm text-slate-400 max-w-md mb-6">
+      <div className="flex flex-col items-center justify-center p-12 bg-[#141C24] border border-[#202B34] rounded-[10px] text-center">
+        <div className="w-11 h-11 rounded-[10px] bg-[#1D2832] border border-[#2B3944] flex items-center justify-center text-[#8DA5B1] mb-4">
+          <Lock className="w-5 h-5" />
+        </div>
+        <h2 className="text-lg font-semibold text-[#E4EBEF] mb-2">Market Maker Console Memerlukan Login</h2>
+        <p className="text-sm text-[#A1AFB8] max-w-md mb-6">
           Akses MM Console dibatasi untuk peran Market Maker (MM) dan Administrator bursa dengan otorisasi khusus.
         </p>
-        <button
-          onClick={onOpenAuthModal}
-          className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-lg shadow-md transition-colors"
-        >
+        <Button variant="primary" size="md" onClick={onOpenAuthModal}>
           Masuk ke Akun MM
-        </button>
+        </Button>
       </div>
     );
   }
 
   const selectedBot = instances.find(b => b.id === selectedBotId) || instances[0];
 
+  const navTabs: { id: MMTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+    { id: 'OVERVIEW', label: 'Overview', icon: Layers },
+    { id: 'PERFORMANCE', label: 'Dasbor Kinerja (D3)', icon: TrendingUp },
+    { id: 'HFT_TELEMETRY', label: 'HFT Telemetry', icon: Activity },
+    { id: 'PORTFOLIO_REBALANCE', label: 'Rebalancing', icon: Scale },
+    { id: 'ADVANCED_MM', label: 'Advanced MM', icon: ShieldCheck },
+    { id: 'SMART_HFT_LADDER', label: 'Smart HFT Ladder', icon: Sliders },
+    { id: 'HFT_BACKTEST', label: 'Backtest Engine', icon: FlaskConical },
+    { id: 'PRICE_THRESHOLDS', label: 'Price Thresholds', icon: BellRing },
+    { id: 'QUANT_HFT_MM', label: 'Quant HFT MM', icon: Zap },
+    { id: 'DEPTH_LIQUIDITY', label: 'Depth & Liquidity', icon: BarChart3 },
+    { id: 'MOVEMENT_DEPTH', label: 'Depth Movement (WS)', icon: Radio },
+    { id: 'PRICE_FOLLOWER', label: 'Price Follower', icon: Crosshair },
+    { id: 'EXTERNAL_FEEDS', label: 'External Feeds', icon: Globe },
+    { id: 'FX_RATES', label: 'USDT/IDR FX Engine', icon: DollarSign },
+    { id: 'ORDER_BOTS', label: 'Order Bots', icon: Bot },
+    { id: 'VOLUME_BOTS', label: 'Volume & Test Bots', icon: Cpu },
+    { id: 'CONFIGURATIONS', label: 'Configurations', icon: Sliders },
+    { id: 'BOT_ACCOUNTS', label: 'Bot Accounts', icon: ShieldCheck },
+    { id: 'ORDERS', label: 'Orders', icon: Layers },
+    { id: 'EXECUTED_TRADES', label: 'Executed Trades', icon: CheckCircle2 },
+    { id: 'ACTIVITY_LOGS', label: 'Activity Logs', icon: Activity },
+    { id: 'RISK_CONTROLS', label: 'Risk Controls', icon: ShieldAlert },
+    { id: 'SETTINGS', label: 'Settings', icon: Settings }
+  ];
+
   return (
     <div className="flex flex-col gap-5 w-full">
       {/* Top Console Header & Environment Switcher */}
-      <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-[#090d14] border border-[#1e293b] rounded-xl">
-        <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-[#141C24] border border-[#202B34] rounded-[10px]">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-[7px] bg-[#17212B] border border-[#2B3944] flex items-center justify-center text-[#8DA5B1] shrink-0">
+            <Bot className="w-4 h-4" />
+          </div>
           <div>
-            <h1 className="text-lg font-bold text-white tracking-tight">Market Maker & Algorithmic Bot Console</h1>
-            <p className="text-xs text-slate-400">
+            <h1 className="text-base font-semibold text-[#E4EBEF] tracking-tight">Market Maker & Algorithmic Bot Console</h1>
+            <p className="text-xs text-[#A1AFB8]">
               Operasional likuiditas real-time terhubung langsung ke mesin matching engine internal DIMONEX.
             </p>
           </div>
         </div>
 
-        {/* Environment Badge & Switcher (Phase 6) */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center bg-[#131b26] p-1 rounded-lg border border-[#1e293b]">
+        {/* Environment Badge & Switcher */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center bg-[#111820] p-1 rounded-[7px] border border-[#202B34]">
             {(['DEMO', 'STAGING', 'PRODUCTION'] as const).map(env => (
               <button
                 key={env}
+                type="button"
                 onClick={() => setCurrentEnv(env)}
-                className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all ${
+                className={`px-3 py-1.5 text-xs font-semibold rounded-[5px] transition-colors cursor-pointer ${
                   currentEnv === env
                     ? env === 'PRODUCTION'
-                      ? 'bg-red-600 text-white shadow-sm'
+                      ? 'bg-[#401F27] text-[#EA5B65] border border-[#EA5B65]/40'
                       : env === 'STAGING'
-                      ? 'bg-amber-600 text-white shadow-sm'
-                      : 'bg-emerald-600 text-white shadow-sm'
-                    : 'text-slate-400 hover:text-white'
+                      ? 'bg-[#2C2415] text-[#D6A85C] border border-[#D6A85C]/40'
+                      : 'bg-[#12392F] text-[#35B887] border border-[#16A879]/40'
+                    : 'text-[#71818B] hover:text-[#E4EBEF]'
                 }`}
               >
                 {env === 'DEMO' ? 'DEMO / SANDBOX' : env}
@@ -1344,163 +1477,145 @@ export const MMConsoleView: React.FC<Props> = ({
             ))}
           </div>
 
-          {/* Kill Switch Button (Phase 10) */}
           {riskControls?.isKillSwitchActive ? (
-            <button
-              onClick={handleResetKillSwitch}
-              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg shadow transition-colors flex items-center gap-1.5"
-            >
-              <span>✓</span> Reset Kill-Switch
-            </button>
+            <Button variant="profit" size="sm" onClick={handleResetKillSwitch} icon={<CheckCircle2 className="w-3.5 h-3.5" />}>
+              Reset Kill-Switch
+            </Button>
           ) : (
-            <button
-              onClick={() => setIsKillSwitchConfirmOpen(true)}
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={handleKillSwitch}
               title="Emergency Kill-Switch: Halt all bots and purge open orders"
-              className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-lg shadow transition-colors flex items-center gap-1.5 animate-pulse"
+              icon={<ShieldAlert className="w-3.5 h-3.5" />}
             >
-              <span>🛑</span> Kill-Switch
-            </button>
+              Kill-Switch
+            </Button>
           )}
         </div>
       </div>
 
       {/* REAL-TIME METRICS SUMMARY & EMERGENCY KILL-SWITCH BAR */}
-      <div className="bg-[#0b121f] border border-[#1e293b] rounded-xl p-4 shadow-lg">
-        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 mb-3 border-b border-[#1e293b]/80">
+      <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 mb-3 border-b border-[#202B34]">
           <div className="flex items-center gap-2.5">
-            <span className="flex h-3 w-3 relative">
-              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                (overview?.activeBots ?? 0) > 0 ? 'bg-emerald-400' : 'bg-slate-400'
-              }`}></span>
-              <span className={`relative inline-flex rounded-full h-3 w-3 ${
-                (overview?.activeBots ?? 0) > 0 ? 'bg-emerald-500' : 'bg-slate-500'
-              }`}></span>
-            </span>
-            <span className="text-xs font-bold text-white tracking-wide uppercase">
+            <span
+              className={`h-2.5 w-2.5 rounded-full ${
+                (overview?.activeBots ?? 0) > 0 ? 'bg-[#16A879]' : 'bg-[#71818B]'
+              }`}
+            />
+            <span className="text-xs font-semibold text-[#E4EBEF] tracking-wide uppercase">
               Ringkasan Metrik Real-Time Market Maker ({currentEnv})
             </span>
-            <span className="text-[11px] px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 font-mono">
-              Live Engine Stream
-            </span>
+            <StatusBadge tone="info">Live Engine Stream</StatusBadge>
           </div>
 
           <div className="flex items-center gap-2 text-xs">
             {riskControls?.isKillSwitchActive ? (
-              <span className="px-2.5 py-1 rounded-full bg-red-500/20 text-red-400 border border-red-500/30 font-bold flex items-center gap-1.5 animate-pulse">
-                <span>🛑</span>
-                <span>EMERGENCY KILL-SWITCH AKTIF</span>
-              </span>
+              <StatusBadge tone="danger" dot>EMERGENCY KILL-SWITCH AKTIF</StatusBadge>
             ) : (
-              <span className="px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-emerald-400"></span>
-                <span>Sistem Operasional Normal</span>
-              </span>
+              <StatusBadge tone="success" dot>Sistem Operasional Normal</StatusBadge>
             )}
           </div>
         </div>
 
-        {/* 3 User-Requested Metrik Utama + Tombol Kill-Switch */}
+        {/* 3 Metrik Utama + Tombol Kill-Switch */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {/* Metrik 1: Jumlah Bot Aktif */}
-          <div className="p-3.5 bg-[#070b13] border border-[#1e293b] rounded-xl flex flex-col justify-between hover:border-slate-700 transition-colors">
+          <div className="p-3.5 bg-[#111820] border border-[#202B34] rounded-[10px] flex flex-col justify-between hover:border-[#2B3944] transition-colors">
             <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-semibold text-slate-400">Jumlah Bot Aktif</span>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
-                (overview?.activeBots ?? 0) > 0 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'
-              }`}>
+              <span className="text-xs font-medium text-[#A1AFB8]">Jumlah Bot Aktif</span>
+              <StatusBadge tone={(overview?.activeBots ?? 0) > 0 ? 'success' : 'neutral'}>
                 {overview?.activeBots ?? 0} RUNNING
-              </span>
+              </StatusBadge>
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-bold font-mono text-emerald-400">
+              <span className="text-2xl font-semibold font-mono tabular-nums text-[#35B887]">
                 {overview?.activeBots ?? 0}
               </span>
-              <span className="text-xs font-mono text-slate-500">
+              <span className="text-xs font-mono tabular-nums text-[#71818B]">
                 / {overview?.totalBots ?? instances.length} terdaftar
               </span>
             </div>
-            <span className="text-[10px] text-slate-400 mt-1 block">
-              Smart HFT: {instances.filter(b => b.botType === 'SMART_HFT_LADDER' && b.status === 'RUNNING').length} · Quant HFT: {instances.filter(b => b.botType === 'QUANT_HFT_MM' && b.status === 'RUNNING').length} · Depth: {instances.filter(b => b.botType === 'DEPTH_LIQUIDITY' && b.status === 'RUNNING').length} · Depth Move (WS): {instances.filter(b => b.botType === 'MOVEMENT_DEPTH_LIQUIDITY' && b.status === 'RUNNING').length} · Order: {instances.filter(b => b.botType === 'ORDER_BOT' && b.status === 'RUNNING').length} · Volume: {instances.filter(b => b.botType === 'VOLUME_BOT' && b.status === 'RUNNING').length}
+            <span className="text-[11px] text-[#71818B] mt-1.5 block font-mono">
+              Smart HFT: {instances.filter(b => b.botType === 'SMART_HFT_LADDER' && b.status === 'RUNNING').length} · Quant HFT: {instances.filter(b => b.botType === 'QUANT_HFT_MM' && b.status === 'RUNNING').length} · Depth: {instances.filter(b => b.botType === 'DEPTH_LIQUIDITY' && b.status === 'RUNNING').length} · WS Move: {instances.filter(b => b.botType === 'MOVEMENT_DEPTH_LIQUIDITY' && b.status === 'RUNNING').length} · Order: {instances.filter(b => b.botType === 'ORDER_BOT' && b.status === 'RUNNING').length} · Vol: {instances.filter(b => b.botType === 'VOLUME_BOT' && b.status === 'RUNNING').length}
             </span>
           </div>
 
-          {/* Metrik 2: Total Order Ditempatkan Semua Bot */}
-          <div className="p-3.5 bg-[#070b13] border border-[#1e293b] rounded-xl flex flex-col justify-between hover:border-slate-700 transition-colors">
+          <div className="p-3.5 bg-[#111820] border border-[#202B34] rounded-[10px] flex flex-col justify-between hover:border-[#2B3944] transition-colors">
             <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-semibold text-slate-400">Total Order Ditempatkan</span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 font-bold">
-                {overview?.ordersFilled ?? 0} filled
-              </span>
+              <span className="text-xs font-medium text-[#A1AFB8]">Total Order Ditempatkan</span>
+              <StatusBadge tone="info">{overview?.ordersFilled ?? 0} filled</StatusBadge>
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="text-2xl font-bold font-mono text-white">
+              <span className="text-2xl font-semibold font-mono tabular-nums text-[#E4EBEF]">
                 {(overview?.ordersSubmitted ?? 0).toLocaleString('id-ID')}
               </span>
-              <span className="text-xs font-mono text-slate-500">
-                orders
-              </span>
+              <span className="text-xs font-mono text-[#71818B]">orders</span>
             </div>
-            <span className="text-[10px] text-slate-400 mt-1 block">
+            <span className="text-[11px] text-[#71818B] mt-1.5 block font-mono tabular-nums">
               Fill Rate: {overview?.ordersSubmitted ? Math.round(((overview.ordersFilled || 0) / overview.ordersSubmitted) * 100) : 0}% ({overview?.totalTrades ?? 0} trades executed)
             </span>
           </div>
 
-          {/* Metrik 3: Volume Trading 24 Jam Khusus Bot */}
-          <div className="p-3.5 bg-[#070b13] border border-[#1e293b] rounded-xl flex flex-col justify-between hover:border-slate-700 transition-colors">
+          <div className="p-3.5 bg-[#111820] border border-[#202B34] rounded-[10px] flex flex-col justify-between hover:border-[#2B3944] transition-colors">
             <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-semibold text-slate-400">Volume 24 Jam Khusus Bot</span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-bold">
-                {overview?.bot24hTradesCount ?? 0} trades / 24j
-              </span>
+              <span className="text-xs font-medium text-[#A1AFB8]">Volume 24 Jam Khusus Bot</span>
+              <StatusBadge tone="warning">{overview?.bot24hTradesCount ?? 0} trades / 24j</StatusBadge>
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="text-xl font-bold font-mono text-amber-400 truncate">
+              <span className="text-xl font-semibold font-mono tabular-nums text-[#D6A85C] truncate">
                 {overview?.bot24hVolumeFormattedIdr || 'Rp 0'}
               </span>
             </div>
-            <span className="text-[10px] text-slate-400 mt-1 block">
-              Dihasilkan murni khusus dari transaksi pasar internal bot
+            <span className="text-[11px] text-[#71818B] mt-1.5 block">
+              Dihasilkan murni dari transaksi pasar internal bot
             </span>
           </div>
 
-          {/* Tombol Kill-Switch (Boll Kill Switch Darurat) */}
-          <div className={`p-3.5 rounded-xl border flex flex-col justify-between transition-all ${
-            riskControls?.isKillSwitchActive
-              ? 'bg-red-950/40 border-red-500 shadow-md shadow-red-900/30'
-              : 'bg-[#120a10] border-red-900/50 hover:border-red-600'
-          }`}>
+          <div
+            className={`p-3.5 rounded-[10px] border flex flex-col justify-between transition-colors ${
+              riskControls?.isKillSwitchActive
+                ? 'bg-[#401F27]/50 border-[#EA5B65]/60'
+                : 'bg-[#111820] border-[#EA5B65]/30 hover:border-[#EA5B65]/60'
+            }`}
+          >
             <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-bold text-red-300 flex items-center gap-1">
-                <span>🛑</span> Tombol Kill-Switch
+              <span className="text-xs font-semibold text-[#EA5B65] flex items-center gap-1.5">
+                <ShieldAlert className="w-3.5 h-3.5" />
+                <span>Tombol Kill-Switch</span>
               </span>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
-                riskControls?.isKillSwitchActive ? 'bg-red-500 text-white animate-pulse' : 'bg-red-500/20 text-red-400'
-              }`}>
+              <StatusBadge tone="danger">
                 {riskControls?.isKillSwitchActive ? 'HALTED' : 'ARMED'}
-              </span>
+              </StatusBadge>
             </div>
-            <div className="my-1">
+            <div className="my-1.5">
               {riskControls?.isKillSwitchActive ? (
-                <button
+                <Button
                   type="button"
+                  variant="profit"
+                  size="sm"
+                  className="w-full"
                   onClick={handleResetKillSwitch}
                   disabled={isLoading}
-                  className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs rounded-lg shadow-md transition-all active:scale-[0.98] flex items-center justify-center gap-1.5"
+                  icon={<CheckCircle2 className="w-3.5 h-3.5" />}
                 >
-                  <span>✓</span> Reset & Pulihkan Bot
-                </button>
+                  Reset &amp; Pulihkan Bot
+                </Button>
               ) : (
-                <button
+                <Button
                   type="button"
-                  onClick={() => setIsKillSwitchConfirmOpen(true)}
+                  variant="danger"
+                  size="sm"
+                  className="w-full"
+                  onClick={handleKillSwitch}
                   disabled={isLoading}
-                  className="w-full py-2 bg-gradient-to-r from-red-700 via-red-600 to-rose-700 hover:from-red-600 hover:to-rose-600 text-white font-bold text-xs rounded-lg shadow-lg shadow-red-950/50 transition-all active:scale-[0.98] border border-red-400/40 flex items-center justify-center gap-1.5"
+                  icon={<Square className="w-3.5 h-3.5" />}
                 >
-                  <span className="text-sm">🛑</span> STOP SEMUA BOT (KILL-SWITCH)
-                </button>
+                  STOP SEMUA BOT (KILL-SWITCH)
+                </Button>
               )}
             </div>
-            <span className="text-[10px] text-slate-400 block truncate">
+            <span className="text-[11px] text-[#A1AFB8] block truncate">
               {riskControls?.isKillSwitchActive
                 ? 'Semua order ditarik & worker dinonaktifkan.'
                 : 'Hentikan seketika & batalkan seluruh order aktif.'}
@@ -1511,54 +1626,41 @@ export const MMConsoleView: React.FC<Props> = ({
 
       {/* Feedback Banner */}
       {feedbackMsg && (
-        <div className={`p-3 rounded-lg text-xs font-medium border flex items-center justify-between ${
-          feedbackMsg.type === 'success' 
-            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
-            : 'bg-red-500/10 text-red-400 border-red-500/20'
-        }`}>
+        <div
+          className={`p-3 rounded-[7px] text-xs font-medium border flex items-center justify-between ${
+            feedbackMsg.type === 'success'
+              ? 'bg-[#12392F]/60 text-[#35B887] border-[#16A879]/40'
+              : 'bg-[#401F27]/60 text-[#EA5B65] border-[#EA5B65]/40'
+          }`}
+        >
           <span>{feedbackMsg.text}</span>
-          <button onClick={() => setFeedbackMsg(null)} className="text-slate-400 hover:text-white">✕</button>
+          <button type="button" onClick={() => setFeedbackMsg(null)} className="text-[#A1AFB8] hover:text-[#E4EBEF] p-1 cursor-pointer">
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
       {/* Navigation Sub-Tabs */}
-      <div className="flex items-center gap-1 overflow-x-auto pb-1 border-b border-[#1e293b]">
-        {[
-          { id: 'OVERVIEW', label: 'Overview' },
-          { id: 'PERFORMANCE', label: '📈 Dasbor Kinerja (D3)' },
-          { id: 'HFT_TELEMETRY', label: '⚡ HFT Engine Telemetry' },
-          { id: 'PORTFOLIO_REBALANCE', label: '⚖️ Rebalancing Portofolio' },
-          { id: 'ADVANCED_MM', label: '🛡️ Advanced MM Engine' },
-          { id: 'SMART_HFT_LADDER', label: '📐 Smart HFT Ladder' },
-          { id: 'HFT_BACKTEST', label: '🧪 Backtest Engine' },
-          { id: 'QUANT_HFT_MM', label: '⚡ Quant HFT MM' },
-          { id: 'DEPTH_LIQUIDITY', label: '📊 Depth & Liquidity' },
-          { id: 'MOVEMENT_DEPTH', label: '📡 Depth Movement (WS)' },
-          { id: 'PRICE_FOLLOWER', label: '🎯 Price Follower' },
-          { id: 'EXTERNAL_FEEDS', label: '🌐 External Feeds' },
-          { id: 'FX_RATES', label: '💵 USDT/IDR FX Engine' },
-          { id: 'ORDER_BOTS', label: 'Order Bots' },
-          { id: 'VOLUME_BOTS', label: 'Volume & Test Bots' },
-          { id: 'CONFIGURATIONS', label: 'Configurations' },
-          { id: 'BOT_ACCOUNTS', label: 'Bot Accounts' },
-          { id: 'ORDERS', label: 'Orders' },
-          { id: 'EXECUTED_TRADES', label: 'Executed Trades' },
-          { id: 'ACTIVITY_LOGS', label: 'Activity Logs' },
-          { id: 'RISK_CONTROLS', label: 'Risk Controls' },
-          { id: 'SETTINGS', label: 'Settings' }
-        ].map(t => (
-          <button
-            key={t.id}
-            onClick={() => setActiveTab(t.id as MMTab)}
-            className={`px-3 py-2 text-xs font-medium rounded-t-lg transition-colors whitespace-nowrap ${
-              activeTab === t.id
-                ? 'bg-[#1e293b] text-white border-b-2 border-blue-500 font-semibold'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-[#131b26]'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="flex items-center gap-1 overflow-x-auto pb-1 border-b border-[#202B34]">
+        {navTabs.map(t => {
+          const Icon = t.icon;
+          const active = activeTab === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setActiveTab(t.id)}
+              className={`px-3 py-2 text-xs font-medium rounded-t-[7px] transition-colors whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
+                active
+                  ? 'bg-[#17212B] text-[#E4EBEF] border-b-2 border-[#8DA5B1] font-semibold'
+                  : 'text-[#A1AFB8] hover:text-[#E4EBEF] hover:bg-[#111820]'
+              }`}
+            >
+              <Icon className={`w-3.5 h-3.5 ${active ? 'text-[#8DA5B1]' : 'text-[#71818B]'}`} />
+              <span>{t.label}</span>
+            </button>
+          );
+        })}
       </div>
 
       {/* TAB 1: OVERVIEW */}
@@ -1566,111 +1668,82 @@ export const MMConsoleView: React.FC<Props> = ({
         <div className="flex flex-col gap-5">
           {/* KPI Metrics */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div className="p-4 bg-[#090d14] border border-[#1e293b] rounded-xl">
-              <span className="text-xs text-slate-400 block mb-1">Active Bots ({currentEnv})</span>
-              <span className="text-2xl font-bold font-mono text-emerald-400">
-                {overview?.activeBots ?? 0} <span className="text-xs text-slate-500 font-normal">/ {overview?.totalBots ?? 0} total</span>
+            <div className="p-4 bg-[#141C24] border border-[#202B34] rounded-[10px]">
+              <span className="text-xs text-[#A1AFB8] block mb-1">Active Bots ({currentEnv})</span>
+              <span className="text-2xl font-semibold font-mono tabular-nums text-[#35B887]">
+                {overview?.activeBots ?? 0} <span className="text-xs text-[#71818B] font-normal">/ {overview?.totalBots ?? 0} total</span>
               </span>
             </div>
-            <div className="p-4 bg-[#090d14] border border-[#1e293b] rounded-xl">
-              <span className="text-xs text-slate-400 block mb-1">Orders Submitted</span>
-              <span className="text-2xl font-bold font-mono text-white">
-                {overview?.ordersSubmitted ?? 0}
+            <div className="p-4 bg-[#141C24] border border-[#202B34] rounded-[10px]">
+              <span className="text-xs text-[#A1AFB8] block mb-1">Orders Submitted</span>
+              <span className="text-2xl font-semibold font-mono tabular-nums text-[#E4EBEF]">
+                {(overview?.ordersSubmitted ?? 0).toLocaleString('id-ID')}
               </span>
             </div>
-            <div className="p-4 bg-[#090d14] border border-[#1e293b] rounded-xl">
-              <span className="text-xs text-slate-400 block mb-1">Orders Filled</span>
-              <span className="text-2xl font-bold font-mono text-blue-400">
-                {overview?.ordersFilled ?? 0}
+            <div className="p-4 bg-[#141C24] border border-[#202B34] rounded-[10px]">
+              <span className="text-xs text-[#A1AFB8] block mb-1">Orders Filled</span>
+              <span className="text-2xl font-semibold font-mono tabular-nums text-[#6D9FE8]">
+                {(overview?.ordersFilled ?? 0).toLocaleString('id-ID')}
               </span>
             </div>
-            <div className="p-4 bg-[#090d14] border border-[#1e293b] rounded-xl">
-              <span className="text-xs text-slate-400 block mb-1">Trades Generated</span>
-              <span className="text-2xl font-bold font-mono text-amber-400">
-                {overview?.totalTrades ?? 0}
+            <div className="p-4 bg-[#141C24] border border-[#202B34] rounded-[10px]">
+              <span className="text-xs text-[#A1AFB8] block mb-1">Trades Generated</span>
+              <span className="text-2xl font-semibold font-mono tabular-nums text-[#D6A85C]">
+                {(overview?.totalTrades ?? 0).toLocaleString('id-ID')}
               </span>
             </div>
           </div>
 
           {/* Quick Action Strip */}
-          <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[#0c121d] border border-[#1e293b] rounded-xl">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setActiveTab('SMART_HFT_LADDER')}
-                className="px-3 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-semibold rounded-lg shadow transition-colors flex items-center gap-1"
-              >
-                <span>📐</span>
-                <span>Smart HFT Ladder</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('HFT_BACKTEST')}
-                className="px-3 py-1.5 bg-sky-700 hover:bg-sky-600 text-white text-xs font-semibold rounded-lg shadow transition-colors flex items-center gap-1"
-              >
-                <span>🧪</span>
-                <span>Ledger Backtest</span>
-              </button>
-              <button
-                onClick={() => setIsOrderBotModalOpen(true)}
-                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg shadow transition-colors"
-              >
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-[#141C24] border border-[#202B34] rounded-[10px]">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="profit" size="sm" onClick={() => setActiveTab('SMART_HFT_LADDER')} icon={<Sliders className="w-3.5 h-3.5" />}>
+                Smart HFT Ladder
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setActiveTab('HFT_BACKTEST')} icon={<FlaskConical className="w-3.5 h-3.5" />}>
+                Ledger Backtest
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setActiveTab('PRICE_THRESHOLDS')} icon={<BellRing className="w-3.5 h-3.5" />}>
+                Price Thresholds ({thresholdTriggers.filter(t => t.enabled).length})
+              </Button>
+              <Button variant="primary" size="sm" onClick={() => setIsOrderBotModalOpen(true)}>
                 + Order Bot
-              </button>
-              <button
-                onClick={() => setIsVolumeBotModalOpen(true)}
-                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow transition-colors"
-              >
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setIsVolumeBotModalOpen(true)}>
                 + Volume Bot
-              </button>
-              <button
-                onClick={() => setIsPriceFollowerModalOpen(true)}
-                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg shadow transition-colors"
-              >
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setIsPriceFollowerModalOpen(true)}>
                 + Price Follower
-              </button>
-              <button
-                onClick={() => setIsDepthLiquidityModalOpen(true)}
-                className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold rounded-lg shadow transition-colors"
-              >
-                + Depth & Liquidity
-              </button>
-              <button
-                onClick={() => setIsMovementDepthModalOpen(true)}
-                className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold rounded-lg shadow transition-colors"
-              >
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setIsDepthLiquidityModalOpen(true)}>
+                + Depth &amp; Liquidity
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setIsMovementDepthModalOpen(true)}>
                 + Depth Movement (WS)
-              </button>
+              </Button>
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setIsCsvImportModalOpen(true)}
-                className="px-3 py-1.5 bg-[#1e293b] hover:bg-[#283548] text-slate-200 text-xs font-medium rounded-lg border border-[#334155] transition-colors"
-              >
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => setIsCsvImportModalOpen(true)}>
                 CSV Import
-              </button>
-              <button
-                onClick={() => handleExportCsv('ORDER_BOT')}
-                className="px-3 py-1.5 bg-[#1e293b] hover:bg-[#283548] text-slate-200 text-xs font-medium rounded-lg border border-[#334155] transition-colors"
-              >
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => handleExportCsv('ORDER_BOT')}>
                 Export Order CSV
-              </button>
-              <button
-                onClick={() => handleExportCsv('VOLUME_BOT')}
-                className="px-3 py-1.5 bg-[#1e293b] hover:bg-[#283548] text-slate-200 text-xs font-medium rounded-lg border border-[#334155] transition-colors"
-              >
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => handleExportCsv('VOLUME_BOT')}>
                 Export Volume CSV
-              </button>
+              </Button>
             </div>
           </div>
 
           {/* Active Bot Instances Table */}
-          <div className="bg-[#090d14] border border-[#1e293b] rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-[#1e293b] flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-white">Bot Instances ({currentEnv})</h3>
-              <span className="text-xs text-slate-400">Total: {instances.length} bots</span>
+          <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] overflow-hidden">
+            <div className="px-4 py-3 border-b border-[#202B34] flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-[#E4EBEF]">Bot Instances ({currentEnv})</h3>
+              <span className="text-xs font-mono text-[#A1AFB8]">Total: {instances.length} bots</span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
-                <thead className="bg-[#0f172a] text-slate-400 uppercase font-mono text-[11px] border-b border-[#1e293b]">
+                <thead className="bg-[#111820] text-[#71818B] uppercase font-mono text-[11px] border-b border-[#202B34]">
                   <tr>
                     <th className="py-2.5 px-4">Bot ID / Name</th>
                     <th className="py-2.5 px-4">Type</th>
@@ -1681,118 +1754,92 @@ export const MMConsoleView: React.FC<Props> = ({
                     <th className="py-2.5 px-4 text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#1e293b] text-slate-300 font-mono">
+                <tbody className="divide-y divide-[#202B34] text-[#A1AFB8] font-mono tabular-nums">
                   {instances.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="text-center py-8 text-slate-500 font-sans">
+                      <td colSpan={7} className="text-center py-8 text-[#71818B] font-sans">
                         Belum ada bot instance yang dibuat di environment {currentEnv}.
                       </td>
                     </tr>
                   ) : (
                     instances.map(b => (
-                      <tr key={b.id} className="hover:bg-[#131b26] transition-colors">
+                      <tr key={b.id} className="hover:bg-[#17212B] transition-colors">
                         <td className="py-3 px-4 font-sans">
-                          <strong className="text-white block">{b.name}</strong>
-                          <span className="text-[11px] text-slate-500 font-mono">{b.id}</span>
+                          <strong className="text-[#E4EBEF] block">{b.name}</strong>
+                          <span className="text-[11px] text-[#71818B] font-mono">{b.id}</span>
                         </td>
                         <td className="py-3 px-4">
-                          <span className="text-xs font-semibold text-blue-400">{b.botType}</span>
+                          <span className="text-xs font-semibold text-[#8DA5B1]">{b.botType}</span>
                         </td>
-                        <td className="py-3 px-4 font-bold text-white">{b.pairId}</td>
+                        <td className="py-3 px-4 font-bold text-[#E4EBEF]">{b.pairId}</td>
                         <td className="py-3 px-4">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            b.status === 'RUNNING'
-                              ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                              : b.status === 'PAUSED'
-                              ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
-                              : b.status === 'ERROR' || b.status === 'RISK_HALTED'
-                              ? 'bg-red-500/15 text-red-400 border border-red-500/30'
-                              : 'bg-slate-700/30 text-slate-400 border border-slate-700'
-                          }`}>
+                          <StatusBadge
+                            tone={
+                              b.status === 'RUNNING'
+                                ? 'success'
+                                : b.status === 'PAUSED'
+                                ? 'warning'
+                                : b.status === 'ERROR' || b.status === 'RISK_HALTED'
+                                ? 'danger'
+                                : 'neutral'
+                            }
+                          >
                             {b.status}
-                          </span>
+                          </StatusBadge>
                         </td>
                         <td className="py-3 px-4">
-                          {b.stats.ordersSubmitted} / <span className="text-emerald-400">{b.stats.ordersFilled}</span>
+                          {b.stats.ordersSubmitted} / <span className="text-[#35B887]">{b.stats.ordersFilled}</span>
                         </td>
-                        <td className="py-3 px-4 text-slate-400 text-[11px]">
+                        <td className="py-3 px-4 text-[#A1AFB8] text-[11px]">
                           {formatDateTime(b.lastHeartbeat)}
                         </td>
                         <td className="py-3 px-4 text-right">
                           <div className="flex items-center justify-end gap-1.5 font-sans">
                             {b.status === 'RUNNING' ? (
                               <>
-                                <button
-                                  onClick={() => handlePauseBot(b.id)}
-                                  className="px-2 py-1 bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 rounded text-xs"
-                                >
+                                <Button variant="outline" size="sm" onClick={() => handlePauseBot(b.id)}>
                                   Pause
-                                </button>
-                                <button
-                                  onClick={() => handleStopBot(b.id)}
-                                  className="px-2 py-1 bg-red-600/20 text-red-400 hover:bg-red-600/30 rounded text-xs"
-                                >
+                                </Button>
+                                <Button variant="danger" size="sm" onClick={() => handleStopBot(b.id)}>
                                   Stop
-                                </button>
+                                </Button>
                               </>
                             ) : b.status === 'PAUSED' ? (
                               <>
-                                <button
-                                  onClick={() => handleResumeBot(b.id)}
-                                  className="px-2 py-1 bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 rounded text-xs"
-                                >
+                                <Button variant="profit" size="sm" onClick={() => handleResumeBot(b.id)}>
                                   Resume
-                                </button>
-                                <button
-                                  onClick={() => handleStopBot(b.id)}
-                                  className="px-2 py-1 bg-red-600/20 text-red-400 hover:bg-red-600/30 rounded text-xs"
-                                >
+                                </Button>
+                                <Button variant="danger" size="sm" onClick={() => handleStopBot(b.id)}>
                                   Stop
-                                </button>
+                                </Button>
                               </>
                             ) : (
                               <>
-                                <button
-                                  onClick={() => handleValidateBot(b.id)}
-                                  className="px-2 py-1 bg-[#1e293b] text-slate-300 hover:bg-[#283548] rounded text-xs"
-                                >
+                                <Button variant="outline" size="sm" onClick={() => handleValidateBot(b.id)}>
                                   Validate
-                                </button>
-                                <button
-                                  onClick={() => handleStartBot(b.id)}
-                                  className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-semibold"
-                                >
+                                </Button>
+                                <Button variant="profit" size="sm" onClick={() => handleStartBot(b.id)}>
                                   Start
-                                </button>
+                                </Button>
                               </>
                             )}
-                            <button
-                              onClick={() => handleOpenEditModal(b)}
-                              title="Edit Bot Configuration"
-                              className="px-2 py-1 bg-[#1e293b] text-amber-400 hover:bg-[#283548] rounded text-xs"
-                            >
+                            <Button variant="secondary" size="sm" onClick={() => handleOpenEditModal(b)} title="Edit Bot Configuration">
                               Edit
-                            </button>
-                            <button
-                              onClick={() => handleOpenCloneModal(b)}
-                              title="Clone Bot (Phase 8)"
-                              className="px-2 py-1 bg-[#1e293b] text-blue-400 hover:bg-[#283548] rounded text-xs"
-                            >
+                            </Button>
+                            <Button variant="secondary" size="sm" onClick={() => handleOpenCloneModal(b)} title="Clone Bot">
                               Clone
-                            </button>
-                            <button
-                              onClick={() => setSelectedBotId(b.id)}
-                              className="px-2 py-1 bg-[#1e293b] text-slate-400 hover:text-white rounded text-xs"
-                            >
+                            </Button>
+                            <Button variant="ghost" size="sm" onClick={() => setSelectedBotId(b.id)}>
                               Logs
-                            </button>
-                            <button
+                            </Button>
+                            <Button
+                              variant="danger"
+                              size="sm"
                               onClick={() => handleOpenDeleteModal(b)}
                               title="Hapus Bot Permanen & Batalkan Seluruh Order Terbuka"
-                              className="px-2 py-1 bg-red-600/20 text-red-400 hover:bg-red-600/40 rounded text-xs font-semibold"
                             >
                               Hapus
-                            </button>
+                            </Button>
                           </div>
                         </td>
                       </tr>
@@ -1811,18 +1858,18 @@ export const MMConsoleView: React.FC<Props> = ({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <span>🌐</span> Public External Price Feeds (Binance & Bybit)
+                Public External Price Feeds (Binance & Bybit)
               </h2>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-[#A1AFB8]">
                 Integrasi WebSocket publik langsung ke Binance Spot dan Bybit Spot v5 API untuk referensi harga trading.
               </p>
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => handleReconnectProvider()}
-                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg shadow transition-colors flex items-center gap-1.5"
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-[7px] shadow transition-colors flex items-center gap-1.5"
               >
-                <span>🔄</span> Reconnect All Feeds
+                Reconnect All Feeds
               </button>
             </div>
           </div>
@@ -1830,9 +1877,9 @@ export const MMConsoleView: React.FC<Props> = ({
           {/* Provider Status Cards */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             {/* Binance Card */}
-            <div className="bg-[#090d14] border border-[#1e293b] rounded-xl p-5 shadow-lg flex flex-col justify-between">
+            <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] p-5 shadow-lg flex flex-col justify-between">
               <div>
-                <div className="flex items-center justify-between pb-3 border-b border-[#1e293b] mb-4">
+                <div className="flex items-center justify-between pb-3 border-b border-[#202B34] mb-4">
                   <div className="flex items-center gap-2">
                     <span className="w-3 h-3 rounded-full bg-amber-400"></span>
                     <h3 className="text-sm font-bold text-white">Binance Spot Public Stream</h3>
@@ -1847,31 +1894,31 @@ export const MMConsoleView: React.FC<Props> = ({
                 </div>
 
                 <div className="space-y-2.5 text-xs font-mono">
-                  <div className="flex justify-between text-slate-400">
+                  <div className="flex justify-between text-[#A1AFB8]">
                     <span>Endpoint:</span>
-                    <span className="text-slate-300 truncate max-w-[240px]">wss://stream.binance.com:9443/ws</span>
+                    <span className="text-[#E4EBEF] truncate max-w-[240px]">wss://stream.binance.com:9443/ws</span>
                   </div>
-                  <div className="flex justify-between text-slate-400">
+                  <div className="flex justify-between text-[#A1AFB8]">
                     <span>Latency:</span>
                     <span className="text-emerald-400 font-bold">{externalFeeds?.binance?.metrics?.avgLatencyMs || 12} ms</span>
                   </div>
-                  <div className="flex justify-between text-slate-400">
+                  <div className="flex justify-between text-[#A1AFB8]">
                     <span>Messages Received:</span>
                     <span className="text-white">{externalFeeds?.binance?.metrics?.messagesReceived?.toLocaleString() || 0}</span>
                   </div>
-                  <div className="flex justify-between text-slate-400">
+                  <div className="flex justify-between text-[#A1AFB8]">
                     <span>Reconnect Count:</span>
-                    <span className="text-slate-300">{externalFeeds?.binance?.metrics?.reconnectCount || 0}</span>
+                    <span className="text-[#E4EBEF]">{externalFeeds?.binance?.metrics?.reconnectCount || 0}</span>
                   </div>
-                  <div className="pt-2 border-t border-[#1e293b] space-y-1.5">
+                  <div className="pt-2 border-t border-[#202B34] space-y-1.5">
                     <div className="flex justify-between">
-                      <span className="text-slate-400">BTC/USDT:</span>
+                      <span className="text-[#A1AFB8]">BTC/USDT:</span>
                       <span className="text-base font-bold text-white">
                         ${externalFeeds?.binance?.btcTick?.lastPrice ? externalFeeds.binance.btcTick.lastPrice.toLocaleString() : '94,850.00'}
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-400">ETH/USDT:</span>
+                      <span className="text-[#A1AFB8]">ETH/USDT:</span>
                       <span className="text-base font-bold text-white">
                         ${externalFeeds?.binance?.ethTick?.lastPrice ? externalFeeds.binance.ethTick.lastPrice.toLocaleString() : '2,840.00'}
                       </span>
@@ -1880,10 +1927,10 @@ export const MMConsoleView: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="pt-4 mt-4 border-t border-[#1e293b]">
+              <div className="pt-4 mt-4 border-t border-[#202B34]">
                 <button
                   onClick={() => handleReconnectProvider('binance')}
-                  className="w-full py-1.5 bg-[#1e293b] hover:bg-[#283548] text-slate-200 text-xs font-semibold rounded-lg transition-colors"
+                  className="w-full py-1.5 bg-[#17212B] hover:bg-[#1D2832] text-[#E4EBEF] text-xs font-semibold rounded-[7px] transition-colors"
                 >
                   Reconnect Binance Stream
                 </button>
@@ -1891,9 +1938,9 @@ export const MMConsoleView: React.FC<Props> = ({
             </div>
 
             {/* Bybit Card */}
-            <div className="bg-[#090d14] border border-[#1e293b] rounded-xl p-5 shadow-lg flex flex-col justify-between">
+            <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] p-5 shadow-lg flex flex-col justify-between">
               <div>
-                <div className="flex items-center justify-between pb-3 border-b border-[#1e293b] mb-4">
+                <div className="flex items-center justify-between pb-3 border-b border-[#202B34] mb-4">
                   <div className="flex items-center gap-2">
                     <span className="w-3 h-3 rounded-full bg-orange-400"></span>
                     <h3 className="text-sm font-bold text-white">Bybit Spot Public Stream (v5)</h3>
@@ -1908,31 +1955,31 @@ export const MMConsoleView: React.FC<Props> = ({
                 </div>
 
                 <div className="space-y-2.5 text-xs font-mono">
-                  <div className="flex justify-between text-slate-400">
+                  <div className="flex justify-between text-[#A1AFB8]">
                     <span>Endpoint:</span>
-                    <span className="text-slate-300 truncate max-w-[240px]">wss://stream.bybit.com/v5/public/spot</span>
+                    <span className="text-[#E4EBEF] truncate max-w-[240px]">wss://stream.bybit.com/v5/public/spot</span>
                   </div>
-                  <div className="flex justify-between text-slate-400">
+                  <div className="flex justify-between text-[#A1AFB8]">
                     <span>Latency:</span>
                     <span className="text-emerald-400 font-bold">{externalFeeds?.bybit?.metrics?.avgLatencyMs || 15} ms</span>
                   </div>
-                  <div className="flex justify-between text-slate-400">
+                  <div className="flex justify-between text-[#A1AFB8]">
                     <span>Messages Received:</span>
                     <span className="text-white">{externalFeeds?.bybit?.metrics?.messagesReceived?.toLocaleString() || 0}</span>
                   </div>
-                  <div className="flex justify-between text-slate-400">
+                  <div className="flex justify-between text-[#A1AFB8]">
                     <span>Reconnect Count:</span>
-                    <span className="text-slate-300">{externalFeeds?.bybit?.metrics?.reconnectCount || 0}</span>
+                    <span className="text-[#E4EBEF]">{externalFeeds?.bybit?.metrics?.reconnectCount || 0}</span>
                   </div>
-                  <div className="pt-2 border-t border-[#1e293b] space-y-1.5">
+                  <div className="pt-2 border-t border-[#202B34] space-y-1.5">
                     <div className="flex justify-between">
-                      <span className="text-slate-400">BTC/USDT:</span>
+                      <span className="text-[#A1AFB8]">BTC/USDT:</span>
                       <span className="text-base font-bold text-white">
                         ${externalFeeds?.bybit?.btcTick?.lastPrice ? externalFeeds.bybit.btcTick.lastPrice.toLocaleString() : '94,855.00'}
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-400">ETH/USDT:</span>
+                      <span className="text-[#A1AFB8]">ETH/USDT:</span>
                       <span className="text-base font-bold text-white">
                         ${externalFeeds?.bybit?.ethTick?.lastPrice ? externalFeeds.bybit.ethTick.lastPrice.toLocaleString() : '2,840.50'}
                       </span>
@@ -1941,10 +1988,10 @@ export const MMConsoleView: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="pt-4 mt-4 border-t border-[#1e293b]">
+              <div className="pt-4 mt-4 border-t border-[#202B34]">
                 <button
                   onClick={() => handleReconnectProvider('bybit')}
-                  className="w-full py-1.5 bg-[#1e293b] hover:bg-[#283548] text-slate-200 text-xs font-semibold rounded-lg transition-colors"
+                  className="w-full py-1.5 bg-[#17212B] hover:bg-[#1D2832] text-[#E4EBEF] text-xs font-semibold rounded-[7px] transition-colors"
                 >
                   Reconnect Bybit Stream
                 </button>
@@ -1952,9 +1999,9 @@ export const MMConsoleView: React.FC<Props> = ({
             </div>
 
             {/* CoinMarketCap Card */}
-            <div className="bg-[#090d14] border border-[#1e293b] rounded-xl p-5 shadow-lg flex flex-col justify-between">
+            <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] p-5 shadow-lg flex flex-col justify-between">
               <div>
-                <div className="flex items-center justify-between pb-3 border-b border-[#1e293b] mb-4">
+                <div className="flex items-center justify-between pb-3 border-b border-[#202B34] mb-4">
                   <div className="flex items-center gap-2">
                     <span className="w-3 h-3 rounded-full bg-blue-500"></span>
                     <h3 className="text-sm font-bold text-white">CoinMarketCap Market Feed</h3>
@@ -1969,33 +2016,33 @@ export const MMConsoleView: React.FC<Props> = ({
                 </div>
 
                 <div className="space-y-2.5 text-xs font-mono">
-                  <div className="flex justify-between text-slate-400">
+                  <div className="flex justify-between text-[#A1AFB8]">
                     <span>Source:</span>
-                    <span className="text-slate-300 truncate max-w-[200px]">CoinMarketCap Public API & Quotes</span>
+                    <span className="text-[#E4EBEF] truncate max-w-[200px]">CoinMarketCap Public API & Quotes</span>
                   </div>
-                  <div className="flex justify-between text-slate-400">
+                  <div className="flex justify-between text-[#A1AFB8]">
                     <span>Latency:</span>
                     <span className="text-emerald-400 font-bold">{externalFeeds?.cmc?.metrics?.avgLatencyMs || 42} ms</span>
                   </div>
-                  <div className="flex justify-between text-slate-400">
+                  <div className="flex justify-between text-[#A1AFB8]">
                     <span>Updates Polled:</span>
                     <span className="text-white">{externalFeeds?.cmc?.metrics?.messagesReceived?.toLocaleString() || 1}</span>
                   </div>
-                  <div className="flex justify-between text-slate-400">
+                  <div className="flex justify-between text-[#A1AFB8]">
                     <span>USDT/IDR Rate:</span>
                     <span className="text-emerald-400 font-bold">
                       Rp {externalFeeds?.cmc?.usdtTick?.lastPrice ? externalFeeds.cmc.usdtTick.lastPrice.toLocaleString('id-ID') : '16.365'}
                     </span>
                   </div>
-                  <div className="pt-2 border-t border-[#1e293b] space-y-1.5">
+                  <div className="pt-2 border-t border-[#202B34] space-y-1.5">
                     <div className="flex justify-between">
-                      <span className="text-slate-400">BTC/USDT:</span>
+                      <span className="text-[#A1AFB8]">BTC/USDT:</span>
                       <span className="text-base font-bold text-white">
                         ${externalFeeds?.cmc?.btcTick?.lastPrice ? externalFeeds.cmc.btcTick.lastPrice.toLocaleString() : '95,050.00'}
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-400">ETH/USDT:</span>
+                      <span className="text-[#A1AFB8]">ETH/USDT:</span>
                       <span className="text-base font-bold text-white">
                         ${externalFeeds?.cmc?.ethTick?.lastPrice ? externalFeeds.cmc.ethTick.lastPrice.toLocaleString() : '3,425.00'}
                       </span>
@@ -2004,10 +2051,10 @@ export const MMConsoleView: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="pt-4 mt-4 border-t border-[#1e293b]">
+              <div className="pt-4 mt-4 border-t border-[#202B34]">
                 <button
                   onClick={() => handleReconnectProvider('coinmarketcap')}
-                  className="w-full py-1.5 bg-[#1e293b] hover:bg-[#283548] text-slate-200 text-xs font-semibold rounded-lg transition-colors"
+                  className="w-full py-1.5 bg-[#17212B] hover:bg-[#1D2832] text-[#E4EBEF] text-xs font-semibold rounded-[7px] transition-colors"
                 >
                   Refresh CMC Feed
                 </button>
@@ -2016,23 +2063,23 @@ export const MMConsoleView: React.FC<Props> = ({
           </div>
 
           {/* Aggregator Config & Health Summary */}
-          <div className="bg-[#090d14] border border-[#1e293b] rounded-xl p-5 shadow-lg">
+          <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] p-5 shadow-lg">
             <h3 className="text-sm font-bold text-white mb-3">Multi-Exchange Price Aggregator Controls</h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs font-mono">
-              <div className="p-3 bg-[#0f172a] rounded-lg border border-[#1e293b]">
-                <span className="text-slate-400 block mb-1">Primary Feed Provider</span>
+              <div className="p-3 bg-[#111820] rounded-[7px] border border-[#202B34]">
+                <span className="text-[#A1AFB8] block mb-1">Primary Feed Provider</span>
                 <span className="text-base font-bold text-amber-400">BINANCE SPOT</span>
-                <span className="text-[10px] text-slate-500 block mt-1">Fallback: Bybit Spot (Automatic Failover)</span>
+                <span className="text-[10px] text-[#71818B] block mt-1">Fallback: Bybit Spot (Automatic Failover)</span>
               </div>
-              <div className="p-3 bg-[#0f172a] rounded-lg border border-[#1e293b]">
-                <span className="text-slate-400 block mb-1">Max Deviation Threshold</span>
+              <div className="p-3 bg-[#111820] rounded-[7px] border border-[#202B34]">
+                <span className="text-[#A1AFB8] block mb-1">Max Deviation Threshold</span>
                 <span className="text-base font-bold text-sky-400">200 bps (2.00%)</span>
-                <span className="text-[10px] text-slate-500 block mt-1">Pencegah outlier tick abnormal</span>
+                <span className="text-[10px] text-[#71818B] block mt-1">Pencegah outlier tick abnormal</span>
               </div>
-              <div className="p-3 bg-[#0f172a] rounded-lg border border-[#1e293b]">
-                <span className="text-slate-400 block mb-1">Max Data Age (Freshness Guard)</span>
+              <div className="p-3 bg-[#111820] rounded-[7px] border border-[#202B34]">
+                <span className="text-[#A1AFB8] block mb-1">Max Data Age (Freshness Guard)</span>
                 <span className="text-base font-bold text-emerald-400">15,000 ms</span>
-                <span className="text-[10px] text-slate-500 block mt-1">Bot pause otomatis jika data stale</span>
+                <span className="text-[10px] text-[#71818B] block mt-1">Bot pause otomatis jika data stale</span>
               </div>
             </div>
           </div>
@@ -2045,9 +2092,9 @@ export const MMConsoleView: React.FC<Props> = ({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <span>💵</span> USDT/IDR FX Conversion Engine
+                USDT/IDR FX Conversion Engine
               </h2>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-[#A1AFB8]">
                 Formula konversi harga spot: <strong className="text-emerald-400 font-mono">BTC/IDR = BTC/USDT × USDT/IDR</strong> dengan kontrol manual admin, manajemen interval CoinMarketCap hemat kuota API, dan rekam jejak audit SHA-256.
               </p>
             </div>
@@ -2057,25 +2104,25 @@ export const MMConsoleView: React.FC<Props> = ({
                   ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
                   : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
               }`}>
-                <span className={`w-2 h-2 rounded-full ${fxData?.config?.isManualLocked ? 'bg-amber-400' : 'bg-emerald-400 animate-pulse'}`}></span>
-                {fxData?.config?.isManualLocked ? '🔒 Kurs Terkunci Manual' : '🔄 Auto-Sync CMC Aktif'}
+                <span className={`w-2 h-2 rounded-full ${fxData?.config?.isManualLocked ? 'bg-amber-400' : 'bg-emerald-400'}`}></span>
+                {fxData?.config?.isManualLocked ? 'Kurs Terkunci Manual' : 'Auto-Sync CMC Aktif'}
               </span>
             </div>
           </div>
 
           {/* 1. SPOT PRICE CONVERSION FORMULA BANNER */}
-          <div className="bg-gradient-to-r from-[#0d1424] via-[#111a2e] to-[#0d1424] border border-blue-500/30 rounded-xl p-5 shadow-xl relative overflow-hidden">
+          <div className="bg-[#141C24] border border-blue-500/30 rounded-[10px] p-5 shadow-xl relative overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-blue-500/20 mb-4">
               <div>
                 <span className="text-[10px] font-bold tracking-wider text-blue-400 uppercase block mb-1">
                   DIMONEX Mathematical Core Specification
                 </span>
                 <h3 className="text-base font-extrabold text-white flex items-center gap-2">
-                  <span>📐</span> Formula Konversi Harga Spot Real-Time
+                  Formula Konversi Harga Spot Real-Time
                 </h3>
               </div>
-              <div className="flex items-center gap-2 text-xs font-mono text-slate-300">
-                <span className="text-slate-400">Kurs Acuan Multiplier:</span>
+              <div className="flex items-center gap-2 text-xs font-mono text-[#E4EBEF]">
+                <span className="text-[#A1AFB8]">Kurs Acuan Multiplier:</span>
                 <span className="px-2.5 py-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded font-bold">
                   1 USDT = Rp {fxData?.currentRate?.rate ? fxData.currentRate.rate.toLocaleString('id-ID') : '16.350'}
                 </span>
@@ -2084,21 +2131,21 @@ export const MMConsoleView: React.FC<Props> = ({
 
             {/* Formula Cards Grid */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-xs mb-5">
-              <div className="p-4 bg-[#090e18]/80 rounded-xl border border-blue-500/20 hover:border-blue-500/40 transition-all">
-                <div className="flex items-center justify-between text-slate-400 mb-1.5">
+              <div className="p-4 bg-[#090e18]/80 rounded-[10px] border border-blue-500/20 hover:border-blue-500/40 transition-all">
+                <div className="flex items-center justify-between text-[#A1AFB8] mb-1.5">
                   <span className="font-sans font-bold text-white text-sm">Bitcoin (BTC)</span>
                   <span className="text-[10px] text-blue-400">BTC-IDR SPOT</span>
                 </div>
                 <div className="text-xs text-amber-400 font-bold mb-2">
                   BTC/IDR = BTC/USDT × USDT/IDR
                 </div>
-                <div className="pt-2 border-t border-slate-800 space-y-1 text-[11px] text-slate-300">
+                <div className="pt-2 border-t border-slate-800 space-y-1 text-[11px] text-[#E4EBEF]">
                   <div className="flex justify-between">
-                    <span className="text-slate-500">BTC/USDT Ref:</span>
+                    <span className="text-[#71818B]">BTC/USDT Ref:</span>
                     <span className="text-white">${fxData?.referencePrices?.['BTC-IDR']?.effectiveUsdtPrice?.toLocaleString() || '94,850.00'}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-500">USDT/IDR Kurs:</span>
+                    <span className="text-[#71818B]">USDT/IDR Kurs:</span>
                     <span className="text-emerald-400">Rp {fxData?.currentRate?.rate ? fxData.currentRate.rate.toLocaleString('id-ID') : '16.350'}</span>
                   </div>
                   <div className="flex justify-between font-bold pt-1 border-t border-slate-800/60">
@@ -2108,21 +2155,21 @@ export const MMConsoleView: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="p-4 bg-[#090e18]/80 rounded-xl border border-purple-500/20 hover:border-purple-500/40 transition-all">
-                <div className="flex items-center justify-between text-slate-400 mb-1.5">
+              <div className="p-4 bg-[#090e18]/80 rounded-[10px] border border-purple-500/20 hover:border-purple-500/40 transition-all">
+                <div className="flex items-center justify-between text-[#A1AFB8] mb-1.5">
                   <span className="font-sans font-bold text-white text-sm">Ethereum (ETH)</span>
                   <span className="text-[10px] text-purple-400">ETH-IDR SPOT</span>
                 </div>
                 <div className="text-xs text-purple-400 font-bold mb-2">
                   ETH/IDR = ETH/USDT × USDT/IDR
                 </div>
-                <div className="pt-2 border-t border-slate-800 space-y-1 text-[11px] text-slate-300">
+                <div className="pt-2 border-t border-slate-800 space-y-1 text-[11px] text-[#E4EBEF]">
                   <div className="flex justify-between">
-                    <span className="text-slate-500">ETH/USDT Ref:</span>
+                    <span className="text-[#71818B]">ETH/USDT Ref:</span>
                     <span className="text-white">${fxData?.referencePrices?.['ETH-IDR']?.effectiveUsdtPrice?.toLocaleString() || '2,840.00'}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-500">USDT/IDR Kurs:</span>
+                    <span className="text-[#71818B]">USDT/IDR Kurs:</span>
                     <span className="text-emerald-400">Rp {fxData?.currentRate?.rate ? fxData.currentRate.rate.toLocaleString('id-ID') : '16.350'}</span>
                   </div>
                   <div className="flex justify-between font-bold pt-1 border-t border-slate-800/60">
@@ -2132,21 +2179,21 @@ export const MMConsoleView: React.FC<Props> = ({
                 </div>
               </div>
 
-              <div className="p-4 bg-[#090e18]/80 rounded-xl border border-emerald-500/20 hover:border-emerald-500/40 transition-all">
-                <div className="flex items-center justify-between text-slate-400 mb-1.5">
+              <div className="p-4 bg-[#090e18]/80 rounded-[10px] border border-emerald-500/20 hover:border-emerald-500/40 transition-all">
+                <div className="flex items-center justify-between text-[#A1AFB8] mb-1.5">
                   <span className="font-sans font-bold text-white text-sm">Solana (SOL)</span>
                   <span className="text-[10px] text-emerald-400">SOL-IDR SPOT</span>
                 </div>
                 <div className="text-xs text-emerald-400 font-bold mb-2">
                   SOL/IDR = SOL/USDT × USDT/IDR
                 </div>
-                <div className="pt-2 border-t border-slate-800 space-y-1 text-[11px] text-slate-300">
+                <div className="pt-2 border-t border-slate-800 space-y-1 text-[11px] text-[#E4EBEF]">
                   <div className="flex justify-between">
-                    <span className="text-slate-500">SOL/USDT Ref:</span>
+                    <span className="text-[#71818B]">SOL/USDT Ref:</span>
                     <span className="text-white">$174.50</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-500">USDT/IDR Kurs:</span>
+                    <span className="text-[#71818B]">USDT/IDR Kurs:</span>
                     <span className="text-emerald-400">Rp {fxData?.currentRate?.rate ? fxData.currentRate.rate.toLocaleString('id-ID') : '16.350'}</span>
                   </div>
                   <div className="flex justify-between font-bold pt-1 border-t border-slate-800/60">
@@ -2158,10 +2205,10 @@ export const MMConsoleView: React.FC<Props> = ({
             </div>
 
             {/* Interactive Preview Calculator */}
-            <div className="p-3 bg-[#070b13] rounded-lg border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="p-3 bg-[#111820] rounded-[7px] border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
               <div className="flex items-center gap-2">
-                <span className="text-slate-400 font-sans font-medium">Kalkulator Simulasi Formula:</span>
-                <div className="flex items-center gap-1 bg-[#131b26] p-1 rounded border border-slate-700">
+                <span className="text-[#A1AFB8] font-sans font-medium">Kalkulator Simulasi Formula:</span>
+                <div className="flex items-center gap-1 bg-[#17212B] p-1 rounded border border-slate-700">
                   {(['BTC', 'ETH', 'SOL'] as const).map(sym => (
                     <button
                       key={sym}
@@ -2173,7 +2220,7 @@ export const MMConsoleView: React.FC<Props> = ({
                         else setCalcUsdtPrice('175');
                       }}
                       className={`px-2 py-0.5 rounded text-[11px] font-bold ${
-                        calcBasePair === sym ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                        calcBasePair === sym ? 'bg-blue-600 text-white' : 'text-[#A1AFB8] hover:text-white'
                       }`}
                     >
                       {sym}
@@ -2181,15 +2228,15 @@ export const MMConsoleView: React.FC<Props> = ({
                   ))}
                 </div>
                 <div className="flex items-center gap-1.5 font-mono">
-                  <span className="text-slate-400">$</span>
+                  <span className="text-[#A1AFB8]">$</span>
                   <input
                     type="number"
                     value={calcUsdtPrice}
                     onChange={e => setCalcUsdtPrice(e.target.value)}
-                    className="w-28 bg-[#1e293b] text-white px-2 py-1 rounded border border-slate-700 text-xs"
+                    className="w-28 bg-[#17212B] text-white px-2 py-1 rounded border border-slate-700 text-xs"
                     placeholder="Harga USDT"
                   />
-                  <span className="text-slate-500">USDT ×</span>
+                  <span className="text-[#71818B]">USDT ×</span>
                   <span className="text-emerald-400 font-bold">
                     Rp {fxData?.currentRate?.rate ? fxData.currentRate.rate.toLocaleString('id-ID') : '16.350'}
                   </span>
@@ -2197,23 +2244,23 @@ export const MMConsoleView: React.FC<Props> = ({
               </div>
 
               <div className="flex items-center gap-2 font-mono">
-                <span className="text-slate-400">=</span>
+                <span className="text-[#A1AFB8]">=</span>
                 <span className="text-sm font-extrabold text-emerald-400 bg-emerald-950/40 px-3 py-1 rounded border border-emerald-500/30">
                   Rp {(Math.round((parseFloat(calcUsdtPrice) || 0) * (fxData?.currentRate?.rate || 16350))).toLocaleString('id-ID')}
                 </span>
-                <span className="text-[10px] text-slate-500">({calcBasePair}/IDR)</span>
+                <span className="text-[10px] text-[#71818B]">({calcBasePair}/IDR)</span>
               </div>
             </div>
           </div>
 
           {/* 2. COINMARKETCAP API INTERVAL & QUOTA SAVER */}
-          <div className="bg-[#090d14] border border-[#1e293b] rounded-xl p-5 shadow-lg space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-4 pb-3 border-b border-[#1e293b]">
+          <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] p-5 shadow-lg space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-4 pb-3 border-b border-[#202B34]">
               <div>
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <span>🛡️</span> Manajemen Interval CoinMarketCap & Penghemat Kuota API
+                  Manajemen Interval CoinMarketCap & Penghemat Kuota API
                 </h3>
-                <p className="text-xs text-slate-400">
+                <p className="text-xs text-[#A1AFB8]">
                   Batasi panggilan API eksternal dengan interval polling otomatis pintar (Default: 15 menit = ~96 calls/hari) agar kuota API gratis tidak cepat habis.
                 </p>
               </div>
@@ -2225,33 +2272,33 @@ export const MMConsoleView: React.FC<Props> = ({
                     fxData?.config?.syncIntervalMinutes ?? 15,
                     !fxData?.config?.isManualLocked
                   )}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-[7px] text-xs font-semibold border transition-all cursor-pointer ${
                     fxData?.config?.isManualLocked
                       ? 'bg-amber-600/20 text-amber-400 border-amber-500/30 hover:bg-amber-600/30'
-                      : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+                      : 'bg-slate-800 text-[#E4EBEF] border-slate-700 hover:bg-slate-700'
                   }`}
                 >
-                  {fxData?.config?.isManualLocked ? '🔒 Kunci Manual Aktif (Klik Buka Kunci)' : '🔓 Buka Kunci (Klik untuk Kunci Manual)'}
+                  {fxData?.config?.isManualLocked ? 'Kunci Manual Aktif (Klik Buka Kunci)' : 'Buka Kunci (Klik untuk Kunci Manual)'}
                 </button>
 
                 <button
                   onClick={() => handleSyncCmcFx(true)}
                   disabled={isLoading}
-                  className="px-4 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold rounded-lg text-xs shadow flex items-center gap-1.5 transition-all cursor-pointer"
+                  className="px-4 py-1.5 bg-[#8DA5B1] hover:bg-[#A5BAC4] text-[#090D12] text-white font-bold rounded-[7px] text-xs shadow flex items-center gap-1.5 transition-all cursor-pointer"
                 >
-                  <span>⚡</span> Ambil Kurs CMC Sekarang (Force Fetch)
+                  Ambil Kurs CMC Sekarang (Force Fetch)
                 </button>
               </div>
             </div>
 
             {/* Quota Saver Metrics & Interval Select */}
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 font-mono text-xs">
-              <div className="p-3.5 bg-[#0f172a] rounded-lg border border-[#1e293b] flex flex-col justify-between">
-                <span className="text-slate-400 block mb-1">Pengaturan Interval Sinkronisasi</span>
+              <div className="p-3.5 bg-[#111820] rounded-[7px] border border-[#202B34] flex flex-col justify-between">
+                <span className="text-[#A1AFB8] block mb-1">Pengaturan Interval Sinkronisasi</span>
                 <select
                   value={fxData?.config?.syncIntervalMinutes ?? 15}
                   onChange={e => handleUpdateFxConfig(parseInt(e.target.value, 10), fxData?.config?.isManualLocked ?? false)}
-                  className="bg-[#1e293b] text-white font-bold p-2 rounded border border-[#334155] text-xs cursor-pointer"
+                  className="bg-[#17212B] text-white font-bold p-2 rounded border border-[#2B3944] text-xs cursor-pointer"
                 >
                   <option value={5}>5 Menit (High Freshness)</option>
                   <option value={15}>15 Menit (Rekomendasi Hemat API: ~96 calls/hari)</option>
@@ -2260,39 +2307,39 @@ export const MMConsoleView: React.FC<Props> = ({
                   <option value={360}>6 Jam (Ultra Hemat)</option>
                   <option value={0}>Manual Saja (Polling Otomatis Mati)</option>
                 </select>
-                <span className="text-[10px] text-slate-500 mt-1 block">
+                <span className="text-[10px] text-[#71818B] mt-1 block">
                   {fxData?.config?.syncIntervalMinutes === 0 ? 'Hanya sinkron jika tombol manual ditekan.' : `Auto-fetch setiap ${fxData?.config?.syncIntervalMinutes || 15} menit.`}
                 </span>
               </div>
 
-              <div className="p-3.5 bg-[#0f172a] rounded-lg border border-[#1e293b] flex flex-col justify-between">
-                <span className="text-slate-400 block mb-1">Total Panggilan API CMC</span>
+              <div className="p-3.5 bg-[#111820] rounded-[7px] border border-[#202B34] flex flex-col justify-between">
+                <span className="text-[#A1AFB8] block mb-1">Total Panggilan API CMC</span>
                 <span className="text-xl font-bold text-white">
-                  {fxData?.config?.cmcApiCallsCount ?? 1} <span className="text-xs font-normal text-slate-500">calls</span>
+                  {fxData?.config?.cmcApiCallsCount ?? 1} <span className="text-xs font-normal text-[#71818B]">calls</span>
                 </span>
-                <span className="text-[10px] text-slate-500 mt-1 block">
+                <span className="text-[10px] text-[#71818B] mt-1 block">
                   Limit gratis: 333 calls / hari
                 </span>
               </div>
 
-              <div className="p-3.5 bg-[#0f172a] rounded-lg border border-[#1e293b] flex flex-col justify-between">
-                <span className="text-slate-400 block mb-1">Panggilan API Dihemat (Cache Saver)</span>
+              <div className="p-3.5 bg-[#111820] rounded-[7px] border border-[#202B34] flex flex-col justify-between">
+                <span className="text-[#A1AFB8] block mb-1">Panggilan API Dihemat (Cache Saver)</span>
                 <span className="text-xl font-bold text-emerald-400">
-                  {fxData?.config?.quotaSavedCount ?? 0} <span className="text-xs font-normal text-slate-500">requests</span>
+                  {fxData?.config?.quotaSavedCount ?? 0} <span className="text-xs font-normal text-[#71818B]">requests</span>
                 </span>
                 <span className="text-[10px] text-emerald-500 mt-1 block">
-                  ✓ Berhasil dihemat melalui cache interval
+                  Berhasil dihemat melalui cache interval
                 </span>
               </div>
 
-              <div className="p-3.5 bg-[#0f172a] rounded-lg border border-[#1e293b] flex flex-col justify-between">
-                <span className="text-slate-400 block mb-1">Jadwal Fetch Otomatis Berikutnya</span>
+              <div className="p-3.5 bg-[#111820] rounded-[7px] border border-[#202B34] flex flex-col justify-between">
+                <span className="text-[#A1AFB8] block mb-1">Jadwal Fetch Otomatis Berikutnya</span>
                 <span className="text-xs font-bold text-sky-400">
                   {fxData?.config?.nextCmcFetchTimestamp
                     ? new Date(fxData.config.nextCmcFetchTimestamp).toLocaleTimeString('id-ID')
                     : 'Siap / Sesuai Jadwal'}
                 </span>
-                <span className="text-[10px] text-slate-500 mt-1 block">
+                <span className="text-[10px] text-[#71818B] mt-1 block">
                   {fxData?.config?.isManualLocked ? 'Tertunda karena Kurs Terkunci Manual' : 'Berjalan di background'}
                 </span>
               </div>
@@ -2301,69 +2348,69 @@ export const MMConsoleView: React.FC<Props> = ({
 
           {/* Current Rate Banner & Converted Benchmark Preview */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="p-4 bg-[#090d14] border border-[#1e293b] rounded-xl flex flex-col justify-between">
-              <span className="text-xs text-slate-400 block mb-1">Kurs Aktif USDT/IDR</span>
+            <div className="p-4 bg-[#141C24] border border-[#202B34] rounded-[10px] flex flex-col justify-between">
+              <span className="text-xs text-[#A1AFB8] block mb-1">Kurs Aktif USDT/IDR</span>
               <span className="text-2xl font-bold font-mono text-emerald-400">
                 Rp {fxData?.currentRate?.rate ? fxData.currentRate.rate.toLocaleString('id-ID') : '16.350'}
               </span>
-              <span className="text-[10px] text-slate-500 mt-1">
+              <span className="text-[10px] text-[#71818B] mt-1">
                 Sumber: {fxData?.currentRate?.source || 'SYSTEM_DEFAULT'}
               </span>
             </div>
 
-            <div className="p-4 bg-[#090d14] border border-[#1e293b] rounded-xl flex flex-col justify-between">
-              <span className="text-xs text-slate-400 block mb-1">Benchmark BTC/IDR (Terkonversi)</span>
+            <div className="p-4 bg-[#141C24] border border-[#202B34] rounded-[10px] flex flex-col justify-between">
+              <span className="text-xs text-[#A1AFB8] block mb-1">Benchmark BTC/IDR (Terkonversi)</span>
               <span className="text-xl font-bold font-mono text-white">
                 Rp {fxData?.referencePrices?.['BTC-IDR']?.effectiveIdrPrice?.toLocaleString('id-ID') || '1.550.797.500'}
               </span>
-              <span className="text-[10px] text-slate-500 mt-1">
+              <span className="text-[10px] text-[#71818B] mt-1">
                 ${fxData?.referencePrices?.['BTC-IDR']?.effectiveUsdtPrice?.toLocaleString() || '94,850'} USDT × Kurs
               </span>
             </div>
 
-            <div className="p-4 bg-[#090d14] border border-[#1e293b] rounded-xl flex flex-col justify-between">
-              <span className="text-xs text-slate-400 block mb-1">Benchmark ETH/IDR (Terkonversi)</span>
+            <div className="p-4 bg-[#141C24] border border-[#202B34] rounded-[10px] flex flex-col justify-between">
+              <span className="text-xs text-[#A1AFB8] block mb-1">Benchmark ETH/IDR (Terkonversi)</span>
               <span className="text-xl font-bold font-mono text-white">
                 Rp {fxData?.referencePrices?.['ETH-IDR']?.effectiveIdrPrice?.toLocaleString('id-ID') || '46.434.000'}
               </span>
-              <span className="text-[10px] text-slate-500 mt-1">
+              <span className="text-[10px] text-[#71818B] mt-1">
                 ${fxData?.referencePrices?.['ETH-IDR']?.effectiveUsdtPrice?.toLocaleString() || '2,840'} USDT × Kurs
               </span>
             </div>
 
-            <div className="p-4 bg-[#090d14] border border-[#1e293b] rounded-xl flex flex-col justify-between">
-              <span className="text-xs text-slate-400 block mb-1">Status Keabsahan Kurs</span>
+            <div className="p-4 bg-[#141C24] border border-[#202B34] rounded-[10px] flex flex-col justify-between">
+              <span className="text-xs text-[#A1AFB8] block mb-1">Status Keabsahan Kurs</span>
               <span className={`text-base font-bold font-mono ${fxData?.currentRate?.isStale ? 'text-red-400' : 'text-emerald-400'}`}>
                 {fxData?.currentRate?.isStale ? 'STALE (KEDALUWARSA)' : 'AKTIF & VALID'}
               </span>
-              <span className="text-[10px] text-slate-500 mt-1">
+              <span className="text-[10px] text-[#71818B] mt-1">
                 Berlaku s/d: {fxData?.currentRate?.validUntil ? new Date(fxData.currentRate.validUntil).toLocaleString('id-ID') : '-'}
               </span>
             </div>
           </div>
 
           {/* Form Pembaruan Manual Kurs */}
-          <div className="bg-[#090d14] border border-[#1e293b] rounded-xl p-5 shadow-lg">
+          <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] p-5 shadow-lg">
             <h3 className="text-sm font-bold text-white mb-2">Pembaruan Manual Kurs USDT/IDR (Admin / MM)</h3>
-            <p className="text-xs text-slate-400 mb-4">
+            <p className="text-xs text-[#A1AFB8] mb-4">
               Setiap perubahan kurs manual akan mengunci kurs dari overwrite otomatis CoinMarketCap dan dicatat dalam audit trail permanen ber-hash kriptografis.
             </p>
 
             <form onSubmit={handleUpdateFxRate} className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="text-xs font-semibold text-slate-300 block mb-1">Kurs Baru (IDR per 1 USDT)</label>
+                  <label className="text-xs font-semibold text-[#E4EBEF] block mb-1">Kurs Baru (IDR per 1 USDT)</label>
                   <input
                     type="number"
                     step="0.01"
                     value={manualFxRate}
                     onChange={e => setManualFxRate(e.target.value)}
                     required
-                    className="w-full bg-[#1e293b] text-white p-2.5 rounded-lg border border-[#334155] font-mono font-bold text-sm"
+                    className="w-full bg-[#17212B] text-white p-2.5 rounded-[7px] border border-[#2B3944] font-mono font-bold text-sm"
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-slate-300 block mb-1">Masa Berlaku (Jam)</label>
+                  <label className="text-xs font-semibold text-[#E4EBEF] block mb-1">Masa Berlaku (Jam)</label>
                   <input
                     type="number"
                     value={manualFxValidityHours}
@@ -2371,28 +2418,28 @@ export const MMConsoleView: React.FC<Props> = ({
                     min="1"
                     max="168"
                     required
-                    className="w-full bg-[#1e293b] text-white p-2.5 rounded-lg border border-[#334155] font-mono text-sm"
+                    className="w-full bg-[#17212B] text-white p-2.5 rounded-[7px] border border-[#2B3944] font-mono text-sm"
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-slate-300 block mb-1">Catatan / Alasan Penetapan</label>
+                  <label className="text-xs font-semibold text-[#E4EBEF] block mb-1">Catatan / Alasan Penetapan</label>
                   <input
                     type="text"
                     value={manualFxNotes}
                     onChange={e => setManualFxNotes(e.target.value)}
                     placeholder="Contoh: Penyesuaian kurs tengah BI / OTC rate"
-                    className="w-full bg-[#1e293b] text-white p-2.5 rounded-lg border border-[#334155] text-sm"
+                    className="w-full bg-[#17212B] text-white p-2.5 rounded-[7px] border border-[#2B3944] text-sm"
                   />
                 </div>
               </div>
 
               <div className="flex items-center justify-between pt-2">
-                <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer">
+                <label className="flex items-center gap-2 text-xs text-[#A1AFB8] cursor-pointer">
                   <input
                     type="checkbox"
                     checked={manualFxConfirm}
                     onChange={e => setManualFxConfirm(e.target.checked)}
-                    className="rounded bg-[#1e293b] border-[#334155] text-blue-600"
+                    className="rounded bg-[#17212B] border-[#2B3944] text-blue-600"
                   />
                   <span>Konfirmasi perubahan di luar toleransi normal jika deviasi &gt; 10%</span>
                 </label>
@@ -2400,7 +2447,7 @@ export const MMConsoleView: React.FC<Props> = ({
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg shadow transition-colors cursor-pointer"
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-[7px] shadow transition-colors cursor-pointer"
                 >
                   Simpan & Kunci Kurs Baru
                 </button>
@@ -2409,19 +2456,19 @@ export const MMConsoleView: React.FC<Props> = ({
           </div>
 
           {/* Audit History Table */}
-          <div className="bg-[#090d14] border border-[#1e293b] rounded-xl overflow-hidden shadow-lg">
-            <div className="px-5 py-3 border-b border-[#1e293b] flex items-center justify-between">
+          <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] overflow-hidden shadow-lg">
+            <div className="px-5 py-3 border-b border-[#202B34] flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <span>🔒</span> Rekam Jejak Audit Perubahan Kurs (Cryptographic SHA-256)
+                  Rekam Jejak Audit Perubahan Kurs (Cryptographic SHA-256)
                 </h3>
-                <p className="text-[11px] text-slate-400">Setiap perubahan kurs diautentikasi dengan hash chaining matematis permanen.</p>
+                <p className="text-[11px] text-[#A1AFB8]">Setiap perubahan kurs diautentikasi dengan hash chaining matematis permanen.</p>
               </div>
-              <span className="text-xs text-slate-400 font-mono">{fxData?.history?.length || 0} entri terverifikasi</span>
+              <span className="text-xs text-[#A1AFB8] font-mono">{fxData?.history?.length || 0} entri terverifikasi</span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs font-mono">
-                <thead className="bg-[#0f172a] text-slate-400 uppercase text-[11px] border-b border-[#1e293b]">
+                <thead className="bg-[#111820] text-[#A1AFB8] uppercase text-[11px] border-b border-[#202B34]">
                   <tr>
                     <th className="py-2.5 px-4">Waktu</th>
                     <th className="py-2.5 px-4 font-sans">Aktor / Admin</th>
@@ -2433,29 +2480,29 @@ export const MMConsoleView: React.FC<Props> = ({
                     <th className="py-2.5 px-4 font-sans">Catatan</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#1e293b] text-slate-300">
+                <tbody className="divide-y divide-[#202B34] text-[#E4EBEF]">
                   {(!fxData?.history || fxData.history.length === 0) ? (
                     <tr>
-                      <td colSpan={8} className="text-center py-6 text-slate-500 font-sans">
+                      <td colSpan={8} className="text-center py-6 text-[#71818B] font-sans">
                         Belum ada riwayat perubahan kurs tercatat.
                       </td>
                     </tr>
                   ) : (
                     fxData.history.map((entry: any) => (
-                      <tr key={entry.id} className="hover:bg-[#131b26]">
-                        <td className="py-2.5 px-4 text-slate-400">{formatDateTime(entry.timestamp)}</td>
+                      <tr key={entry.id} className="hover:bg-[#17212B]">
+                        <td className="py-2.5 px-4 text-[#A1AFB8]">{formatDateTime(entry.timestamp)}</td>
                         <td className="py-2.5 px-4 font-sans text-white">{entry.actor}</td>
                         <td className="py-2.5 px-4">Rp {entry.previousRate?.toLocaleString('id-ID')}</td>
                         <td className="py-2.5 px-4 font-bold text-emerald-400">Rp {entry.newRate?.toLocaleString('id-ID')}</td>
                         <td className="py-2.5 px-4">{entry.percentChange > 0 ? `+${entry.percentChange}%` : `${entry.percentChange}%`}</td>
-                        <td className="py-2.5 px-4 text-slate-400">{entry.source}</td>
+                        <td className="py-2.5 px-4 text-[#A1AFB8]">{entry.source}</td>
                         <td className="py-2.5 px-4">
                           <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 inline-flex items-center gap-1">
-                            <span>✓</span>
+                            
                             <span>{entry.hash ? entry.hash.slice(0, 10) + '...' : 'GENESIS'}</span>
                           </span>
                         </td>
-                        <td className="py-2.5 px-4 font-sans text-slate-300">{entry.notes || '-'}</td>
+                        <td className="py-2.5 px-4 font-sans text-[#E4EBEF]">{entry.notes || '-'}</td>
                       </tr>
                     ))
                   )}
@@ -2472,31 +2519,31 @@ export const MMConsoleView: React.FC<Props> = ({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <span>🎯</span> Price Follower Market-Making Bots
+                Price Follower Market-Making Bots
               </h2>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-[#A1AFB8]">
                 Bot market maker yang mengikuti pergerakan harga referensi eksternal secara otomatis dan menempatkan order riil pada Matching Engine DIMONEX.
               </p>
             </div>
             <button
               onClick={() => setIsPriceFollowerModalOpen(true)}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg shadow transition-colors flex items-center gap-1.5"
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-[7px] shadow transition-colors flex items-center gap-1.5"
             >
               <span>+</span> Deploy Price Follower Bot
             </button>
           </div>
 
           {/* Table of Price Follower Bots */}
-          <div className="bg-[#090d14] border border-[#1e293b] rounded-xl overflow-hidden shadow-lg">
-            <div className="px-5 py-3 border-b border-[#1e293b] flex items-center justify-between">
+          <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] overflow-hidden shadow-lg">
+            <div className="px-5 py-3 border-b border-[#202B34] flex items-center justify-between">
               <h3 className="text-sm font-bold text-white">Daftar Price Follower Bot ({currentEnv})</h3>
-              <span className="text-xs text-slate-400">
+              <span className="text-xs text-[#A1AFB8]">
                 {instances.filter(b => b.botType === 'PRICE_FOLLOWER').length} bot terdaftar
               </span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
-                <thead className="bg-[#0f172a] text-slate-400 uppercase font-mono text-[11px] border-b border-[#1e293b]">
+                <thead className="bg-[#111820] text-[#A1AFB8] uppercase font-mono text-[11px] border-b border-[#202B34]">
                   <tr>
                     <th className="py-2.5 px-4">Bot ID / Name</th>
                     <th className="py-2.5 px-4">Pair</th>
@@ -2509,10 +2556,10 @@ export const MMConsoleView: React.FC<Props> = ({
                     <th className="py-2.5 px-4 text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#1e293b] text-slate-300 font-mono">
+                <tbody className="divide-y divide-[#202B34] text-[#E4EBEF] font-mono">
                   {instances.filter(b => b.botType === 'PRICE_FOLLOWER').length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="text-center py-8 text-slate-500 font-sans">
+                      <td colSpan={9} className="text-center py-8 text-[#71818B] font-sans">
                         Belum ada Price Follower bot yang dikonfigurasi. Klik "+ Deploy Price Follower Bot" untuk memulai.
                       </td>
                     </tr>
@@ -2520,24 +2567,24 @@ export const MMConsoleView: React.FC<Props> = ({
                     instances.filter(b => b.botType === 'PRICE_FOLLOWER').map(b => {
                       const cfg = b.priceFollowerConfig;
                       return (
-                        <tr key={b.id} className="hover:bg-[#131b26] transition-colors">
+                        <tr key={b.id} className="hover:bg-[#17212B] transition-colors">
                           <td className="py-3 px-4 font-sans">
                             <strong className="text-white block">{b.name}</strong>
-                            <span className="text-[10px] text-slate-500 font-mono">{b.id}</span>
+                            <span className="text-[10px] text-[#71818B] font-mono">{b.id}</span>
                           </td>
                           <td className="py-3 px-4 font-bold text-white">{b.pairId}</td>
                           <td className="py-3 px-4 text-amber-400">{cfg?.reference_provider || 'AGGREGATED'}</td>
                           <td className="py-3 px-4 text-emerald-400">{cfg?.buy_offset_bps ?? 20} bps</td>
                           <td className="py-3 px-4 text-red-400">{cfg?.sell_offset_bps ?? 20} bps</td>
                           <td className="py-3 px-4 font-bold text-white">{cfg?.order_quantity || '0.01'}</td>
-                          <td className="py-3 px-4 text-slate-400">{cfg?.minimum_reprice_interval_ms || 2000} ms</td>
+                          <td className="py-3 px-4 text-[#A1AFB8]">{cfg?.minimum_reprice_interval_ms || 2000} ms</td>
                           <td className="py-3 px-4">
                             <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                               b.status === 'RUNNING'
-                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 animate-pulse'
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                                 : b.status === 'PAUSED'
                                 ? 'bg-amber-500/20 text-amber-400'
-                                : 'bg-slate-700 text-slate-300'
+                                : 'bg-slate-700 text-[#E4EBEF]'
                             }`}>
                               {b.status}
                             </span>
@@ -2567,7 +2614,7 @@ export const MMConsoleView: React.FC<Props> = ({
                               </button>
                               <button
                                 onClick={() => setSelectedBotId(b.id)}
-                                className="px-2 py-1 bg-[#1e293b] text-slate-400 hover:text-white rounded text-xs"
+                                className="px-2 py-1 bg-[#17212B] text-[#A1AFB8] hover:text-white rounded text-xs"
                               >
                                 Logs
                               </button>
@@ -2596,32 +2643,32 @@ export const MMConsoleView: React.FC<Props> = ({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <span>📊</span> Depth & Liquidity Market-Making Bots
+                Depth & Liquidity Market-Making Bots
               </h2>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-[#A1AFB8]">
                 Menyediakan likuiditas multi-level yang tebal dan nyata pada Order Book DIMONEX tanpa fake liquidity atau order buatan frontend.
               </p>
             </div>
             <button
               onClick={() => setIsDepthLiquidityModalOpen(true)}
-              className="px-4 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold rounded-lg shadow-lg transition-all flex items-center gap-2 border border-purple-400/40"
+              className="px-4 py-2.5 bg-[#1D2832] hover:bg-[#222F3A] border border-[#40515D] text-white text-xs font-bold rounded-[7px] shadow-lg transition-all flex items-center gap-2 border border-purple-400/40"
             >
-              <span className="text-sm">⚡</span>
+              
               <span>Konfigurasi Penyediaan Likuiditas (Liquidity Provision Configuration)</span>
             </button>
           </div>
 
           {/* Table of Depth Bots */}
-          <div className="bg-[#090d14] border border-[#1e293b] rounded-xl overflow-hidden shadow-lg">
-            <div className="px-5 py-3 border-b border-[#1e293b] flex items-center justify-between">
+          <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] overflow-hidden shadow-lg">
+            <div className="px-5 py-3 border-b border-[#202B34] flex items-center justify-between">
               <h3 className="text-sm font-bold text-white">Daftar Depth & Liquidity Bot ({currentEnv})</h3>
-              <span className="text-xs text-slate-400">
+              <span className="text-xs text-[#A1AFB8]">
                 {instances.filter(b => b.botType === 'DEPTH_LIQUIDITY').length} bot terdaftar
               </span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
-                <thead className="bg-[#0f172a] text-slate-400 uppercase font-mono text-[11px] border-b border-[#1e293b]">
+                <thead className="bg-[#111820] text-[#A1AFB8] uppercase font-mono text-[11px] border-b border-[#202B34]">
                   <tr>
                     <th className="py-2.5 px-4">Bot ID / Name</th>
                     <th className="py-2.5 px-4">Pair</th>
@@ -2634,10 +2681,10 @@ export const MMConsoleView: React.FC<Props> = ({
                     <th className="py-2.5 px-4 text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#1e293b] text-slate-300 font-mono">
+                <tbody className="divide-y divide-[#202B34] text-[#E4EBEF] font-mono">
                   {instances.filter(b => b.botType === 'DEPTH_LIQUIDITY').length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="text-center py-8 text-slate-500 font-sans">
+                      <td colSpan={9} className="text-center py-8 text-[#71818B] font-sans">
                         Belum ada Depth & Liquidity bot yang dikonfigurasi. Klik "+ Deploy Depth & Liquidity Bot" untuk mulai menginjeksi likuiditas riil.
                       </td>
                     </tr>
@@ -2645,26 +2692,26 @@ export const MMConsoleView: React.FC<Props> = ({
                     instances.filter(b => b.botType === 'DEPTH_LIQUIDITY').map(b => {
                       const cfg = b.depthLiquidityConfig;
                       return (
-                        <tr key={b.id} className="hover:bg-[#131b26] transition-colors">
+                        <tr key={b.id} className="hover:bg-[#17212B] transition-colors">
                           <td className="py-3 px-4 font-sans">
                             <strong className="text-white block">{b.name}</strong>
-                            <span className="text-[10px] text-slate-500 font-mono">{b.id}</span>
+                            <span className="text-[10px] text-[#71818B] font-mono">{b.id}</span>
                           </td>
                           <td className="py-3 px-4 font-bold text-white">{b.pairId}</td>
                           <td className="py-3 px-4">
                             <span className="text-emerald-400">{cfg?.number_of_bid_levels || 3} Bids</span> /{' '}
                             <span className="text-red-400">{cfg?.number_of_ask_levels || 3} Asks</span>
                           </td>
-                          <td className="py-3 px-4 text-slate-300 text-[11px]">
+                          <td className="py-3 px-4 text-[#E4EBEF] text-[11px]">
                             {cfg?.price_mode === 'CUSTOM_BOUNDS' ? (
                               <div>
                                 <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
                                   CUSTOM BOUNDS
                                 </span>
-                                <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                                <div className="text-[10px] text-[#A1AFB8] font-mono mt-0.5">
                                   Buy: {cfg.min_limit_buy_price}-{cfg.max_limit_buy_price}
                                 </div>
-                                <div className="text-[10px] text-slate-400 font-mono">
+                                <div className="text-[10px] text-[#A1AFB8] font-mono">
                                   Sell: {cfg.min_limit_sell_price}-{cfg.max_limit_sell_price}
                                 </div>
                               </div>
@@ -2673,28 +2720,28 @@ export const MMConsoleView: React.FC<Props> = ({
                                 <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30">
                                   REFF: {cfg?.reference_price_source || 'AGGREGATED'}
                                 </span>
-                                <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                                <div className="text-[10px] text-[#A1AFB8] font-mono mt-0.5">
                                   {cfg?.bid_level_offsets_bps?.join(', ') || '10, 25, 50'} bps
                                 </div>
                               </div>
                             )}
                           </td>
-                          <td className="py-3 px-4 text-slate-300 text-[11px]">
+                          <td className="py-3 px-4 text-[#E4EBEF] text-[11px]">
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-purple-300 border border-purple-500/30 block mb-1 w-max">
                               {cfg?.spacing_mode || 'LINEAR'}
                             </span>
-                            <span className="text-slate-400 text-[10px]">
+                            <span className="text-[#A1AFB8] text-[10px]">
                               {cfg?.bid_quantities?.slice(0, 3).join(', ')}...
                             </span>
                           </td>
                           <td className="py-3 px-4 text-[11px]">
                             <div className="flex flex-col">
-                              <span className="text-amber-400 font-semibold">⏱️ {cfg?.liquidity_refresh_cooldown_sec || 10}s cooldown</span>
+                              <span className="text-amber-400 font-semibold">{cfg?.liquidity_refresh_cooldown_sec || 10}s cooldown</span>
                               <span className="text-purple-300 text-[10px]">
-                                {cfg?.randomize_placement_enabled !== false ? `🎲 Jitter: ±${cfg?.price_randomization_ticks || 2} ticks` : 'Static Placement'}
+                                {cfg?.randomize_placement_enabled !== false ? `Jitter: ±${cfg?.price_randomization_ticks || 2} ticks` : 'Static Placement'}
                               </span>
                               <span className="text-emerald-400 text-[10px] font-semibold mt-0.5">
-                                🛡️ Anti-Stacking OK
+                                Anti-Stacking OK
                               </span>
                             </div>
                           </td>
@@ -2704,10 +2751,10 @@ export const MMConsoleView: React.FC<Props> = ({
                           <td className="py-3 px-4">
                             <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                               b.status === 'RUNNING'
-                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 animate-pulse'
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                                 : b.status === 'PAUSED'
                                 ? 'bg-amber-500/20 text-amber-400'
-                                : 'bg-slate-700 text-slate-300'
+                                : 'bg-slate-700 text-[#E4EBEF]'
                             }`}>
                               {b.status}
                             </span>
@@ -2719,9 +2766,9 @@ export const MMConsoleView: React.FC<Props> = ({
                                   type="button"
                                   onClick={() => handleRefreshLiquidity(b.id)}
                                   title="Segarkan Likuiditas Sekarang (Reset Cooldown & Hitung Ulang Jitter)"
-                                  className="px-2 py-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded text-xs font-bold shadow flex items-center gap-1 cursor-pointer"
+                                  className="px-2 py-1 bg-[#1D2832] hover:bg-[#222F3A] border border-[#40515D] text-white rounded text-xs font-bold shadow flex items-center gap-1 cursor-pointer"
                                 >
-                                  <span>⚡</span> Segarkan
+                                  Segarkan
                                 </button>
                               )}
                               {b.status === 'RUNNING' ? (
@@ -2741,7 +2788,7 @@ export const MMConsoleView: React.FC<Props> = ({
                               )}
                               <button
                                 onClick={() => handleOpenEditModal(b)}
-                                className="px-2 py-1 bg-[#1e293b] text-amber-400 hover:bg-[#283548] rounded text-xs"
+                                className="px-2 py-1 bg-[#17212B] text-amber-400 hover:bg-[#1D2832] rounded text-xs"
                               >
                                 Edit
                               </button>
@@ -2753,7 +2800,7 @@ export const MMConsoleView: React.FC<Props> = ({
                               </button>
                               <button
                                 onClick={() => setSelectedBotId(b.id)}
-                                className="px-2 py-1 bg-[#1e293b] text-slate-400 hover:text-white rounded text-xs"
+                                className="px-2 py-1 bg-[#17212B] text-[#A1AFB8] hover:text-white rounded text-xs"
                               >
                                 Logs
                               </button>
@@ -2782,23 +2829,23 @@ export const MMConsoleView: React.FC<Props> = ({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <span>📡</span> Depth Movement Bots (Pengikut Pergerakan WS Binance/Bybit)
+                Depth Movement Bots (Pengikut Pergerakan WS Binance/Bybit)
               </h2>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-[#A1AFB8]">
                 Cocok untuk token baru listing / harga mandiri: Bot menjaga harga lokal token Anda sendiri dan memproyeksikan <strong>% pergerakan relatif</strong> dari pair acuan WebSocket yang dikurasi Admin (bukan meniru nominal harganya).
               </p>
             </div>
             <button
               onClick={() => setIsMovementDepthModalOpen(true)}
-              className="px-4 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-bold rounded-lg shadow-lg transition-all flex items-center gap-2 border border-cyan-400/40"
+              className="px-4 py-2.5 bg-[#8DA5B1] hover:bg-[#A5BAC4] text-[#090D12] text-white text-xs font-bold rounded-[7px] shadow-lg transition-all flex items-center gap-2 border border-cyan-400/40"
             >
-              <span className="text-sm">📡</span>
+              
               <span>+ Konfigurasi Bot Depth Movement (WS)</span>
             </button>
           </div>
 
           {/* Admin Curated WS Whitelist Live Strip */}
-          <div className="p-3.5 bg-[#090d14] border border-cyan-500/20 rounded-xl space-y-2">
+          <div className="p-3.5 bg-[#141C24] border border-cyan-500/20 rounded-[10px] space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
               <span className="font-bold text-cyan-300">
                 Pair Acuan WebSocket Aktif (Kurasi Whitelist Admin): {wsWhitelist.length} pair
@@ -2819,7 +2866,7 @@ export const MMConsoleView: React.FC<Props> = ({
                 </span>
               ) : (
                 wsWhitelist.map(w => (
-                  <div key={w.symbol} className="px-2.5 py-1.5 rounded-lg bg-[#131b2a] border border-white/10 text-[11px] font-mono flex items-center gap-2">
+                  <div key={w.symbol} className="px-2.5 py-1.5 rounded-[7px] bg-[#131b2a] border border-white/10 text-[11px] font-mono flex items-center gap-2">
                     <span className="font-bold text-white">{w.symbol}</span>
                     {w.binancePrice && <span className="text-amber-300">BN: {w.binancePrice}</span>}
                     {w.bybitPrice && <span className="text-cyan-300">BY: {w.bybitPrice}</span>}
@@ -2830,16 +2877,16 @@ export const MMConsoleView: React.FC<Props> = ({
           </div>
 
           {/* Table of Movement Depth Bots */}
-          <div className="bg-[#090d14] border border-[#1e293b] rounded-xl overflow-hidden shadow-lg">
-            <div className="px-5 py-3 border-b border-[#1e293b] flex items-center justify-between">
+          <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] overflow-hidden shadow-lg">
+            <div className="px-5 py-3 border-b border-[#202B34] flex items-center justify-between">
               <h3 className="text-sm font-bold text-white">Daftar Bot Depth Movement (WS) ({currentEnv})</h3>
-              <span className="text-xs text-slate-400">
+              <span className="text-xs text-[#A1AFB8]">
                 {instances.filter(b => b.botType === 'MOVEMENT_DEPTH_LIQUIDITY').length} bot terdaftar
               </span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
-                <thead className="bg-[#0f172a] text-slate-400 uppercase font-mono text-[11px] border-b border-[#1e293b]">
+                <thead className="bg-[#111820] text-[#A1AFB8] uppercase font-mono text-[11px] border-b border-[#202B34]">
                   <tr>
                     <th className="py-2.5 px-4">Bot ID / Name</th>
                     <th className="py-2.5 px-4">Target Pair</th>
@@ -2851,10 +2898,10 @@ export const MMConsoleView: React.FC<Props> = ({
                     <th className="py-2.5 px-4 text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#1e293b] text-slate-300 font-mono">
+                <tbody className="divide-y divide-[#202B34] text-[#E4EBEF] font-mono">
                   {instances.filter(b => b.botType === 'MOVEMENT_DEPTH_LIQUIDITY').length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="text-center py-8 text-slate-500 font-sans">
+                      <td colSpan={8} className="text-center py-8 text-[#71818B] font-sans">
                         Belum ada bot Depth Movement (WS). Klik "+ Konfigurasi Bot Depth Movement (WS)" untuk menghubungkan token Anda dengan pergerakan % BTC/SOL/ETH di Binance &amp; Bybit.
                       </td>
                     </tr>
@@ -2863,10 +2910,10 @@ export const MMConsoleView: React.FC<Props> = ({
                       const cfg = b.movementDepthConfig;
                       const retPct = cfg?.last_leader_return_pct ?? 0;
                       return (
-                        <tr key={b.id} className="hover:bg-[#131b26] transition-colors">
+                        <tr key={b.id} className="hover:bg-[#17212B] transition-colors">
                           <td className="py-3 px-4 font-sans">
                             <strong className="text-white block">{b.name}</strong>
-                            <span className="text-[10px] text-slate-500 font-mono">{b.id}</span>
+                            <span className="text-[10px] text-[#71818B] font-mono">{b.id}</span>
                           </td>
                           <td className="py-3 px-4 font-bold text-white">{b.pairId}</td>
                           <td className="py-3 px-4">
@@ -2874,7 +2921,7 @@ export const MMConsoleView: React.FC<Props> = ({
                               <span className="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold text-[10px]">
                                 {cfg?.leader_symbol || 'BTCUSDT'}
                               </span>
-                              <span className="text-[10px] text-slate-400">({cfg?.leader_provider || 'AGG'})</span>
+                              <span className="text-[10px] text-[#A1AFB8]">({cfg?.leader_provider || 'AGG'})</span>
                             </div>
                             <div className={`text-[11px] font-bold mt-1 ${retPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                               {retPct >= 0 ? '+' : ''}{retPct.toFixed(3)}%
@@ -2882,11 +2929,11 @@ export const MMConsoleView: React.FC<Props> = ({
                             </div>
                           </td>
                           <td className="py-3 px-4">
-                            <div className="text-[10px] text-slate-400">Anchor: {cfg?.anchor_local_price || '-'}</div>
+                            <div className="text-[10px] text-[#A1AFB8]">Anchor: {cfg?.anchor_local_price || '-'}</div>
                             <div className="text-xs font-bold text-amber-300 mt-0.5">
                               &rarr; {cfg?.last_projected_local_price ?? cfg?.anchor_local_price}
                             </div>
-                            <div className="text-[10px] text-slate-500">
+                            <div className="text-[10px] text-[#71818B]">
                               Base WS: {cfg?.leader_baseline_price ? cfg.leader_baseline_price : 'Auto on Start'}
                             </div>
                           </td>
@@ -2894,7 +2941,7 @@ export const MMConsoleView: React.FC<Props> = ({
                             <span className="px-1.5 py-0.5 rounded bg-slate-800 text-cyan-300 border border-cyan-500/30 font-bold">
                               Beta {cfg?.movement_sensitivity ?? 1.0}x
                             </span>
-                            <div className="text-[10px] text-slate-400 mt-1">
+                            <div className="text-[10px] text-[#A1AFB8] mt-1">
                               {cfg?.spacing_mode || 'PERCENT_BPS'} · {cfg?.number_of_bid_levels || 5}B/{cfg?.number_of_ask_levels || 5}A
                             </div>
                           </td>
@@ -2904,10 +2951,10 @@ export const MMConsoleView: React.FC<Props> = ({
                           <td className="py-3 px-4">
                             <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                               b.status === 'RUNNING'
-                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 animate-pulse'
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                                 : b.status === 'PAUSED'
                                 ? 'bg-amber-500/20 text-amber-400'
-                                : 'bg-slate-700 text-slate-300'
+                                : 'bg-slate-700 text-[#E4EBEF]'
                             }`}>
                               {b.status}
                             </span>
@@ -2920,7 +2967,7 @@ export const MMConsoleView: React.FC<Props> = ({
                                   onClick={() => handleRefreshLiquidity(b.id)}
                                   className="px-2 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-bold"
                                 >
-                                  ⚡ Segarkan
+                                  Segarkan
                                 </button>
                               )}
                               <button
@@ -2929,7 +2976,7 @@ export const MMConsoleView: React.FC<Props> = ({
                                 title="Kunci ulang harga acuan WS saat ini sebagai 0% terhadap Anchor Lokal"
                                 className="px-2 py-1 bg-blue-600/20 text-blue-300 hover:bg-blue-600/40 rounded text-xs"
                               >
-                                🔄 Reset Anchor
+                                Reset Anchor
                               </button>
                               {b.status === 'RUNNING' ? (
                                 <button onClick={() => handlePauseBot(b.id)} className="px-2 py-1 bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 rounded text-xs">
@@ -2940,13 +2987,13 @@ export const MMConsoleView: React.FC<Props> = ({
                                   Start
                                 </button>
                               )}
-                              <button onClick={() => handleOpenEditModal(b)} className="px-2 py-1 bg-[#1e293b] text-amber-400 hover:bg-[#283548] rounded text-xs">
+                              <button onClick={() => handleOpenEditModal(b)} className="px-2 py-1 bg-[#17212B] text-amber-400 hover:bg-[#1D2832] rounded text-xs">
                                 Edit
                               </button>
                               <button onClick={() => handleStopBot(b.id)} className="px-2 py-1 bg-red-600/20 text-red-400 hover:bg-red-600/30 rounded text-xs">
                                 Stop
                               </button>
-                              <button onClick={() => setSelectedBotId(b.id)} className="px-2 py-1 bg-[#1e293b] text-slate-400 hover:text-white rounded text-xs">
+                              <button onClick={() => setSelectedBotId(b.id)} className="px-2 py-1 bg-[#17212B] text-[#A1AFB8] hover:text-white rounded text-xs">
                                 Logs
                               </button>
                               <button onClick={() => handleOpenDeleteModal(b)} className="px-2 py-1 bg-red-600/20 text-red-400 hover:bg-red-600/40 rounded text-xs">
@@ -3032,84 +3079,105 @@ export const MMConsoleView: React.FC<Props> = ({
         />
       )}
 
+      {/* TAB: PRICE THRESHOLD ALERTS & AUTOMATED LADDER ADJUSTMENT */}
+      {activeTab === 'PRICE_THRESHOLDS' && (
+        <PriceThresholdSection
+          environment={currentEnv}
+          tradingPairs={tradingPairs}
+          instances={instances}
+          triggers={thresholdTriggers}
+          events={thresholdEvents}
+          soundMuted={thresholdSoundMuted}
+          onToggleMute={() => {
+            const next = !thresholdSoundMuted;
+            setThresholdSoundMuted(next);
+            localStorage.setItem('dimonex_threshold_muted', next ? '1' : '0');
+          }}
+          onRefresh={() => {
+            loadThresholds();
+            loadData();
+          }}
+        />
+      )}
+
       {/* TAB: QUANTITATIVE HFT MARKET MAKER (HFT-MM) */}
       {activeTab === 'QUANT_HFT_MM' && (
         <div className="flex flex-col gap-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <span className="text-cyan-400">⚡</span> Quantitative High-Frequency Market Maker (HFT-MM)
+                Quantitative High-Frequency Market Maker (HFT-MM)
               </h2>
-              <p className="text-xs text-slate-400">
+              <p className="text-xs text-[#A1AFB8]">
                 Bot MM algoritma 3-Pilar: Analisa Top-5 Depth, Pengetatan Spread Dinamis (Inside Spread), Micro-EMA Trend Leaning, dan Anti-Manipulation Flash Defense.
               </p>
             </div>
             <button
               onClick={() => setIsQuantHftModalOpen(true)}
-              className="px-4 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-bold rounded-lg shadow-lg transition-all flex items-center gap-2 border border-cyan-400/40"
+              className="px-4 py-2.5 bg-[#8DA5B1] hover:bg-[#A5BAC4] text-[#090D12] text-white text-xs font-bold rounded-[7px] shadow-lg transition-all flex items-center gap-2 border border-cyan-400/40"
             >
-              <span className="text-sm">⚡</span>
+              
               <span>+ Deploy Quant HFT MM Bot</span>
             </button>
           </div>
 
           {/* Quick Quantitative Metrics Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            <div className="p-3 bg-[#0c1322] border border-cyan-500/20 rounded-xl">
+            <div className="p-3 bg-[#0c1322] border border-cyan-500/20 rounded-[10px]">
               <span className="text-[11px] text-cyan-300 font-semibold block mb-1">Bot HFT Aktif</span>
               <div className="flex items-baseline gap-2">
                 <span className="text-2xl font-bold font-mono text-cyan-400">
                   {instances.filter(b => b.botType === 'QUANT_HFT_MM' && b.status === 'RUNNING').length}
                 </span>
-                <span className="text-xs text-slate-500 font-mono">
+                <span className="text-xs text-[#71818B] font-mono">
                   / {instances.filter(b => b.botType === 'QUANT_HFT_MM').length} terdaftar
                 </span>
               </div>
-              <span className="text-[10px] text-slate-400 mt-1 block">Siklus frekuensi tinggi ~1.5s per tick</span>
+              <span className="text-[10px] text-[#A1AFB8] mt-1 block">Siklus frekuensi tinggi ~1.5s per tick</span>
             </div>
 
-            <div className="p-3 bg-[#0c1322] border border-cyan-500/20 rounded-xl">
+            <div className="p-3 bg-[#0c1322] border border-cyan-500/20 rounded-[10px]">
               <span className="text-[11px] text-cyan-300 font-semibold block mb-1">Spread Tightening</span>
               <div className="flex items-center gap-2 mt-1">
                 <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-xs font-bold font-mono">
                   1-Tick Inside Spread
                 </span>
               </div>
-              <span className="text-[10px] text-slate-400 mt-2 block">Prioritas antrean buku pesanan terdepan</span>
+              <span className="text-[10px] text-[#A1AFB8] mt-2 block">Prioritas antrean buku pesanan terdepan</span>
             </div>
 
-            <div className="p-3 bg-[#0c1322] border border-cyan-500/20 rounded-xl">
+            <div className="p-3 bg-[#0c1322] border border-cyan-500/20 rounded-[10px]">
               <span className="text-[11px] text-cyan-300 font-semibold block mb-1">Flash Defense Trigger</span>
               <div className="flex items-center gap-2 mt-1">
                 <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 text-xs font-bold font-mono">
                   120 bps / 2.5x Vol
                 </span>
               </div>
-              <span className="text-[10px] text-slate-400 mt-2 block">Perlebar perimeter 3.0x & micro-lot saat spike</span>
+              <span className="text-[10px] text-[#A1AFB8] mt-2 block">Perlebar perimeter 3.0x & micro-lot saat spike</span>
             </div>
 
-            <div className="p-3 bg-[#0c1322] border border-cyan-500/20 rounded-xl">
+            <div className="p-3 bg-[#0c1322] border border-cyan-500/20 rounded-[10px]">
               <span className="text-[11px] text-cyan-300 font-semibold block mb-1">Presisi Aset</span>
-              <div className="text-xs font-mono text-slate-200 mt-1">
+              <div className="text-xs font-mono text-[#E4EBEF] mt-1">
                 Base: <span className="text-cyan-400 font-bold">8 dec</span> · Quote: <span className="text-emerald-400 font-bold">6 dec</span>
               </div>
-              <span className="text-[10px] text-slate-400 mt-2 block">Zero Float Precision via integer arithmetic</span>
+              <span className="text-[10px] text-[#A1AFB8] mt-2 block">Zero Float Precision via integer arithmetic</span>
             </div>
           </div>
 
           {/* Table of Quant HFT Bots */}
-          <div className="bg-[#090d14] border border-[#1e293b] rounded-xl overflow-hidden shadow-lg">
-            <div className="px-5 py-3 border-b border-[#1e293b] flex items-center justify-between">
+          <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] overflow-hidden shadow-lg">
+            <div className="px-5 py-3 border-b border-[#202B34] flex items-center justify-between">
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <span>⚡</span> Daftar Instance Quant HFT MM ({currentEnv})
+                Daftar Instance Quant HFT MM ({currentEnv})
               </h3>
-              <span className="text-xs text-slate-400">
+              <span className="text-xs text-[#A1AFB8]">
                 {instances.filter(b => b.botType === 'QUANT_HFT_MM').length} bot terdaftar
               </span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
-                <thead className="bg-[#0f172a] text-slate-400 uppercase font-mono text-[11px] border-b border-[#1e293b]">
+                <thead className="bg-[#111820] text-[#A1AFB8] uppercase font-mono text-[11px] border-b border-[#202B34]">
                   <tr>
                     <th className="py-2.5 px-4">Bot ID / Name</th>
                     <th className="py-2.5 px-4">Pair</th>
@@ -3122,10 +3190,10 @@ export const MMConsoleView: React.FC<Props> = ({
                     <th className="py-2.5 px-4 text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[#1e293b] text-slate-300 font-mono">
+                <tbody className="divide-y divide-[#202B34] text-[#E4EBEF] font-mono">
                   {instances.filter(b => b.botType === 'QUANT_HFT_MM').length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="text-center py-10 text-slate-500 font-sans">
+                      <td colSpan={9} className="text-center py-10 text-[#71818B] font-sans">
                         Belum ada Quantitative HFT MM bot yang dikonfigurasi. Klik "+ Deploy Quant HFT MM Bot" untuk mulai mengoperasikan bot pembuat pasar kuantitatif canggih.
                       </td>
                     </tr>
@@ -3134,12 +3202,12 @@ export const MMConsoleView: React.FC<Props> = ({
                       const cfg = b.quantHftConfig;
                       const pair = tradingPairs.find(p => p.id === b.pairId);
                       return (
-                        <tr key={b.id} className="hover:bg-[#131b26] transition-colors">
+                        <tr key={b.id} className="hover:bg-[#17212B] transition-colors">
                           <td className="py-3 px-4 font-sans">
                             <strong className="text-white block flex items-center gap-1.5">
-                              <span className="text-cyan-400">⚡</span> {b.name}
+                              {b.name}
                             </strong>
-                            <span className="text-[10px] text-slate-500 font-mono">{b.id}</span>
+                            <span className="text-[10px] text-[#71818B] font-mono">{b.id}</span>
                           </td>
                           <td className="py-3 px-4 font-bold text-white">
                             <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700">
@@ -3148,13 +3216,13 @@ export const MMConsoleView: React.FC<Props> = ({
                           </td>
                           <td className="py-3 px-4">
                             <span className="text-cyan-300 font-bold">{cfg?.target_spread_pct || 0.08}%</span>
-                            <span className="text-[10px] text-slate-400 block">
-                              {cfg?.tighten_spread_enabled ? '✓ Inside Tightened' : 'Passive'}
+                            <span className="text-[10px] text-[#A1AFB8] block">
+                              {cfg?.tighten_spread_enabled ? 'Inside Tightened' : 'Passive'}
                             </span>
                           </td>
                           <td className="py-3 px-4">
                             <span className="text-emerald-400">{cfg?.micro_order_size || '0.001'} {pair?.baseCurrency || ''}</span>
-                            <span className="text-[10px] text-slate-400 block">{cfg?.max_ladder_levels || 3} Levels Ladder</span>
+                            <span className="text-[10px] text-[#A1AFB8] block">{cfg?.max_ladder_levels || 3} Levels Ladder</span>
                           </td>
                           <td className="py-3 px-4">
                             {cfg?.lastTrend === 'UPTREND' ? (
@@ -3166,15 +3234,15 @@ export const MMConsoleView: React.FC<Props> = ({
                                 ▼ DOWNTREND ({cfg.lastSkewBps || 0} bps)
                               </span>
                             ) : (
-                              <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] border border-slate-700">
+                              <span className="px-2 py-0.5 rounded bg-slate-800 text-[#A1AFB8] text-[10px] border border-slate-700">
                                 ● NEUTRAL
                               </span>
                             )}
                           </td>
                           <td className="py-3 px-4">
                             {cfg?.isFlashDefenseActive ? (
-                              <span className="px-2 py-0.5 rounded bg-red-500/20 text-red-400 text-[10px] font-bold border border-red-500/30 animate-pulse">
-                                🛡️ DEFENSE ACTIVE (3x)
+                              <span className="px-2 py-0.5 rounded bg-red-500/20 text-red-400 text-[10px] font-bold border border-red-500/30">
+                                DEFENSE ACTIVE (3x)
                               </span>
                             ) : (
                               <span className="px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-400 text-[10px] border border-cyan-500/20">
@@ -3185,11 +3253,11 @@ export const MMConsoleView: React.FC<Props> = ({
                           <td className="py-3 px-4 text-xs">
                             <div className="flex items-center gap-1.5">
                               <span className="text-white font-bold">{b.stats.ordersSubmitted}</span>
-                              <span className="text-slate-500">sub /</span>
+                              <span className="text-[#71818B]">sub /</span>
                               <span className="text-emerald-400 font-bold">{b.stats.ordersFilled}</span>
-                              <span className="text-slate-500">fill</span>
+                              <span className="text-[#71818B]">fill</span>
                             </div>
-                            <span className="text-[10px] text-slate-400 block">
+                            <span className="text-[10px] text-[#A1AFB8] block">
                               {Number(b.stats.executedVolume || 0) > 0 ? `${(Number(b.stats.executedVolume) / (10 ** (pair?.baseDecimals || 8))).toFixed(4)} ${pair?.baseCurrency || ''}` : '0 volume'}
                             </span>
                           </td>
@@ -3198,7 +3266,7 @@ export const MMConsoleView: React.FC<Props> = ({
                               b.status === 'RUNNING' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
                               b.status === 'PAUSED' ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
                               b.status === 'RISK_HALTED' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
-                              'bg-slate-700 text-slate-400'
+                              'bg-slate-700 text-[#A1AFB8]'
                             }`}>
                               {b.status}
                             </span>
@@ -3222,7 +3290,7 @@ export const MMConsoleView: React.FC<Props> = ({
                               )}
                               <button
                                 onClick={() => handleAction(`/api/mm/instance/${b.id}/stop`, 'POST')}
-                                className="px-2 py-1 bg-slate-700 text-slate-300 hover:bg-slate-600 rounded text-xs"
+                                className="px-2 py-1 bg-slate-700 text-[#E4EBEF] hover:bg-slate-600 rounded text-xs"
                               >
                                 Stop
                               </button>
@@ -3240,7 +3308,7 @@ export const MMConsoleView: React.FC<Props> = ({
                               </button>
                               <button
                                 onClick={() => setSelectedBotId(b.id)}
-                                className="px-2 py-1 bg-slate-800 text-slate-300 hover:bg-slate-700 rounded text-xs"
+                                className="px-2 py-1 bg-slate-800 text-[#E4EBEF] hover:bg-slate-700 rounded text-xs"
                               >
                                 Logs
                               </button>
@@ -3269,11 +3337,11 @@ export const MMConsoleView: React.FC<Props> = ({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-bold text-white">Order Bots Configuration & Operations</h2>
-              <p className="text-xs text-slate-400">Kelola multi-bot BUY dan SELL independen dengan konfigurasi terpisah.</p>
+              <p className="text-xs text-[#A1AFB8]">Kelola multi-bot BUY dan SELL independen dengan konfigurasi terpisah.</p>
             </div>
             <div className="flex items-center gap-2">
               {/* Filter BUY / SELL */}
-              <div className="flex items-center bg-[#131b26] p-0.5 rounded-lg border border-[#1e293b] text-xs">
+              <div className="flex items-center bg-[#17212B] p-0.5 rounded-[7px] border border-[#202B34] text-xs">
                 {(['ALL', 'BUY', 'SELL'] as const).map(flt => {
                   const count = flt === 'ALL' 
                     ? instances.filter(b => b.botType === 'ORDER_BOT').length
@@ -3285,7 +3353,7 @@ export const MMConsoleView: React.FC<Props> = ({
                       className={`px-3 py-1 font-semibold rounded-md transition-all ${
                         orderBotFilter === flt
                           ? 'bg-blue-600 text-white shadow-sm'
-                          : 'text-slate-400 hover:text-slate-200'
+                          : 'text-[#A1AFB8] hover:text-[#E4EBEF]'
                       }`}
                     >
                       {flt === 'ALL' ? 'Semua' : flt} ({count})
@@ -3295,7 +3363,7 @@ export const MMConsoleView: React.FC<Props> = ({
               </div>
               <button
                 onClick={() => setIsOrderBotModalOpen(true)}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg shadow"
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-[7px] shadow"
               >
                 + Deploy New Order Bot
               </button>
@@ -3307,17 +3375,17 @@ export const MMConsoleView: React.FC<Props> = ({
               .filter(b => b.botType === 'ORDER_BOT')
               .filter(b => orderBotFilter === 'ALL' || b.orderBotConfig?.transaction_type === orderBotFilter)
               .map(b => (
-              <div key={b.id} className="p-4 bg-[#090d14] border border-[#1e293b] rounded-xl flex flex-col justify-between">
+              <div key={b.id} className="p-4 bg-[#141C24] border border-[#202B34] rounded-[10px] flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold text-white">{b.name}</span>
                     <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                      b.status === 'RUNNING' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'
+                      b.status === 'RUNNING' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-[#A1AFB8]'
                     }`}>
                       {b.status}
                     </span>
                   </div>
-                  <div className="space-y-1 text-xs text-slate-400 font-mono mb-4">
+                  <div className="space-y-1 text-xs text-[#A1AFB8] font-mono mb-4">
                     <div className="flex justify-between">
                       <span>Side / Transaction Type:</span>
                       <strong className={b.orderBotConfig?.transaction_type === 'BUY' ? 'text-emerald-400 font-bold' : 'text-red-400 font-bold'}>
@@ -3326,11 +3394,11 @@ export const MMConsoleView: React.FC<Props> = ({
                     </div>
                     <div className="flex justify-between">
                       <span>Price Source:</span>
-                      <span className="text-slate-200">{b.orderBotConfig?.price_source}</span>
+                      <span className="text-[#E4EBEF]">{b.orderBotConfig?.price_source}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>Range Qty:</span>
-                      <span className="text-slate-200">{b.orderBotConfig?.random_min_quantity} - {b.orderBotConfig?.random_max_quantity}</span>
+                      <span className="text-[#E4EBEF]">{b.orderBotConfig?.random_min_quantity} - {b.orderBotConfig?.random_max_quantity}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>Order Count:</span>
@@ -3338,7 +3406,7 @@ export const MMConsoleView: React.FC<Props> = ({
                     </div>
                     <div className="flex justify-between">
                       <span>Split Mode:</span>
-                      <span className="text-slate-300">{b.orderBotConfig?.split_order_mode}</span>
+                      <span className="text-[#E4EBEF]">{b.orderBotConfig?.split_order_mode}</span>
                     </div>
                     {b.orderBotConfig?.buy_max_price_limit && (
                       <div className="flex justify-between text-amber-300">
@@ -3355,7 +3423,7 @@ export const MMConsoleView: React.FC<Props> = ({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1.5 pt-3 border-t border-[#1e293b]">
+                <div className="flex items-center gap-1.5 pt-3 border-t border-[#202B34]">
                   {b.status === 'RUNNING' ? (
                     <button onClick={() => handleStopBot(b.id)} className="flex-1 py-1 bg-red-600/20 text-red-400 text-xs rounded font-medium">
                       Stop
@@ -3365,13 +3433,13 @@ export const MMConsoleView: React.FC<Props> = ({
                       Start
                     </button>
                   )}
-                  <button onClick={() => handleOpenEditModal(b)} className="px-2.5 py-1 bg-[#1e293b] text-amber-400 hover:bg-[#283548] text-xs rounded">
+                  <button onClick={() => handleOpenEditModal(b)} className="px-2.5 py-1 bg-[#17212B] text-amber-400 hover:bg-[#1D2832] text-xs rounded">
                     Edit
                   </button>
-                  <button onClick={() => handleOpenCloneModal(b)} className="px-2.5 py-1 bg-[#1e293b] text-blue-400 hover:bg-[#283548] text-xs rounded">
+                  <button onClick={() => handleOpenCloneModal(b)} className="px-2.5 py-1 bg-[#17212B] text-blue-400 hover:bg-[#1D2832] text-xs rounded">
                     Clone
                   </button>
-                  <button onClick={() => setSelectedBotId(b.id)} className="px-2.5 py-1 bg-[#1e293b] text-slate-300 hover:text-white text-xs rounded">
+                  <button onClick={() => setSelectedBotId(b.id)} className="px-2.5 py-1 bg-[#17212B] text-[#E4EBEF] hover:text-white text-xs rounded">
                     Logs
                   </button>
                   <button
@@ -3394,11 +3462,11 @@ export const MMConsoleView: React.FC<Props> = ({
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-base font-bold text-white">Volume & Test Bots (Phase 9)</h2>
-              <p className="text-xs text-slate-400">Penyedia likuiditas otomatis dengan target IDR stop/start dan isolasi sandbox.</p>
+              <p className="text-xs text-[#A1AFB8]">Penyedia likuiditas otomatis dengan target IDR stop/start dan isolasi sandbox.</p>
             </div>
             <button
               onClick={() => setIsVolumeBotModalOpen(true)}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow"
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-[7px] shadow"
             >
               + Deploy Volume Bot
             </button>
@@ -3406,28 +3474,28 @@ export const MMConsoleView: React.FC<Props> = ({
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {instances.filter(b => b.botType === 'VOLUME_BOT').map(b => (
-              <div key={b.id} className="p-4 bg-[#090d14] border border-[#1e293b] rounded-xl flex flex-col justify-between">
+              <div key={b.id} className="p-4 bg-[#141C24] border border-[#202B34] rounded-[10px] flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold text-white">{b.name}</span>
                     <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                      b.status === 'RUNNING' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'
+                      b.status === 'RUNNING' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-[#A1AFB8]'
                     }`}>
                       {b.status}
                     </span>
                   </div>
-                  <div className="space-y-1 text-xs text-slate-400 font-mono mb-4">
+                  <div className="space-y-1 text-xs text-[#A1AFB8] font-mono mb-4">
                     <div className="flex justify-between">
                       <span>Target Stop IDR:</span>
-                      <span className="text-slate-200">Rp {parseInt(b.volumeBotConfig?.vol_idr_stop_target || '0').toLocaleString('id-ID')}</span>
+                      <span className="text-[#E4EBEF]">Rp {parseInt(b.volumeBotConfig?.vol_idr_stop_target || '0').toLocaleString('id-ID')}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>Delay:</span>
-                      <span className="text-slate-200">{b.volumeBotConfig?.min_delay}s - {b.volumeBotConfig?.max_delay}s</span>
+                      <span className="text-[#E4EBEF]">{b.volumeBotConfig?.min_delay}s - {b.volumeBotConfig?.max_delay}s</span>
                     </div>
                     <div className="flex justify-between">
                       <span>Qty:</span>
-                      <span className="text-slate-200">{b.volumeBotConfig?.volume_random_min_quantity} - {b.volumeBotConfig?.volume_random_max_quantity}</span>
+                      <span className="text-[#E4EBEF]">{b.volumeBotConfig?.volume_random_min_quantity} - {b.volumeBotConfig?.volume_random_max_quantity}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>Executed Vol:</span>
@@ -3436,7 +3504,7 @@ export const MMConsoleView: React.FC<Props> = ({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1.5 pt-3 border-t border-[#1e293b]">
+                <div className="flex items-center gap-1.5 pt-3 border-t border-[#202B34]">
                   {b.status === 'RUNNING' ? (
                     <button onClick={() => handleStopBot(b.id)} className="flex-1 py-1 bg-red-600/20 text-red-400 text-xs rounded font-medium">
                       Stop
@@ -3446,13 +3514,13 @@ export const MMConsoleView: React.FC<Props> = ({
                       Start
                     </button>
                   )}
-                  <button onClick={() => handleOpenEditModal(b)} className="px-2.5 py-1 bg-[#1e293b] text-amber-400 hover:bg-[#283548] text-xs rounded">
+                  <button onClick={() => handleOpenEditModal(b)} className="px-2.5 py-1 bg-[#17212B] text-amber-400 hover:bg-[#1D2832] text-xs rounded">
                     Edit
                   </button>
-                  <button onClick={() => handleOpenCloneModal(b)} className="px-2.5 py-1 bg-[#1e293b] text-blue-400 text-xs rounded">
+                  <button onClick={() => handleOpenCloneModal(b)} className="px-2.5 py-1 bg-[#17212B] text-blue-400 text-xs rounded">
                     Clone
                   </button>
-                  <button onClick={() => setSelectedBotId(b.id)} className="px-2.5 py-1 bg-[#1e293b] text-slate-300 text-xs rounded">
+                  <button onClick={() => setSelectedBotId(b.id)} className="px-2.5 py-1 bg-[#17212B] text-[#E4EBEF] text-xs rounded">
                     Logs
                   </button>
                   <button
@@ -3472,27 +3540,27 @@ export const MMConsoleView: React.FC<Props> = ({
       {/* TAB 4: CONFIGURATIONS (CSV Import & Export) */}
       {activeTab === 'CONFIGURATIONS' && (
         <div className="flex flex-col gap-5">
-          <div className="p-4 bg-[#090d14] border border-[#1e293b] rounded-xl flex items-center justify-between">
+          <div className="p-4 bg-[#141C24] border border-[#202B34] rounded-[10px] flex items-center justify-between">
             <div>
               <h3 className="text-sm font-bold text-white mb-1">CSV Configuration Manager (Phase 11)</h3>
-              <p className="text-xs text-slate-400">Impor dan ekspor batch konfigurasi bot dengan validasi baris per baris tanpa aktivasi otomatis.</p>
+              <p className="text-xs text-[#A1AFB8]">Impor dan ekspor batch konfigurasi bot dengan validasi baris per baris tanpa aktivasi otomatis.</p>
             </div>
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setIsCsvImportModalOpen(true)}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg shadow"
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-[7px] shadow"
               >
                 Upload CSV File
               </button>
               <button
                 onClick={() => handleExportCsv('ORDER_BOT')}
-                className="px-3 py-2 bg-[#1e293b] hover:bg-[#283548] text-slate-200 text-xs rounded-lg border border-[#334155]"
+                className="px-3 py-2 bg-[#17212B] hover:bg-[#1D2832] text-[#E4EBEF] text-xs rounded-[7px] border border-[#2B3944]"
               >
                 Export Order Bots CSV
               </button>
               <button
                 onClick={() => handleExportCsv('VOLUME_BOT')}
-                className="px-3 py-2 bg-[#1e293b] hover:bg-[#283548] text-slate-200 text-xs rounded-lg border border-[#334155]"
+                className="px-3 py-2 bg-[#17212B] hover:bg-[#1D2832] text-[#E4EBEF] text-xs rounded-[7px] border border-[#2B3944]"
               >
                 Export Volume Bots CSV
               </button>
@@ -3503,17 +3571,17 @@ export const MMConsoleView: React.FC<Props> = ({
 
       {/* TAB 5: BOT ACCOUNTS */}
       {activeTab === 'BOT_ACCOUNTS' && (
-        <div className="bg-[#090d14] border border-[#1e293b] rounded-xl p-4">
+        <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] p-4">
           <h3 className="text-sm font-bold text-white mb-2">Authorized Market Maker Accounts</h3>
-          <p className="text-xs text-slate-400 mb-4">Daftar saldo dan aset akun MM yang terdaftar di matching engine bursa.</p>
+          <p className="text-xs text-[#A1AFB8] mb-4">Daftar saldo dan aset akun MM yang terdaftar di matching engine bursa.</p>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             {overview?.balances?.map((b: any) => (
-              <div key={b.currency} className="p-3 bg-[#0f172a] rounded-lg border border-[#1e293b]">
-                <span className="text-xs font-bold text-slate-300 block mb-1">{b.currency}</span>
+              <div key={b.currency} className="p-3 bg-[#111820] rounded-[7px] border border-[#202B34]">
+                <span className="text-xs font-bold text-[#E4EBEF] block mb-1">{b.currency}</span>
                 <span className="text-lg font-bold font-mono text-emerald-400 block">
                   {b.currency === 'IDR' ? formatIDR(b.balanceAvailable, true) : (Number(b.balanceAvailable) / (10 ** (b.currency === 'BTC' ? 8 : b.currency === 'ETH' ? 8 : 6))).toFixed(4)}
                 </span>
-                <span className="text-[11px] text-slate-500 block">
+                <span className="text-[11px] text-[#71818B] block">
                   Locked: {b.currency === 'IDR' ? formatIDR(b.balanceLocked, true) : (Number(b.balanceLocked) / (10 ** (b.currency === 'BTC' ? 8 : b.currency === 'ETH' ? 8 : 6))).toFixed(4)}
                 </span>
               </div>
@@ -3524,14 +3592,14 @@ export const MMConsoleView: React.FC<Props> = ({
 
       {/* TAB 6: ORDERS */}
       {activeTab === 'ORDERS' && (
-        <div className="bg-[#090d14] border border-[#1e293b] rounded-xl overflow-hidden">
-          <div className="px-4 py-3 border-b border-[#1e293b] flex items-center justify-between">
+        <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] overflow-hidden">
+          <div className="px-4 py-3 border-b border-[#202B34] flex items-center justify-between">
             <h3 className="text-sm font-bold text-white">Bot Open & Historical Orders</h3>
-            <span className="text-xs text-slate-400">Real database orders</span>
+            <span className="text-xs text-[#A1AFB8]">Real database orders</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs font-mono">
-              <thead className="bg-[#0f172a] text-slate-400 uppercase text-[11px]">
+              <thead className="bg-[#111820] text-[#A1AFB8] uppercase text-[11px]">
                 <tr>
                   <th className="py-2.5 px-4">Order ID</th>
                   <th className="py-2.5 px-4">Pair</th>
@@ -3542,17 +3610,17 @@ export const MMConsoleView: React.FC<Props> = ({
                   <th className="py-2.5 px-4">Created At</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#1e293b] text-slate-300">
+              <tbody className="divide-y divide-[#202B34] text-[#E4EBEF]">
                 {botOrders.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center py-6 text-slate-500 font-sans">
+                    <td colSpan={7} className="text-center py-6 text-[#71818B] font-sans">
                       Belum ada order bot yang tercatat.
                     </td>
                   </tr>
                 ) : (
                   botOrders.map(o => (
-                    <tr key={o.id} className="hover:bg-[#131b26]">
-                      <td className="py-2.5 px-4 text-slate-400">{o.id.slice(0, 8)}...</td>
+                    <tr key={o.id} className="hover:bg-[#17212B]">
+                      <td className="py-2.5 px-4 text-[#A1AFB8]">{o.id.slice(0, 8)}...</td>
                       <td className="py-2.5 px-4 font-bold text-white">{o.pairId}</td>
                       <td className={`py-2.5 px-4 font-bold ${o.side === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>
                         {o.side}
@@ -3568,7 +3636,7 @@ export const MMConsoleView: React.FC<Props> = ({
                           {o.status}
                         </span>
                       </td>
-                      <td className="py-2.5 px-4 text-slate-500">{formatDateTime(o.createdAt)}</td>
+                      <td className="py-2.5 px-4 text-[#71818B]">{formatDateTime(o.createdAt)}</td>
                     </tr>
                   ))
                 )}
@@ -3580,13 +3648,13 @@ export const MMConsoleView: React.FC<Props> = ({
 
       {/* TAB 7: EXECUTED TRADES */}
       {activeTab === 'EXECUTED_TRADES' && (
-        <div className="bg-[#090d14] border border-[#1e293b] rounded-xl overflow-hidden">
-          <div className="px-4 py-3 border-b border-[#1e293b]">
+        <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] overflow-hidden">
+          <div className="px-4 py-3 border-b border-[#202B34]">
             <h3 className="text-sm font-bold text-white">Bot Executed Trades</h3>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs font-mono">
-              <thead className="bg-[#0f172a] text-slate-400 uppercase text-[11px]">
+              <thead className="bg-[#111820] text-[#A1AFB8] uppercase text-[11px]">
                 <tr>
                   <th className="py-2.5 px-4">Trade ID</th>
                   <th className="py-2.5 px-4">Pair</th>
@@ -3597,17 +3665,17 @@ export const MMConsoleView: React.FC<Props> = ({
                   <th className="py-2.5 px-4">Executed At</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#1e293b] text-slate-300">
+              <tbody className="divide-y divide-[#202B34] text-[#E4EBEF]">
                 {botTrades.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center py-6 text-slate-500 font-sans">
+                    <td colSpan={7} className="text-center py-6 text-[#71818B] font-sans">
                       Belum ada transaksi trade yang dieksekusi oleh bot.
                     </td>
                   </tr>
                 ) : (
                   botTrades.map(t => (
-                    <tr key={t.id} className="hover:bg-[#131b26]">
-                      <td className="py-2.5 px-4 text-slate-400">{t.id.slice(0, 8)}...</td>
+                    <tr key={t.id} className="hover:bg-[#17212B]">
+                      <td className="py-2.5 px-4 text-[#A1AFB8]">{t.id.slice(0, 8)}...</td>
                       <td className="py-2.5 px-4 font-bold text-white">{t.pairId}</td>
                       <td className={`py-2.5 px-4 font-bold ${t.takerSide === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>
                         {t.takerSide}
@@ -3619,7 +3687,7 @@ export const MMConsoleView: React.FC<Props> = ({
                       <td className="py-2.5 px-4 font-mono">
                         {formatQuotePrice(t.quoteVolume, (t.pairId || '').split('-')[1] || 'IDR', (t.pairId || '').endsWith('USDT') ? 6 : 2, true)}
                       </td>
-                      <td className="py-2.5 px-4 text-slate-500">{formatDateTime(t.createdAt)}</td>
+                      <td className="py-2.5 px-4 text-[#71818B]">{formatDateTime(t.createdAt)}</td>
                     </tr>
                   ))
                 )}
@@ -3631,25 +3699,25 @@ export const MMConsoleView: React.FC<Props> = ({
 
       {/* TAB 8: ACTIVITY LOGS */}
       {activeTab === 'ACTIVITY_LOGS' && (
-        <div className="bg-[#090d14] border border-[#1e293b] rounded-xl p-4 flex flex-col gap-3">
+        <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] p-4 flex flex-col gap-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
                 <span>Real-Time MM Activity & Execution Logs</span>
-                <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span className="h-2 w-2 rounded-full bg-emerald-400"></span>
               </h3>
-              <p className="text-xs text-slate-400">Stream audit aktivitas real-time: order submit, fill, limit cap, stop, delete bot, dan emergency kill-switch.</p>
+              <p className="text-xs text-[#A1AFB8]">Stream audit aktivitas real-time: order submit, fill, limit cap, stop, delete bot, dan emergency kill-switch.</p>
             </div>
 
             <div className="flex items-center gap-2">
-              <div className="flex items-center bg-[#131b26] p-0.5 rounded-lg border border-[#1e293b] text-xs">
+              <div className="flex items-center bg-[#17212B] p-0.5 rounded-[7px] border border-[#202B34] text-xs">
                 <button
                   type="button"
                   onClick={() => setLogFilterMode('ALL_SYSTEM')}
                   className={`px-3 py-1 font-semibold rounded-md transition-all ${
                     logFilterMode === 'ALL_SYSTEM'
                       ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-slate-400 hover:text-slate-200'
+                      : 'text-[#A1AFB8] hover:text-[#E4EBEF]'
                   }`}
                 >
                   Semua Aktivitas Live ({allActivityLogs.length})
@@ -3660,7 +3728,7 @@ export const MMConsoleView: React.FC<Props> = ({
                   className={`px-3 py-1 font-semibold rounded-md transition-all ${
                     logFilterMode === 'SINGLE_BOT'
                       ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-slate-400 hover:text-slate-200'
+                      : 'text-[#A1AFB8] hover:text-[#E4EBEF]'
                   }`}
                 >
                   Filter Per Bot
@@ -3671,7 +3739,7 @@ export const MMConsoleView: React.FC<Props> = ({
                 <select
                   value={selectedBotId || ''}
                   onChange={e => setSelectedBotId(e.target.value)}
-                  className="bg-[#1e293b] text-white text-xs px-3 py-1.5 rounded border border-[#334155]"
+                  className="bg-[#17212B] text-white text-xs px-3 py-1.5 rounded border border-[#2B3944]"
                 >
                   {instances.map(b => (
                     <option key={b.id} value={b.id}>{b.name} ({b.id})</option>
@@ -3681,21 +3749,21 @@ export const MMConsoleView: React.FC<Props> = ({
             </div>
           </div>
 
-          <div className="bg-[#05080f] rounded-lg p-3 font-mono text-xs max-h-[460px] overflow-y-auto space-y-1.5 border border-[#1e293b]">
+          <div className="bg-[#05080f] rounded-[7px] p-3 font-mono text-xs max-h-[460px] overflow-y-auto space-y-1.5 border border-[#202B34]">
             {logFilterMode === 'ALL_SYSTEM' ? (
               allActivityLogs.length === 0 ? (
-                <div className="py-8 text-center text-slate-500 font-sans">
+                <div className="py-8 text-center text-[#71818B] font-sans">
                   Belum ada log aktivitas global yang tercatat.
                 </div>
               ) : (
                 allActivityLogs.map((l, i) => (
-                  <div key={i} className="flex items-start gap-2 text-slate-300 py-1 border-b border-[#0f172a] last:border-0 hover:bg-[#0d1424] px-1 rounded transition-colors">
-                    <span className="text-slate-500 shrink-0 text-[11px]">{formatDateTime(l.timestamp)}</span>
+                  <div key={i} className="flex items-start gap-2 text-[#E4EBEF] py-1 border-b border-[#0f172a] last:border-0 hover:bg-[#0d1424] px-1 rounded transition-colors">
+                    <span className="text-[#71818B] shrink-0 text-[11px]">{formatDateTime(l.timestamp)}</span>
                     <span className={`px-1.5 py-0.5 rounded text-[10px] shrink-0 font-bold ${
                       l.type === 'FILL' ? 'bg-emerald-500/20 text-emerald-400' :
                       l.type === 'ORDER' ? 'bg-blue-500/20 text-blue-400' :
                       l.type === 'ERROR' ? 'bg-red-500/20 text-red-400' :
-                      l.type === 'RISK' ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-400'
+                      l.type === 'RISK' ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-[#A1AFB8]'
                     }`}>
                       {l.type || 'INFO'}
                     </span>
@@ -3704,28 +3772,28 @@ export const MMConsoleView: React.FC<Props> = ({
                         [{l.botName}]
                       </span>
                     )}
-                    <span className="break-all text-[11px] text-slate-200">{l.message}</span>
+                    <span className="break-all text-[11px] text-[#E4EBEF]">{l.message}</span>
                   </div>
                 ))
               )
             ) : (
               botLogs.length === 0 ? (
-                <div className="py-8 text-center text-slate-500 font-sans">
+                <div className="py-8 text-center text-[#71818B] font-sans">
                   Tidak ada log aktivitas untuk bot ini.
                 </div>
               ) : (
                 botLogs.map((l, i) => (
-                  <div key={i} className="flex items-start gap-2 text-slate-300 py-1 border-b border-[#0f172a] last:border-0 hover:bg-[#0d1424] px-1 rounded transition-colors">
-                    <span className="text-slate-500 shrink-0 text-[11px]">{formatDateTime(l.timestamp)}</span>
+                  <div key={i} className="flex items-start gap-2 text-[#E4EBEF] py-1 border-b border-[#0f172a] last:border-0 hover:bg-[#0d1424] px-1 rounded transition-colors">
+                    <span className="text-[#71818B] shrink-0 text-[11px]">{formatDateTime(l.timestamp)}</span>
                     <span className={`px-1.5 py-0.5 rounded text-[10px] shrink-0 font-bold ${
                       l.type === 'FILL' ? 'bg-emerald-500/20 text-emerald-400' :
                       l.type === 'ORDER' ? 'bg-blue-500/20 text-blue-400' :
                       l.type === 'ERROR' ? 'bg-red-500/20 text-red-400' :
-                      l.type === 'RISK' ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-400'
+                      l.type === 'RISK' ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-[#A1AFB8]'
                     }`}>
                       {l.type}
                     </span>
-                    <span className="break-all text-[11px] text-slate-200">{l.message}</span>
+                    <span className="break-all text-[11px] text-[#E4EBEF]">{l.message}</span>
                   </div>
                 ))
               )
@@ -3736,35 +3804,35 @@ export const MMConsoleView: React.FC<Props> = ({
 
       {/* TAB 9: RISK CONTROLS (Phase 10) */}
       {activeTab === 'RISK_CONTROLS' && (
-        <div className="bg-[#090d14] border border-[#1e293b] rounded-xl p-5">
+        <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] p-5">
           <h3 className="text-base font-bold text-white mb-2">Market Maker Risk Controls & Thresholds</h3>
-          <p className="text-xs text-slate-400 mb-6">
+          <p className="text-xs text-[#A1AFB8] mb-6">
             Batas pengaman bursa server-side untuk mencegah runaway loops, slippage berlebih, dan over-exposure.
           </p>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 font-mono text-xs text-slate-300">
-            <div className="p-3 bg-[#0f172a] rounded-lg border border-[#1e293b]">
-              <span className="text-slate-400 block mb-1">Max Active Bots</span>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 font-mono text-xs text-[#E4EBEF]">
+            <div className="p-3 bg-[#111820] rounded-[7px] border border-[#202B34]">
+              <span className="text-[#A1AFB8] block mb-1">Max Active Bots</span>
               <strong className="text-white text-base">{riskControls?.maxActiveBots ?? 50}</strong>
             </div>
-            <div className="p-3 bg-[#0f172a] rounded-lg border border-[#1e293b]">
-              <span className="text-slate-400 block mb-1">Max Open Orders per Bot</span>
+            <div className="p-3 bg-[#111820] rounded-[7px] border border-[#202B34]">
+              <span className="text-[#A1AFB8] block mb-1">Max Open Orders per Bot</span>
               <strong className="text-white text-base">{riskControls?.maxOpenOrdersPerBot ?? 100}</strong>
             </div>
-            <div className="p-3 bg-[#0f172a] rounded-lg border border-[#1e293b]">
-              <span className="text-slate-400 block mb-1">Max Price Deviation</span>
+            <div className="p-3 bg-[#111820] rounded-[7px] border border-[#202B34]">
+              <span className="text-[#A1AFB8] block mb-1">Max Price Deviation</span>
               <strong className="text-amber-400 text-base">{riskControls?.maxPriceDeviationPct ?? 15}%</strong>
             </div>
-            <div className="p-3 bg-[#0f172a] rounded-lg border border-[#1e293b]">
-              <span className="text-slate-400 block mb-1">Max Order Submission Rate</span>
+            <div className="p-3 bg-[#111820] rounded-[7px] border border-[#202B34]">
+              <span className="text-[#A1AFB8] block mb-1">Max Order Submission Rate</span>
               <strong className="text-white text-base">{riskControls?.maxOrderSubmissionRatePerMin ?? 120} / min</strong>
             </div>
-            <div className="p-3 bg-[#0f172a] rounded-lg border border-[#1e293b]">
-              <span className="text-slate-400 block mb-1">Max Allowed Slippage</span>
+            <div className="p-3 bg-[#111820] rounded-[7px] border border-[#202B34]">
+              <span className="text-[#A1AFB8] block mb-1">Max Allowed Slippage</span>
               <strong className="text-amber-400 text-base">{riskControls?.maxAllowedSlippagePct ?? 2.5}%</strong>
             </div>
-            <div className="p-3 bg-[#0f172a] rounded-lg border border-[#1e293b]">
-              <span className="text-slate-400 block mb-1">Self-Trade Policy (STP)</span>
+            <div className="p-3 bg-[#111820] rounded-[7px] border border-[#202B34]">
+              <span className="text-[#A1AFB8] block mb-1">Self-Trade Policy (STP)</span>
               <div className="flex items-center justify-between gap-2">
                 <strong className={`text-sm ${(riskControls?.selfTradePreventionPolicy ?? 'ALLOW_WASH') === 'ALLOW_WASH' ? 'text-emerald-400' : 'text-amber-400'}`}>
                   {riskControls?.selfTradePreventionPolicy ?? 'ALLOW_WASH'}
@@ -3780,7 +3848,7 @@ export const MMConsoleView: React.FC<Props> = ({
                       if (res?.riskControls) setRiskControls(res.riskControls);
                     } catch {}
                   }}
-                  className="bg-[#1e293b] text-slate-200 text-[11px] px-2 py-1 rounded border border-[#334155] focus:outline-none focus:border-emerald-500"
+                  className="bg-[#17212B] text-[#E4EBEF] text-[11px] px-2 py-1 rounded border border-[#2B3944] focus:outline-none focus:border-emerald-500"
                 >
                   <option value="ALLOW_WASH">ALLOW_WASH (Match Langsung)</option>
                   <option value="CANCEL_MAKER">CANCEL_MAKER (Tolak Wash)</option>
@@ -3788,7 +3856,7 @@ export const MMConsoleView: React.FC<Props> = ({
                   <option value="REJECT_BOTH">REJECT_BOTH</option>
                 </select>
               </div>
-              <span className="text-[10px] text-slate-500 mt-1 block">
+              <span className="text-[10px] text-[#71818B] mt-1 block">
                 {(riskControls?.selfTradePreventionPolicy ?? 'ALLOW_WASH') === 'ALLOW_WASH'
                   ? 'Order BUY/SELL milik sendiri langsung match tanpa lompat level.'
                   : 'Order akun sama dibatalkan sesuai kebijakan STP.'}
@@ -3800,12 +3868,12 @@ export const MMConsoleView: React.FC<Props> = ({
 
       {/* TAB 10: SETTINGS */}
       {activeTab === 'SETTINGS' && (
-        <div className="bg-[#090d14] border border-[#1e293b] rounded-xl p-5">
+        <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] p-5">
           <h3 className="text-base font-bold text-white mb-2">MM Operator Security & API Keys</h3>
-          <p className="text-xs text-slate-400 mb-4">Kelola API Keys HMAC-SHA256 untuk trading otomatis terautentikasi.</p>
+          <p className="text-xs text-[#A1AFB8] mb-4">Kelola API Keys HMAC-SHA256 untuk trading otomatis terautentikasi.</p>
           <button
             onClick={onOpenSecurityView}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-lg shadow"
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-[7px] shadow"
           >
             Buka Panel Kunci API & 2FA
           </button>
@@ -3814,17 +3882,17 @@ export const MMConsoleView: React.FC<Props> = ({
 
       {/* MODAL: CREATE ORDER BOT (Phase 7 exact fields) */}
       {isOrderBotModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 overflow-y-auto">
-          <div className="bg-[#0f172a] border border-[#1e293b] rounded-xl max-w-2xl w-full p-6 text-slate-300 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#1e293b]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#090D12]/80 p-4 overflow-y-auto">
+          <div className="bg-[#111820] border border-[#202B34] rounded-[10px] max-w-2xl w-full p-6 text-[#E4EBEF] max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#202B34]">
               <div>
                 <h2 className="text-base font-bold text-white">Deploy New Order Bot ({currentEnv})</h2>
-                <p className="text-xs text-slate-400">Konfigurasi bot likuiditas BUY atau SELL independen dengan batas harga & trailing.</p>
+                <p className="text-xs text-[#A1AFB8]">Konfigurasi bot likuiditas BUY atau SELL independen dengan batas harga & trailing.</p>
               </div>
               <button
                 type="button"
                 onClick={() => setIsOrderBotModalOpen(false)}
-                className="text-slate-400 hover:text-white text-lg font-bold"
+                className="text-[#A1AFB8] hover:text-white text-lg font-bold"
               >
                 ✕
               </button>
@@ -3833,21 +3901,21 @@ export const MMConsoleView: React.FC<Props> = ({
             <form onSubmit={handleCreateOrderBot} className="space-y-4 text-xs font-sans">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Bot Name</label>
+                  <label className="text-[#A1AFB8] block mb-1">Bot Name</label>
                   <input
                     type="text"
                     value={obName}
                     onChange={e => setObName(e.target.value)}
                     required
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Trading Pair</label>
+                  <label className="text-[#A1AFB8] block mb-1">Trading Pair</label>
                   <select
                     value={obPairId}
                     onChange={e => setObPairId(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   >
                     {tradingPairs.map(p => (
                       <option key={p.id} value={p.id}>{p.id}</option>
@@ -3858,22 +3926,22 @@ export const MMConsoleView: React.FC<Props> = ({
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1 font-semibold">Side / Transaction Type</label>
+                  <label className="text-[#A1AFB8] block mb-1 font-semibold">Side / Transaction Type</label>
                   <select
                     value={obTransactionType}
                     onChange={e => setObTransactionType(e.target.value as any)}
-                    className="w-full bg-[#1e293b] font-bold text-xs p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] font-bold text-xs p-2 rounded border border-[#2B3944]"
                   >
                     <option value="BUY" className="text-emerald-400">BUY (Beli / Bid)</option>
                     <option value="SELL" className="text-red-400">SELL (Jual / Ask)</option>
                   </select>
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Price Source</label>
+                  <label className="text-[#A1AFB8] block mb-1">Price Source</label>
                   <select
                     value={obPriceSource}
                     onChange={e => setObPriceSource(e.target.value as any)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   >
                     <option value="MIDPOINT">MIDPOINT</option>
                     <option value="BEST_BID">BEST_BID</option>
@@ -3882,7 +3950,7 @@ export const MMConsoleView: React.FC<Props> = ({
                   </select>
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">
+                  <label className="text-[#A1AFB8] block mb-1">
                     Order Count <span className="text-[10px] text-blue-400 font-normal">(0 = Berjalan Terus)</span>
                   </label>
                   <input
@@ -3891,20 +3959,20 @@ export const MMConsoleView: React.FC<Props> = ({
                     onChange={e => setObOrderCount(e.target.value)}
                     required
                     placeholder="0 = Tanpa Henti"
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
-                  <span className="text-[10px] text-slate-500 mt-0.5 block">
-                    {Number(obOrderCount) === 0 ? '✓ Berjalan terus tanpa batas' : `Akan stop otomatis setelah ${obOrderCount} order`}
+                  <span className="text-[10px] text-[#71818B] mt-0.5 block">
+                    {Number(obOrderCount) === 0 ? 'Berjalan terus tanpa batas' : `Akan stop otomatis setelah ${obOrderCount} order`}
                   </span>
                 </div>
               </div>
 
               {/* DYNAMIC PRICE LIMITS: BUY vs SELL */}
               {obTransactionType === 'BUY' ? (
-                <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg space-y-2">
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-[7px] space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-emerald-300 uppercase tracking-wide flex items-center gap-1.5">
-                      <span>🟢</span> Batas Perlindungan Harga BUY (Price Limit Constraints)
+                      Batas Perlindungan Harga BUY (Price Limit Constraints)
                     </span>
                     <span className="text-[10px] text-emerald-400 font-medium">Khusus Order Beli (Bid)</span>
                   </div>
@@ -3918,9 +3986,9 @@ export const MMConsoleView: React.FC<Props> = ({
                         value={obBuyMinPrice}
                         onChange={e => setObBuyMinPrice(e.target.value)}
                         placeholder="Contoh: 1300000000 (Kosongkan jika tanpa batas)"
-                        className="w-full bg-[#1e293b] text-emerald-300 font-mono p-2 rounded border border-emerald-500/40 focus:border-emerald-400 outline-none"
+                        className="w-full bg-[#17212B] text-emerald-300 font-mono p-2 rounded border border-emerald-500/40 focus:border-emerald-400 outline-none"
                       />
-                      <span className="text-[10px] text-slate-400 mt-0.5 block">
+                      <span className="text-[10px] text-[#A1AFB8] mt-0.5 block">
                         Floor: Bot BUY tidak akan memasang bid di bawah harga ini.
                       </span>
                     </div>
@@ -3933,19 +4001,19 @@ export const MMConsoleView: React.FC<Props> = ({
                         value={obBuyMaxPrice}
                         onChange={e => setObBuyMaxPrice(e.target.value)}
                         placeholder="Contoh: 1600000000 (Kosongkan jika tanpa batas)"
-                        className="w-full bg-[#1e293b] text-emerald-300 font-mono p-2 rounded border border-emerald-500/40 focus:border-emerald-400 outline-none"
+                        className="w-full bg-[#17212B] text-emerald-300 font-mono p-2 rounded border border-emerald-500/40 focus:border-emerald-400 outline-none"
                       />
-                      <span className="text-[10px] text-slate-400 mt-0.5 block">
+                      <span className="text-[10px] text-[#A1AFB8] mt-0.5 block">
                         Ceiling: Bot BUY tidak akan memasang bid di atas harga ini.
                       </span>
                     </div>
                   </div>
                 </div>
               ) : (
-                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg space-y-2">
+                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-[7px] space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-red-300 uppercase tracking-wide flex items-center gap-1.5">
-                      <span>🔴</span> Batas Perlindungan Harga SELL (Price Limit Constraints)
+                      Batas Perlindungan Harga SELL (Price Limit Constraints)
                     </span>
                     <span className="text-[10px] text-red-400 font-medium">Khusus Order Jual (Ask)</span>
                   </div>
@@ -3959,9 +4027,9 @@ export const MMConsoleView: React.FC<Props> = ({
                         value={obSellMinPrice}
                         onChange={e => setObSellMinPrice(e.target.value)}
                         placeholder="Contoh: 1300000000 (Kosongkan jika tanpa batas)"
-                        className="w-full bg-[#1e293b] text-red-300 font-mono p-2 rounded border border-red-500/40 focus:border-red-400 outline-none"
+                        className="w-full bg-[#17212B] text-red-300 font-mono p-2 rounded border border-red-500/40 focus:border-red-400 outline-none"
                       />
-                      <span className="text-[10px] text-slate-400 mt-0.5 block">
+                      <span className="text-[10px] text-[#A1AFB8] mt-0.5 block">
                         Floor: Bot SELL tidak akan menjual di bawah harga ini.
                       </span>
                     </div>
@@ -3974,9 +4042,9 @@ export const MMConsoleView: React.FC<Props> = ({
                         value={obSellMaxPrice}
                         onChange={e => setObSellMaxPrice(e.target.value)}
                         placeholder="Contoh: 1650000000 (Kosongkan jika tanpa batas)"
-                        className="w-full bg-[#1e293b] text-red-300 font-mono p-2 rounded border border-red-500/40 focus:border-red-400 outline-none"
+                        className="w-full bg-[#17212B] text-red-300 font-mono p-2 rounded border border-red-500/40 focus:border-red-400 outline-none"
                       />
-                      <span className="text-[10px] text-slate-400 mt-0.5 block">
+                      <span className="text-[10px] text-[#A1AFB8] mt-0.5 block">
                         Ceiling: Bot SELL tidak akan memasang ask di atas harga ini.
                       </span>
                     </div>
@@ -3986,108 +4054,108 @@ export const MMConsoleView: React.FC<Props> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Random Min Quantity</label>
+                  <label className="text-[#A1AFB8] block mb-1">Random Min Quantity</label>
                   <input
                     type="text"
                     value={obRandomMinQty}
                     onChange={e => setObRandomMinQty(e.target.value)}
                     required
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Random Max Quantity</label>
+                  <label className="text-[#A1AFB8] block mb-1">Random Max Quantity</label>
                   <input
                     type="text"
                     value={obRandomMaxQty}
                     onChange={e => setObRandomMaxQty(e.target.value)}
                     required
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Price Decimal</label>
+                  <label className="text-[#A1AFB8] block mb-1">Price Decimal</label>
                   <input
                     type="number"
                     value={obPriceDecimal}
                     onChange={e => setObPriceDecimal(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Quantity Decimal</label>
+                  <label className="text-[#A1AFB8] block mb-1">Quantity Decimal</label>
                   <input
                     type="number"
                     value={obQtyDecimal}
                     onChange={e => setObQtyDecimal(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Split Order Mode</label>
+                  <label className="text-[#A1AFB8] block mb-1">Split Order Mode</label>
                   <select
                     value={obSplitMode}
                     onChange={e => setObSplitMode(e.target.value as any)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   >
                     <option value="NONE">NONE</option>
                     <option value="RANDOM_SPLIT">RANDOM_SPLIT</option>
                   </select>
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Split Range</label>
+                  <label className="text-[#A1AFB8] block mb-1">Split Range</label>
                   <input
                     type="text"
                     value={obSplitRange}
                     onChange={e => setObSplitRange(e.target.value)}
                     disabled={obSplitMode === 'NONE'}
-                    className={`w-full p-2 rounded border border-[#334155] ${obSplitMode === 'NONE' ? 'bg-[#0f172a] text-slate-600' : 'bg-[#1e293b] text-white'}`}
+                    className={`w-full p-2 rounded border border-[#2B3944] ${obSplitMode === 'NONE' ? 'bg-[#111820] text-slate-600' : 'bg-[#17212B] text-white'}`}
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Buy Trailing (Min % - Max %)</label>
+                  <label className="text-[#A1AFB8] block mb-1">Buy Trailing (Min % - Max %)</label>
                   <div className="flex gap-2">
                     <input
                       type="text"
                       value={obBuyTrailMin}
                       onChange={e => setObBuyTrailMin(e.target.value)}
                       placeholder="Min %"
-                      className="w-1/2 bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
                     <input
                       type="text"
                       value={obBuyTrailMax}
                       onChange={e => setObBuyTrailMax(e.target.value)}
                       placeholder="Max %"
-                      className="w-1/2 bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
                   </div>
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Sell Trailing (Min % - Max %)</label>
+                  <label className="text-[#A1AFB8] block mb-1">Sell Trailing (Min % - Max %)</label>
                   <div className="flex gap-2">
                     <input
                       type="text"
                       value={obSellTrailMin}
                       onChange={e => setObSellTrailMin(e.target.value)}
                       placeholder="Min %"
-                      className="w-1/2 bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
                     <input
                       type="text"
                       value={obSellTrailMax}
                       onChange={e => setObSellTrailMax(e.target.value)}
                       placeholder="Max %"
-                      className="w-1/2 bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
                   </div>
                 </div>
@@ -4095,35 +4163,35 @@ export const MMConsoleView: React.FC<Props> = ({
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Expire Time (Detik, 0 = GTC)</label>
+                  <label className="text-[#A1AFB8] block mb-1">Expire Time (Detik, 0 = GTC)</label>
                   <input
                     type="number"
                     value={obExpireTime}
                     onChange={e => setObExpireTime(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Jitter Timing (%)</label>
+                  <label className="text-[#A1AFB8] block mb-1">Jitter Timing (%)</label>
                   <input
                     type="number"
                     value={obJitterTiming}
                     onChange={e => setObJitterTiming(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Jitter Price (%)</label>
+                  <label className="text-[#A1AFB8] block mb-1">Jitter Price (%)</label>
                   <input
                     type="number"
                     value={obJitterPrice}
                     onChange={e => setObJitterPrice(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#1e293b]">
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#202B34]">
                 <button
                   type="button"
                   onClick={() => setIsOrderBotModalOpen(false)}
@@ -4146,17 +4214,17 @@ export const MMConsoleView: React.FC<Props> = ({
 
       {/* MODAL: CREATE VOLUME BOT (Phase 9 exact fields) */}
       {isVolumeBotModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 overflow-y-auto">
-          <div className="bg-[#0f172a] border border-[#1e293b] rounded-xl max-w-2xl w-full p-6 text-slate-300 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#1e293b]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#090D12]/80 p-4 overflow-y-auto">
+          <div className="bg-[#111820] border border-[#202B34] rounded-[10px] max-w-2xl w-full p-6 text-[#E4EBEF] max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#202B34]">
               <div>
                 <h2 className="text-base font-bold text-white mb-0.5">Deploy New Volume Bot ({currentEnv})</h2>
-                <p className="text-xs text-slate-400">Bot volume wash-trading & likuiditas dua arah (Buy/Sell cross matched).</p>
+                <p className="text-xs text-[#A1AFB8]">Bot volume wash-trading & likuiditas dua arah (Buy/Sell cross matched).</p>
               </div>
               <button
                 type="button"
                 onClick={() => setIsVolumeBotModalOpen(false)}
-                className="text-slate-400 hover:text-white text-lg font-bold"
+                className="text-[#A1AFB8] hover:text-white text-lg font-bold"
               >
                 ✕
               </button>
@@ -4165,21 +4233,21 @@ export const MMConsoleView: React.FC<Props> = ({
             <form onSubmit={handleCreateVolumeBot} className="space-y-4 text-xs font-sans">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Bot Name</label>
+                  <label className="text-[#A1AFB8] block mb-1">Bot Name</label>
                   <input
                     type="text"
                     value={vbName}
                     onChange={e => setVbName(e.target.value)}
                     required
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Trading Pair</label>
+                  <label className="text-[#A1AFB8] block mb-1">Trading Pair</label>
                   <select
                     value={vbPairId}
                     onChange={e => setVbPairId(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   >
                     {tradingPairs.map(p => (
                       <option key={p.id} value={p.id}>{p.id}</option>
@@ -4190,21 +4258,21 @@ export const MMConsoleView: React.FC<Props> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Target Stop Volume (IDR)</label>
+                  <label className="text-[#A1AFB8] block mb-1">Target Stop Volume (IDR)</label>
                   <input
                     type="text"
                     value={vbVolIdrStop}
                     onChange={e => setVbVolIdrStop(e.target.value)}
                     required
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Priority</label>
+                  <label className="text-[#A1AFB8] block mb-1">Priority</label>
                   <select
                     value={vbPriority}
                     onChange={e => setVbPriority(e.target.value as any)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   >
                     <option value="RANDOM">random</option>
                     <option value="HIGH">high</option>
@@ -4215,80 +4283,80 @@ export const MMConsoleView: React.FC<Props> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Random Min Quantity</label>
+                  <label className="text-[#A1AFB8] block mb-1">Random Min Quantity</label>
                   <input
                     type="text"
                     value={vbRandomMinQty}
                     onChange={e => setVbRandomMinQty(e.target.value)}
                     required
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Random Max Quantity</label>
+                  <label className="text-[#A1AFB8] block mb-1">Random Max Quantity</label>
                   <input
                     type="text"
                     value={vbRandomMaxQty}
                     onChange={e => setVbRandomMaxQty(e.target.value)}
                     required
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Volume Price Decimal</label>
+                  <label className="text-[#A1AFB8] block mb-1">Volume Price Decimal</label>
                   <input
                     type="number"
                     value={vbPriceDecimal}
                     onChange={e => setVbPriceDecimal(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Volume Quantity Decimal</label>
+                  <label className="text-[#A1AFB8] block mb-1">Volume Quantity Decimal</label>
                   <input
                     type="number"
                     value={vbQtyDecimal}
                     onChange={e => setVbQtyDecimal(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Scheduling Delay (Min - Max Detik)</label>
+                  <label className="text-[#A1AFB8] block mb-1">Scheduling Delay (Min - Max Detik)</label>
                   <div className="flex gap-2">
                     <input
                       type="number"
                       value={vbMinDelay}
                       onChange={e => setVbMinDelay(e.target.value)}
-                      className="w-1/2 bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
                     <input
                       type="number"
                       value={vbMaxDelay}
                       onChange={e => setVbMaxDelay(e.target.value)}
-                      className="w-1/2 bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
                   </div>
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Difference Spread (Min - Max)</label>
+                  <label className="text-[#A1AFB8] block mb-1">Difference Spread (Min - Max)</label>
                   <div className="flex gap-2">
                     <input
                       type="text"
                       value={vbMinDiff}
                       onChange={e => setVbMinDiff(e.target.value)}
-                      className="w-1/2 bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
                     <input
                       type="text"
                       value={vbMaxDiff}
                       onChange={e => setVbMaxDiff(e.target.value)}
-                      className="w-1/2 bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
                   </div>
                 </div>
@@ -4296,48 +4364,48 @@ export const MMConsoleView: React.FC<Props> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Min Limit Price (IDR)</label>
+                  <label className="text-[#A1AFB8] block mb-1">Min Limit Price (IDR)</label>
                   <input
                     type="text"
                     value={vbMinLimitPrice}
                     onChange={e => setVbMinLimitPrice(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Max Limit Price (IDR)</label>
+                  <label className="text-[#A1AFB8] block mb-1">Max Limit Price (IDR)</label>
                   <input
                     type="text"
                     value={vbMaxLimitPrice}
                     onChange={e => setVbMaxLimitPrice(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Vol IDR Start Threshold</label>
+                  <label className="text-[#A1AFB8] block mb-1">Vol IDR Start Threshold</label>
                   <input
                     type="text"
                     value={vbVolIdrStart}
                     onChange={e => setVbVolIdrStart(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Volume Sell Account ID (Default: None)</label>
+                  <label className="text-[#A1AFB8] block mb-1">Volume Sell Account ID (Default: None)</label>
                   <input
                     type="text"
                     value={vbSellAccountId}
                     onChange={e => setVbSellAccountId(e.target.value)}
                     placeholder="None"
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#1e293b]">
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#202B34]">
                 <button
                   type="button"
                   onClick={() => setIsVolumeBotModalOpen(false)}
@@ -4360,17 +4428,17 @@ export const MMConsoleView: React.FC<Props> = ({
 
       {/* MODAL: CREATE PRICE FOLLOWER BOT */}
       {isPriceFollowerModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 overflow-y-auto">
-          <div className="bg-[#0f172a] border border-[#1e293b] rounded-xl max-w-2xl w-full p-6 text-slate-300 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#1e293b]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#090D12]/80 p-4 overflow-y-auto">
+          <div className="bg-[#111820] border border-[#202B34] rounded-[10px] max-w-2xl w-full p-6 text-[#E4EBEF] max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#202B34]">
               <div>
                 <h2 className="text-base font-bold text-white mb-0.5">Deploy Price Follower Bot ({currentEnv})</h2>
-                <p className="text-xs text-slate-400">Bot otomatis yang menempatkan Limit Buy & Sell mengikuti feed harga eksternal.</p>
+                <p className="text-xs text-[#A1AFB8]">Bot otomatis yang menempatkan Limit Buy & Sell mengikuti feed harga eksternal.</p>
               </div>
               <button
                 type="button"
                 onClick={() => setIsPriceFollowerModalOpen(false)}
-                className="text-slate-400 hover:text-white text-lg font-bold"
+                className="text-[#A1AFB8] hover:text-white text-lg font-bold"
               >
                 ✕
               </button>
@@ -4379,21 +4447,21 @@ export const MMConsoleView: React.FC<Props> = ({
             <form onSubmit={handleCreatePriceFollower} className="space-y-4 text-xs font-sans">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Bot Name</label>
+                  <label className="text-[#A1AFB8] block mb-1">Bot Name</label>
                   <input
                     type="text"
                     value={pfName}
                     onChange={e => setPfName(e.target.value)}
                     required
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Trading Pair</label>
+                  <label className="text-[#A1AFB8] block mb-1">Trading Pair</label>
                   <select
                     value={pfPairId}
                     onChange={e => setPfPairId(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   >
                     {tradingPairs.map(p => (
                       <option key={p.id} value={p.id}>{p.id}</option>
@@ -4404,11 +4472,11 @@ export const MMConsoleView: React.FC<Props> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Reference Feed Provider</label>
+                  <label className="text-[#A1AFB8] block mb-1">Reference Feed Provider</label>
                   <select
                     value={pfProvider}
                     onChange={e => setPfProvider(e.target.value as any)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   >
                     <option value="AGGREGATED">AGGREGATED (Binance + Bybit + CMC)</option>
                     <option value="BINANCE">BINANCE SPOT ONLY</option>
@@ -4417,69 +4485,69 @@ export const MMConsoleView: React.FC<Props> = ({
                   </select>
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Order Quantity (Base Asset)</label>
+                  <label className="text-[#A1AFB8] block mb-1">Order Quantity (Base Asset)</label>
                   <input
                     type="text"
                     value={pfOrderQty}
                     onChange={e => setPfOrderQty(e.target.value)}
                     required
                     placeholder="e.g. 0.02"
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Buy Offset (bps below reference)</label>
+                  <label className="text-[#A1AFB8] block mb-1">Buy Offset (bps below reference)</label>
                   <input
                     type="number"
                     value={pfBuyOffsetBps}
                     onChange={e => setPfBuyOffsetBps(e.target.value)}
                     min="0"
                     required
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono"
                   />
-                  <span className="text-[10px] text-slate-500 mt-0.5 block">20 bps = 0.20% di bawah harga acuan</span>
+                  <span className="text-[10px] text-[#71818B] mt-0.5 block">20 bps = 0.20% di bawah harga acuan</span>
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Sell Offset (bps above reference)</label>
+                  <label className="text-[#A1AFB8] block mb-1">Sell Offset (bps above reference)</label>
                   <input
                     type="number"
                     value={pfSellOffsetBps}
                     onChange={e => setPfSellOffsetBps(e.target.value)}
                     min="0"
                     required
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono"
                   />
-                  <span className="text-[10px] text-slate-500 mt-0.5 block">20 bps = 0.20% di atas harga acuan</span>
+                  <span className="text-[10px] text-[#71818B] mt-0.5 block">20 bps = 0.20% di atas harga acuan</span>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Minimum Reprice Interval (ms)</label>
+                  <label className="text-[#A1AFB8] block mb-1">Minimum Reprice Interval (ms)</label>
                   <input
                     type="number"
                     value={pfRepriceInterval}
                     onChange={e => setPfRepriceInterval(e.target.value)}
                     min="1000"
                     required
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono"
                   />
-                  <span className="text-[10px] text-slate-500 mt-0.5 block">Mencegah churn cancel/replace berlebihan</span>
+                  <span className="text-[10px] text-[#71818B] mt-0.5 block">Mencegah churn cancel/replace berlebihan</span>
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Minimum Price Change Threshold (bps)</label>
+                  <label className="text-[#A1AFB8] block mb-1">Minimum Price Change Threshold (bps)</label>
                   <input
                     type="number"
                     value={pfMinPriceChangeBps}
                     onChange={e => setPfMinPriceChangeBps(e.target.value)}
                     min="1"
                     required
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono"
                   />
-                  <span className="text-[10px] text-slate-500 mt-0.5 block">Reprice hanya jika pergerakan &ge; X bps</span>
+                  <span className="text-[10px] text-[#71818B] mt-0.5 block">Reprice hanya jika pergerakan &ge; X bps</span>
                 </div>
               </div>
 
@@ -4489,14 +4557,14 @@ export const MMConsoleView: React.FC<Props> = ({
                   id="pfDryRun"
                   checked={pfDryRun}
                   onChange={e => setPfDryRun(e.target.checked)}
-                  className="rounded bg-[#1e293b] border-[#334155] text-emerald-600"
+                  className="rounded bg-[#17212B] border-[#2B3944] text-emerald-600"
                 />
-                <label htmlFor="pfDryRun" className="text-slate-300 cursor-pointer">
+                <label htmlFor="pfDryRun" className="text-[#E4EBEF] cursor-pointer">
                   Dry-Run Mode (Simulasi kalkulasi harga & log tanpa submit order ke Matching Engine)
                 </label>
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#1e293b]">
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#202B34]">
                 <button
                   type="button"
                   onClick={() => setIsPriceFollowerModalOpen(false)}
@@ -4519,26 +4587,26 @@ export const MMConsoleView: React.FC<Props> = ({
 
       {/* MODAL: LIQUIDITY PROVISION CONFIGURATION (DEPTH & LIQUIDITY BOT) */}
       {isDepthLiquidityModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 overflow-y-auto">
-          <div className="bg-[#0f172a] border border-[#1e293b] rounded-xl max-w-3xl w-full p-6 text-slate-300 max-h-[92vh] overflow-y-auto shadow-2xl">
-            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#1e293b]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#090D12]/80 p-4 overflow-y-auto">
+          <div className="bg-[#111820] border border-[#202B34] rounded-[10px] max-w-3xl w-full p-6 text-[#E4EBEF] max-h-[92vh] overflow-y-auto shadow-2xl">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#202B34]">
               <div>
                 <div className="flex items-center gap-2">
                   <h2 className="text-base font-bold text-white flex items-center gap-1.5">
-                    <span className="text-purple-400">⚡</span> Konfigurasi Penyediaan Likuiditas (Liquidity Provision Configuration)
+                    Konfigurasi Penyediaan Likuiditas (Liquidity Provision Configuration)
                   </h2>
                   <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
                     {currentEnv}
                   </span>
                 </div>
-                <p className="text-xs text-slate-400 mt-0.5">
+                <p className="text-xs text-[#A1AFB8] mt-0.5">
                   Generate instance bot depth baru untuk pair trading spesifik dengan kontrol rentang mandiri (Custom Pricing Mode), jarak tangga (anti-stacking), dan manajemen inventaris.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setIsDepthLiquidityModalOpen(false)}
-                className="text-slate-400 hover:text-white text-lg font-bold p-1 rounded hover:bg-slate-800"
+                className="text-[#A1AFB8] hover:text-white text-lg font-bold p-1 rounded hover:bg-slate-800"
               >
                 ✕
               </button>
@@ -4548,21 +4616,21 @@ export const MMConsoleView: React.FC<Props> = ({
               {/* SECTION 1: IDENTITY & PAIR */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-300 block mb-1 font-semibold">Bot Instance Name</label>
+                  <label className="text-[#E4EBEF] block mb-1 font-semibold">Bot Instance Name</label>
                   <input
                     type="text"
                     value={dlName}
                     onChange={e => setDlName(e.target.value)}
                     required
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] focus:border-purple-400 outline-none"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] focus:border-purple-400 outline-none"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-300 block mb-1 font-semibold">Trading Pair (Target Market)</label>
+                  <label className="text-[#E4EBEF] block mb-1 font-semibold">Trading Pair (Target Market)</label>
                   <select
                     value={dlPairId}
                     onChange={e => handleDlPairChange(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] focus:border-purple-400 outline-none"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] focus:border-purple-400 outline-none"
                   >
                     {tradingPairs.map(p => (
                       <option key={p.id} value={p.id}>{p.id} ({p.quoteCurrency})</option>
@@ -4572,9 +4640,9 @@ export const MMConsoleView: React.FC<Props> = ({
               </div>
 
               {/* QUICK PRESETS BAR */}
-              <div className="p-2.5 bg-[#131b2a] border border-purple-500/30 rounded-lg space-y-2">
+              <div className="p-2.5 bg-[#131b2a] border border-purple-500/30 rounded-[7px] space-y-2">
                 <span className="text-[11px] font-bold text-purple-300 block">
-                  ⚡ Preset Cepat Depth & Liquidity (Pilih Sesuai Karakter Pasar):
+                  Preset Cepat Depth & Liquidity (Pilih Sesuai Karakter Pasar):
                 </span>
                 <div className="flex flex-wrap gap-1.5">
                   <button
@@ -4601,7 +4669,7 @@ export const MMConsoleView: React.FC<Props> = ({
                     }}
                     className="px-2.5 py-1 bg-purple-900/60 hover:bg-purple-800 text-purple-200 text-[10px] font-semibold rounded border border-purple-500/40 transition-colors"
                   >
-                    🚀 Token Baru / New Listing (Custom Bounds)
+                    Token Baru / New Listing (Custom Bounds)
                   </button>
 
                   <button
@@ -4616,7 +4684,7 @@ export const MMConsoleView: React.FC<Props> = ({
                     }}
                     className="px-2.5 py-1 bg-indigo-900/60 hover:bg-indigo-800 text-indigo-200 text-[10px] font-semibold rounded border border-indigo-500/40 transition-colors"
                   >
-                    🛡️ Deep Protection (Geometric Ladder)
+                    Deep Protection (Geometric Ladder)
                   </button>
 
                   <button
@@ -4633,7 +4701,7 @@ export const MMConsoleView: React.FC<Props> = ({
                     }}
                     className="px-2.5 py-1 bg-emerald-900/60 hover:bg-emerald-800 text-emerald-200 text-[10px] font-semibold rounded border border-emerald-500/40 transition-colors"
                   >
-                    💵 USDT/IDR Tight Spread
+                    USDT/IDR Tight Spread
                   </button>
 
                   <button
@@ -4645,13 +4713,13 @@ export const MMConsoleView: React.FC<Props> = ({
                     }}
                     className="px-2.5 py-1 bg-blue-900/60 hover:bg-blue-800 text-blue-200 text-[10px] font-semibold rounded border border-blue-500/40 transition-colors"
                   >
-                    🌐 External Feed Tracker (Binance/Bybit)
+                    External Feed Tracker (Binance/Bybit)
                   </button>
                 </div>
               </div>
 
               {/* SECTION 2: CUSTOM PRICING MODE TOGGLE & PRICE RANGE INPUTS */}
-              <div className="p-3 bg-[#0d1424] border border-purple-500/40 rounded-xl space-y-3">
+              <div className="p-3 bg-[#0d1424] border border-purple-500/40 rounded-[10px] space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800">
                   <div className="flex items-center gap-3">
                     {/* Explicit toggle switch */}
@@ -4679,7 +4747,7 @@ export const MMConsoleView: React.FC<Props> = ({
                           {dlPriceMode === 'CUSTOM_BOUNDS' ? 'AKTIF (Otonom / Tanpa Feed)' : 'NONAKTIF (Feed Eksternal)'}
                         </span>
                       </span>
-                      <p className="text-[10px] text-slate-400">
+                      <p className="text-[10px] text-[#A1AFB8]">
                         {dlPriceMode === 'CUSTOM_BOUNDS'
                           ? 'Menggantikan ketergantungan harga eksternal sepenuhnya. Anda menentukan batas Min/Max beli & jual secara bebas.'
                           : 'Mengikuti pergerakan harga spot bursa Binance/Bybit/CoinMarketCap via USDT/IDR FX Conversion Engine.'}
@@ -4697,7 +4765,7 @@ export const MMConsoleView: React.FC<Props> = ({
                   <div className="space-y-3 pt-1">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-purple-300 flex items-center gap-1.5">
-                        <span>📏</span> Batas Harga Manual (Min/Max Limit Buy & Sell)
+                        Batas Harga Manual (Min/Max Limit Buy & Sell)
                       </span>
                       {(() => {
                         const minB = parseFloat(dlMinBuyPrice) || 0;
@@ -4713,7 +4781,7 @@ export const MMConsoleView: React.FC<Props> = ({
                           <span className={`text-[10px] font-mono font-bold px-2.5 py-0.5 rounded border ${
                             isSpreadValid ? 'bg-emerald-950/80 text-emerald-400 border-emerald-500/40' : 'bg-red-950/80 text-red-400 border-red-500/40'
                           }`}>
-                            {isSpreadValid ? `✓ Spread Valid: ${isUsdtQuote ? `$${spread.toFixed(4)}` : `Rp ${spread.toLocaleString('id-ID')}`} (${spreadPct}%)` : '⚠️ Warning: Max Buy harus lebih rendah dari Min Sell'}
+                            {isSpreadValid ? `Spread Valid: ${isUsdtQuote ? `$${spread.toFixed(4)}` : `Rp ${spread.toLocaleString('id-ID')}`} (${spreadPct}%)` : '⚠️ Warning: Max Buy harus lebih rendah dari Min Sell'}
                           </span>
                         );
                       })()}
@@ -4730,9 +4798,9 @@ export const MMConsoleView: React.FC<Props> = ({
                           onChange={e => setDlMinBuyPrice(e.target.value)}
                           placeholder="e.g. 15000"
                           required
-                          className="w-full bg-[#1e293b] text-emerald-400 font-mono p-2 rounded border border-emerald-500/40 text-xs focus:border-emerald-400 outline-none"
+                          className="w-full bg-[#17212B] text-emerald-400 font-mono p-2 rounded border border-emerald-500/40 text-xs focus:border-emerald-400 outline-none"
                         />
-                        <span className="text-[9px] text-slate-500 mt-0.5 block">Bid terbawah tangga (Floor)</span>
+                        <span className="text-[9px] text-[#71818B] mt-0.5 block">Bid terbawah tangga (Floor)</span>
                       </div>
 
                       <div>
@@ -4745,9 +4813,9 @@ export const MMConsoleView: React.FC<Props> = ({
                           onChange={e => setDlMaxBuyPrice(e.target.value)}
                           placeholder="e.g. 16200"
                           required
-                          className="w-full bg-[#1e293b] text-emerald-300 font-mono p-2 rounded border border-emerald-500/40 text-xs focus:border-emerald-400 outline-none"
+                          className="w-full bg-[#17212B] text-emerald-300 font-mono p-2 rounded border border-emerald-500/40 text-xs focus:border-emerald-400 outline-none"
                         />
-                        <span className="text-[9px] text-slate-500 mt-0.5 block">Bid teratas / dekat spread</span>
+                        <span className="text-[9px] text-[#71818B] mt-0.5 block">Bid teratas / dekat spread</span>
                       </div>
 
                       <div>
@@ -4760,9 +4828,9 @@ export const MMConsoleView: React.FC<Props> = ({
                           onChange={e => setDlMinSellPrice(e.target.value)}
                           placeholder="e.g. 16500"
                           required
-                          className="w-full bg-[#1e293b] text-red-300 font-mono p-2 rounded border border-red-500/40 text-xs focus:border-red-400 outline-none"
+                          className="w-full bg-[#17212B] text-red-300 font-mono p-2 rounded border border-red-500/40 text-xs focus:border-red-400 outline-none"
                         />
-                        <span className="text-[9px] text-slate-500 mt-0.5 block">Ask terendah / dekat spread</span>
+                        <span className="text-[9px] text-[#71818B] mt-0.5 block">Ask terendah / dekat spread</span>
                       </div>
 
                       <div>
@@ -4775,20 +4843,20 @@ export const MMConsoleView: React.FC<Props> = ({
                           onChange={e => setDlMaxSellPrice(e.target.value)}
                           placeholder="e.g. 18000"
                           required
-                          className="w-full bg-[#1e293b] text-red-400 font-mono p-2 rounded border border-red-500/40 text-xs focus:border-red-400 outline-none"
+                          className="w-full bg-[#17212B] text-red-400 font-mono p-2 rounded border border-red-500/40 text-xs focus:border-red-400 outline-none"
                         />
-                        <span className="text-[9px] text-slate-500 mt-0.5 block">Ask teratas tangga (Ceiling)</span>
+                        <span className="text-[9px] text-[#71818B] mt-0.5 block">Ask teratas tangga (Ceiling)</span>
                       </div>
                     </div>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 gap-3 p-3 bg-blue-950/20 border border-blue-500/30 rounded-lg">
+                  <div className="grid grid-cols-2 gap-3 p-3 bg-blue-950/20 border border-blue-500/30 rounded-[7px]">
                     <div>
-                      <label className="text-slate-300 block mb-1 font-semibold">Reference Price Source</label>
+                      <label className="text-[#E4EBEF] block mb-1 font-semibold">Reference Price Source</label>
                       <select
                         value={dlSource}
                         onChange={e => setDlSource(e.target.value as any)}
-                        className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] text-xs"
+                        className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] text-xs"
                       >
                         <option value="AGGREGATED">AGGREGATED (Konsensus Gabungan)</option>
                         <option value="BINANCE">BINANCE (Binance Spot)</option>
@@ -4797,10 +4865,10 @@ export const MMConsoleView: React.FC<Props> = ({
                       </select>
                     </div>
                     <div>
-                      <span className="text-slate-400 text-[11px] block mb-1">Status Kurs FX DOMINEX</span>
-                      <div className="p-2 bg-[#1e293b] rounded border border-[#334155] text-xs font-mono text-emerald-400 flex items-center justify-between">
+                      <span className="text-[#A1AFB8] text-[11px] block mb-1">Status Kurs FX DIMONEX</span>
+                      <div className="p-2 bg-[#17212B] rounded border border-[#2B3944] text-xs font-mono text-emerald-400 flex items-center justify-between">
                         <span>1 USDT = Rp {Number(fxData?.rate || 16350).toLocaleString('id-ID')}</span>
-                        <span className="text-[10px] text-slate-400">Aktif & Fresh</span>
+                        <span className="text-[10px] text-[#A1AFB8]">Aktif & Fresh</span>
                       </div>
                     </div>
                   </div>
@@ -4808,10 +4876,10 @@ export const MMConsoleView: React.FC<Props> = ({
               </div>
 
               {/* SECTION 3: SPACING LADDER DISTRIBUTION & STEP SIZES */}
-              <div className="p-3 bg-purple-950/30 border border-purple-500/30 rounded-lg space-y-3">
+              <div className="p-3 bg-purple-950/30 border border-purple-500/30 rounded-[7px] space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-purple-300 uppercase tracking-wide flex items-center gap-1.5">
-                    <span>⚡</span> Mode Distribusi Jarak Tangga (Spacing Ladder Mode)
+                    Mode Distribusi Jarak Tangga (Spacing Ladder Mode)
                   </span>
                   <div className="flex items-center gap-2">
                     <input
@@ -4819,10 +4887,10 @@ export const MMConsoleView: React.FC<Props> = ({
                       id="dlAntiStacking"
                       checked={dlAntiStacking}
                       onChange={e => setDlAntiStacking(e.target.checked)}
-                      className="rounded bg-[#1e293b] border-[#334155] text-purple-600"
+                      className="rounded bg-[#17212B] border-[#2B3944] text-purple-600"
                     />
                     <label htmlFor="dlAntiStacking" className="text-[11px] text-emerald-400 font-semibold cursor-pointer">
-                      ✓ Anti-Numpuk / Anti-Stacking Aktif
+                      Anti-Numpuk / Anti-Stacking Aktif
                     </label>
                   </div>
                 </div>
@@ -4833,7 +4901,7 @@ export const MMConsoleView: React.FC<Props> = ({
                     <select
                       value={dlSpacingMode}
                       onChange={e => setDlSpacingMode(e.target.value as any)}
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-purple-500/40 text-xs"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-purple-500/40 text-xs"
                     >
                       <option value="LINEAR">LINEAR (Jarak Tangga Rata & Proporsional - Rekomendasi)</option>
                       <option value="GEOMETRIC">GEOMETRIC (Jarak Melebar ke Pinggir - Proteksi Risiko)</option>
@@ -4841,7 +4909,7 @@ export const MMConsoleView: React.FC<Props> = ({
                       <option value="FIXED_IDR">FIXED_STEP (Jarak Nominal Tetap per Level)</option>
                       <option value="PERCENT_BPS">PERCENT_BPS (Basis Points Offset Dinamis)</option>
                     </select>
-                    <span className="text-[10px] text-slate-400 mt-0.5 block">
+                    <span className="text-[10px] text-[#A1AFB8] mt-0.5 block">
                       {dlSpacingMode === 'LINEAR' && 'Level order terbagi rata secara linier antara batas Min dan Max.'}
                       {dlSpacingMode === 'GEOMETRIC' && 'Rung makin rapat dekat spread, dan makin renggang menjauh untuk kedalaman buku order aman.'}
                       {dlSpacingMode === 'CONCENTRATED' && 'Likuiditas tebal berkonsentrasi di level terdekat dari spread.'}
@@ -4861,9 +4929,9 @@ export const MMConsoleView: React.FC<Props> = ({
                       min="1"
                       disabled={dlSpacingMode !== 'FIXED_IDR'}
                       placeholder={dlPairId === 'BTC-IDR' ? '1000000' : dlPairId === 'ETH-IDR' ? '100000' : '60'}
-                      className="w-full bg-[#1e293b] text-purple-300 font-mono p-2 rounded border border-purple-500/40 text-xs disabled:opacity-40"
+                      className="w-full bg-[#17212B] text-purple-300 font-mono p-2 rounded border border-purple-500/40 text-xs disabled:opacity-40"
                     />
-                    <span className="text-[10px] text-slate-400 mt-0.5 block">
+                    <span className="text-[10px] text-[#A1AFB8] mt-0.5 block">
                       Jarak tiap order berurutan saat menggunakan mode Fixed Step.
                     </span>
                   </div>
@@ -4871,7 +4939,7 @@ export const MMConsoleView: React.FC<Props> = ({
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Number of Bid Levels (Beli)</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Number of Bid Levels (Beli)</label>
                     <input
                       type="number"
                       value={dlNumBids}
@@ -4879,12 +4947,12 @@ export const MMConsoleView: React.FC<Props> = ({
                       min="1"
                       max="20"
                       required
-                      className="w-full bg-[#1e293b] text-emerald-400 font-mono p-2 rounded border border-[#334155] text-xs"
+                      className="w-full bg-[#17212B] text-emerald-400 font-mono p-2 rounded border border-[#2B3944] text-xs"
                     />
-                    <span className="text-[10px] text-slate-500 mt-0.5 block">Maksimal 20 level bertingkat</span>
+                    <span className="text-[10px] text-[#71818B] mt-0.5 block">Maksimal 20 level bertingkat</span>
                   </div>
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Number of Ask Levels (Jual)</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Number of Ask Levels (Jual)</label>
                     <input
                       type="number"
                       value={dlNumAsks}
@@ -4892,50 +4960,50 @@ export const MMConsoleView: React.FC<Props> = ({
                       min="1"
                       max="20"
                       required
-                      className="w-full bg-[#1e293b] text-red-400 font-mono p-2 rounded border border-[#334155] text-xs"
+                      className="w-full bg-[#17212B] text-red-400 font-mono p-2 rounded border border-[#2B3944] text-xs"
                     />
-                    <span className="text-[10px] text-slate-500 mt-0.5 block">Maksimal 20 level bertingkat</span>
+                    <span className="text-[10px] text-[#71818B] mt-0.5 block">Maksimal 20 level bertingkat</span>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Bid Quantities ({dlPairId.split('-')[0]} per level)</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Bid Quantities ({dlPairId.split('-')[0]} per level)</label>
                     <input
                       type="text"
                       value={dlBidQuantities}
                       onChange={e => setDlBidQuantities(e.target.value)}
                       placeholder="e.g. 10.0, 20.0, 30.0, 40.0, 50.0"
                       required
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono text-xs"
                     />
                   </div>
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Ask Quantities ({dlPairId.split('-')[0]} per level)</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Ask Quantities ({dlPairId.split('-')[0]} per level)</label>
                     <input
                       type="text"
                       value={dlAskQuantities}
                       onChange={e => setDlAskQuantities(e.target.value)}
                       placeholder="e.g. 10.0, 20.0, 30.0, 40.0, 50.0"
                       required
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono text-xs"
                     />
                   </div>
                 </div>
               </div>
 
               {/* SECTION 4: INVENTORY MANAGEMENT PARAMETERS */}
-              <div className="p-3 bg-[#0a101d] border border-blue-500/30 rounded-lg space-y-3">
+              <div className="p-3 bg-[#0a101d] border border-blue-500/30 rounded-[7px] space-y-3">
                 <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
                   <span className="text-xs font-bold text-blue-300 flex items-center gap-1.5">
-                    <span>🛡️</span> Parameter Manajemen Inventaris & Batas Risiko (Inventory Controls)
+                    Parameter Manajemen Inventaris & Batas Risiko (Inventory Controls)
                   </span>
-                  <span className="text-[10px] text-slate-400">Proteksi Saldo & Volume Bursa</span>
+                  <span className="text-[10px] text-[#A1AFB8]">Proteksi Saldo & Volume Bursa</span>
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div>
-                    <label className="text-[11px] text-slate-300 block mb-1 font-semibold">
+                    <label className="text-[11px] text-[#E4EBEF] block mb-1 font-semibold">
                       Max Inventory ({dlPairId.split('-')[0]})
                     </label>
                     <input
@@ -4943,13 +5011,13 @@ export const MMConsoleView: React.FC<Props> = ({
                       value={dlMaxInventory}
                       onChange={e => setDlMaxInventory(e.target.value)}
                       placeholder="1000.0"
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono text-xs"
                     />
-                    <span className="text-[9px] text-slate-500 mt-0.5 block">Batas stok koin dasar</span>
+                    <span className="text-[9px] text-[#71818B] mt-0.5 block">Batas stok koin dasar</span>
                   </div>
 
                   <div>
-                    <label className="text-[11px] text-slate-300 block mb-1 font-semibold">
+                    <label className="text-[11px] text-[#E4EBEF] block mb-1 font-semibold">
                       Max Total Bid Value ({dlPairId.split('-')[1] || 'IDR'})
                     </label>
                     <input
@@ -4957,13 +5025,13 @@ export const MMConsoleView: React.FC<Props> = ({
                       value={dlMaxTotalBidValIdr}
                       onChange={e => setDlMaxTotalBidValIdr(e.target.value)}
                       placeholder="500000000"
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono text-xs"
                     />
-                    <span className="text-[9px] text-slate-500 mt-0.5 block">Total komitmen beli</span>
+                    <span className="text-[9px] text-[#71818B] mt-0.5 block">Total komitmen beli</span>
                   </div>
 
                   <div>
-                    <label className="text-[11px] text-slate-300 block mb-1 font-semibold">
+                    <label className="text-[11px] text-[#E4EBEF] block mb-1 font-semibold">
                       Max Total Ask Qty ({dlPairId.split('-')[0]})
                     </label>
                     <input
@@ -4971,13 +5039,13 @@ export const MMConsoleView: React.FC<Props> = ({
                       value={dlMaxTotalAskQty}
                       onChange={e => setDlMaxTotalAskQty(e.target.value)}
                       placeholder="500.0"
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono text-xs"
                     />
-                    <span className="text-[9px] text-slate-500 mt-0.5 block">Total komitmen jual</span>
+                    <span className="text-[9px] text-[#71818B] mt-0.5 block">Total komitmen jual</span>
                   </div>
 
                   <div>
-                    <label className="text-[11px] text-slate-300 block mb-1 font-semibold">
+                    <label className="text-[11px] text-[#E4EBEF] block mb-1 font-semibold">
                       Max Open Orders
                     </label>
                     <input
@@ -4987,15 +5055,15 @@ export const MMConsoleView: React.FC<Props> = ({
                       min="1"
                       max="100"
                       placeholder="20"
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono text-xs"
                     />
-                    <span className="text-[9px] text-slate-500 mt-0.5 block">Order aktif maksimum</span>
+                    <span className="text-[9px] text-[#71818B] mt-0.5 block">Order aktif maksimum</span>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3 pt-1">
                   <div>
-                    <label className="text-[11px] text-slate-300 block mb-1 font-semibold">
+                    <label className="text-[11px] text-[#E4EBEF] block mb-1 font-semibold">
                       Custom Tick Size (Opsional)
                     </label>
                     <input
@@ -5003,13 +5071,13 @@ export const MMConsoleView: React.FC<Props> = ({
                       value={dlTickSize}
                       onChange={e => setDlTickSize(e.target.value)}
                       placeholder={dlPairId === 'USDT-IDR' ? '1' : dlPairId.endsWith('-USDT') ? '0.01' : '10'}
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono text-xs"
                     />
-                    <span className="text-[9px] text-slate-500 mt-0.5 block">Kelipatan harga minimum (tick size)</span>
+                    <span className="text-[9px] text-[#71818B] mt-0.5 block">Kelipatan harga minimum (tick size)</span>
                   </div>
 
                   <div>
-                    <label className="text-[11px] text-slate-300 block mb-1 font-semibold">
+                    <label className="text-[11px] text-[#E4EBEF] block mb-1 font-semibold">
                       Minimum Lot Size
                     </label>
                     <input
@@ -5017,23 +5085,23 @@ export const MMConsoleView: React.FC<Props> = ({
                       value={dlLotSize}
                       onChange={e => setDlLotSize(e.target.value)}
                       placeholder="0.0001"
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono text-xs"
                     />
-                    <span className="text-[9px] text-slate-500 mt-0.5 block">Satuan ukuran terkecil per order</span>
+                    <span className="text-[9px] text-[#71818B] mt-0.5 block">Satuan ukuran terkecil per order</span>
                   </div>
                 </div>
               </div>
 
               {/* SECTION 5: EXACT PREVIEW GUARANTEE & COOLDOWN REFRESH */}
-              <div className="p-3 bg-purple-950/25 border border-purple-500/30 rounded-lg space-y-3">
+              <div className="p-3 bg-purple-950/25 border border-purple-500/30 rounded-[7px] space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 pb-1.5 border-b border-purple-500/20">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-bold text-purple-300">
-                      🎯 Jaminan Presisi & Penempatan Order
+                      Jaminan Presisi & Penempatan Order
                     </span>
                   </div>
                   <span className="text-[10px] text-emerald-400 font-semibold">
-                    {dlExactPlacement ? '✓ 100% Persis dengan Tabel Preview' : 'Micro-Jitter Aktif'}
+                    {dlExactPlacement ? '100% Persis dengan Tabel Preview' : 'Micro-Jitter Aktif'}
                   </span>
                 </div>
 
@@ -5051,13 +5119,13 @@ export const MMConsoleView: React.FC<Props> = ({
                           setDlPriceRandomizationTicks('0');
                         }
                       }}
-                      className="h-4 w-4 rounded bg-[#1e293b] border-[#334155] text-purple-600 cursor-pointer"
+                      className="h-4 w-4 rounded bg-[#17212B] border-[#2B3944] text-purple-600 cursor-pointer"
                     />
                     <div>
                       <label htmlFor="dlExactPlacement" className="text-xs text-white font-bold cursor-pointer">
                         Mode Penempatan Presisi (Persis Sama 100% dengan Preview)
                       </label>
-                      <p className="text-[10px] text-slate-400">
+                      <p className="text-[10px] text-[#A1AFB8]">
                         Menonaktifkan pergeseran harga acak (Jitter = 0). Order yang dipasang di matching engine dijamin sama persis dengan angka preview.
                       </p>
                     </div>
@@ -5076,9 +5144,9 @@ export const MMConsoleView: React.FC<Props> = ({
                       min="3"
                       max="300"
                       required
-                      className="w-full bg-[#1e293b] text-purple-300 font-mono p-2 rounded border border-purple-500/40 text-xs"
+                      className="w-full bg-[#17212B] text-purple-300 font-mono p-2 rounded border border-purple-500/40 text-xs"
                     />
-                    <span className="text-[10px] text-slate-400 mt-0.5 block">
+                    <span className="text-[10px] text-[#A1AFB8] mt-0.5 block">
                       Jeda sebelum rotasi ladder anti-stacking berikutnya (Default 10s).
                     </span>
                   </div>
@@ -5094,9 +5162,9 @@ export const MMConsoleView: React.FC<Props> = ({
                       min="0"
                       max="10"
                       disabled={dlExactPlacement}
-                      className="w-full bg-[#1e293b] text-purple-300 font-mono p-2 rounded border border-purple-500/40 text-xs disabled:opacity-40"
+                      className="w-full bg-[#17212B] text-purple-300 font-mono p-2 rounded border border-purple-500/40 text-xs disabled:opacity-40"
                     />
-                    <span className="text-[10px] text-slate-400 mt-0.5 block">
+                    <span className="text-[10px] text-[#A1AFB8] mt-0.5 block">
                       {dlExactPlacement ? 'Terkunci 0 tick (Presisi Penuh)' : `Variasi ±${dlPriceRandomizationTicks} ticks`}
                     </span>
                   </div>
@@ -5230,11 +5298,11 @@ export const MMConsoleView: React.FC<Props> = ({
                 };
 
                 return (
-                  <div className="p-3 bg-[#0b111e] rounded-xl border border-purple-500/40 text-[11px] font-mono space-y-3">
-                    <div className="flex flex-wrap items-center justify-between text-slate-400 pb-2 border-b border-slate-800 gap-2">
+                  <div className="p-3 bg-[#0b111e] rounded-[10px] border border-purple-500/40 text-[11px] font-mono space-y-3">
+                    <div className="flex flex-wrap items-center justify-between text-[#A1AFB8] pb-2 border-b border-slate-800 gap-2">
                       <div className="flex items-center gap-2">
                         <span className="font-sans font-bold text-slate-100 flex items-center gap-1.5">
-                          <span>📊</span> Pratinjau Tangga Order ({numBids} Bids × {numAsks} Asks)
+                          Pratinjau Tangga Order ({numBids} Bids × {numAsks} Asks)
                         </span>
                         <span className="bg-purple-900/60 text-purple-300 px-2 py-0.5 rounded text-[10px] border border-purple-500/40">
                           {dlPriceMode === 'CUSTOM_BOUNDS' ? 'Custom Pricing Mode' : 'External Tracker'}
@@ -5244,7 +5312,7 @@ export const MMConsoleView: React.FC<Props> = ({
                         </span>
                       </div>
                       <div className="flex items-center gap-3">
-                        <span className="text-slate-300 text-[10px]">
+                        <span className="text-[#E4EBEF] text-[10px]">
                           Spread: <strong className="text-emerald-400 font-bold">{formatPriceDisplay(spreadVal)} ({spreadPct}%)</strong>
                         </span>
                       </div>
@@ -5253,7 +5321,7 @@ export const MMConsoleView: React.FC<Props> = ({
                     {/* GUARANTEE BANNER */}
                     <div className="px-3 py-1.5 bg-emerald-950/40 border border-emerald-500/30 rounded text-[10px] text-emerald-300 flex items-center justify-between">
                       <span className="flex items-center gap-1.5">
-                        <span>✓</span>
+                        
                         <strong>Jaminan Presisi 100%:</strong> Harga & kuantitas order yang dipasang ke Matching Engine akan sama persis dengan tabel preview di bawah.
                       </span>
                       <span className="font-mono text-emerald-400 font-bold">Anti-Numpuk: AKTIF</span>
@@ -5268,14 +5336,14 @@ export const MMConsoleView: React.FC<Props> = ({
                         </div>
                         <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
                           {previewBids.map((b, idx) => (
-                            <div key={idx} className="flex justify-between items-center bg-[#131b2a] px-2.5 py-1.5 rounded text-slate-300 border border-emerald-500/10 hover:border-emerald-500/30 transition-colors">
+                            <div key={idx} className="flex justify-between items-center bg-[#131b2a] px-2.5 py-1.5 rounded text-[#E4EBEF] border border-emerald-500/10 hover:border-emerald-500/30 transition-colors">
                               <div>
                                 <span className="text-emerald-400 font-bold text-xs">{formatPriceDisplay(b.price)}</span>
-                                <span className="text-slate-500 text-[9px] ml-1.5">Lvl {b.level} {idx === 0 ? '(Dekat Spread)' : `(-${formatPriceDisplay(b.offset)})`}</span>
+                                <span className="text-[#71818B] text-[9px] ml-1.5">Lvl {b.level} {idx === 0 ? '(Dekat Spread)' : `(-${formatPriceDisplay(b.offset)})`}</span>
                               </div>
                               <div className="text-right">
                                 <span className="text-white font-semibold">{b.qty}</span>
-                                <span className="text-[9px] text-slate-500 block">{formatPriceDisplay(b.totalVal)}</span>
+                                <span className="text-[9px] text-[#71818B] block">{formatPriceDisplay(b.totalVal)}</span>
                               </div>
                             </div>
                           ))}
@@ -5290,14 +5358,14 @@ export const MMConsoleView: React.FC<Props> = ({
                         </div>
                         <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
                           {previewAsks.map((a, idx) => (
-                            <div key={idx} className="flex justify-between items-center bg-[#131b2a] px-2.5 py-1.5 rounded text-slate-300 border border-red-500/10 hover:border-red-500/30 transition-colors">
+                            <div key={idx} className="flex justify-between items-center bg-[#131b2a] px-2.5 py-1.5 rounded text-[#E4EBEF] border border-red-500/10 hover:border-red-500/30 transition-colors">
                               <div>
                                 <span className="text-red-400 font-bold text-xs">{formatPriceDisplay(a.price)}</span>
-                                <span className="text-slate-500 text-[9px] ml-1.5">Lvl {a.level} {idx === 0 ? '(Dekat Spread)' : `(+${formatPriceDisplay(a.offset)})`}</span>
+                                <span className="text-[#71818B] text-[9px] ml-1.5">Lvl {a.level} {idx === 0 ? '(Dekat Spread)' : `(+${formatPriceDisplay(a.offset)})`}</span>
                               </div>
                               <div className="text-right">
                                 <span className="text-white font-semibold">{a.qty}</span>
-                                <span className="text-[9px] text-slate-500 block">{formatPriceDisplay(a.totalVal)}</span>
+                                <span className="text-[9px] text-[#71818B] block">{formatPriceDisplay(a.totalVal)}</span>
                               </div>
                             </div>
                           ))}
@@ -5308,7 +5376,7 @@ export const MMConsoleView: React.FC<Props> = ({
                 );
               })()}
 
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#1e293b]">
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#202B34]">
                 <button
                   type="button"
                   onClick={() => setIsDepthLiquidityModalOpen(false)}
@@ -5319,7 +5387,7 @@ export const MMConsoleView: React.FC<Props> = ({
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="px-6 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold rounded text-xs shadow-lg transition-all"
+                  className="px-6 py-2.5 bg-[#1D2832] hover:bg-[#222F3A] border border-[#40515D] text-white font-bold rounded text-xs shadow-lg transition-all"
                 >
                   Simpan & Deploy Bot Penyedia Likuiditas
                 </button>
@@ -5331,26 +5399,26 @@ export const MMConsoleView: React.FC<Props> = ({
 
       {/* MODAL: MOVEMENT DEPTH BOT CONFIGURATION (RELATIVE WS MOVEMENT FOLLOWER) */}
       {isMovementDepthModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 overflow-y-auto">
-          <div className="bg-[#0f172a] border border-cyan-500/30 rounded-xl max-w-3xl w-full p-6 text-slate-300 max-h-[92vh] overflow-y-auto shadow-2xl">
-            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#1e293b]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#090D12]/80 p-4 overflow-y-auto">
+          <div className="bg-[#111820] border border-cyan-500/30 rounded-[10px] max-w-3xl w-full p-6 text-[#E4EBEF] max-h-[92vh] overflow-y-auto shadow-2xl">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#202B34]">
               <div>
                 <div className="flex items-center gap-2">
                   <h2 className="text-base font-bold text-white flex items-center gap-1.5">
-                    <span className="text-cyan-400">📡</span> Konfigurasi Bot Depth Movement (WS Binance &amp; Bybit)
+                    Konfigurasi Bot Depth Movement (WS Binance &amp; Bybit)
                   </h2>
                   <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
                     {currentEnv}
                   </span>
                 </div>
-                <p className="text-xs text-slate-400 mt-0.5">
+                <p className="text-xs text-[#A1AFB8] mt-0.5">
                   Bot likuiditas multi-level yang mengikuti <strong>% pergerakan pasar</strong> dari pair WS acuan (kiblat market), sambil mempertahankan skala harga lokal token Anda sendiri.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setIsMovementDepthModalOpen(false)}
-                className="text-slate-400 hover:text-white text-lg font-bold p-1 rounded hover:bg-slate-800"
+                className="text-[#A1AFB8] hover:text-white text-lg font-bold p-1 rounded hover:bg-slate-800"
               >
                 ✕
               </button>
@@ -5360,21 +5428,21 @@ export const MMConsoleView: React.FC<Props> = ({
               {/* SECTION 1: IDENTITY & TARGET PAIR */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-300 block mb-1 font-semibold">Bot Instance Name</label>
+                  <label className="text-[#E4EBEF] block mb-1 font-semibold">Bot Instance Name</label>
                   <input
                     type="text"
                     value={mdName}
                     onChange={e => setMdName(e.target.value)}
                     required
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] focus:border-cyan-400 outline-none"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] focus:border-cyan-400 outline-none"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-300 block mb-1 font-semibold">Trading Pair (Target Market Token Anda)</label>
+                  <label className="text-[#E4EBEF] block mb-1 font-semibold">Trading Pair (Target Market Token Anda)</label>
                   <select
                     value={mdPairId}
                     onChange={e => handleMdPairChange(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] focus:border-cyan-400 outline-none"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] focus:border-cyan-400 outline-none"
                   >
                     {tradingPairs.map(p => (
                       <option key={p.id} value={p.id}>{p.id} ({p.baseCurrency}/{p.quoteCurrency})</option>
@@ -5384,10 +5452,10 @@ export const MMConsoleView: React.FC<Props> = ({
               </div>
 
               {/* SECTION 2: KIBLAT WEBSOCKET WHITELIST & RELATIVE PROJECTION */}
-              <div className="p-3.5 bg-[#0b1322] border border-cyan-500/40 rounded-xl space-y-3">
+              <div className="p-3.5 bg-[#0b1322] border border-cyan-500/40 rounded-[10px] space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800">
                   <span className="text-xs font-bold text-cyan-300">
-                    🧭 Kiblat Pergerakan WebSocket (Admin Whitelist) &amp; Anchor Harga Lokal
+                    Kiblat Pergerakan WebSocket (Admin Whitelist) &amp; Anchor Harga Lokal
                   </span>
                   <span className="text-[10px] font-mono text-emerald-400">
                     Rumus: Anchor × (1 + %Move_WS × Beta)
@@ -5395,7 +5463,7 @@ export const MMConsoleView: React.FC<Props> = ({
                 </div>
 
                 {wsWhitelist.length === 0 ? (
-                  <div className="p-3 rounded-lg bg-amber-950/40 border border-amber-500/40 text-amber-200 text-xs">
+                  <div className="p-3 rounded-[7px] bg-amber-950/40 border border-amber-500/40 text-amber-200 text-xs">
                     Belum ada pair WebSocket aktif di Whitelist Admin. Hubungi Admin untuk menambahkan pair (misal BTCUSDT / SOLUSDT) di Admin Console &rarr; FX Engine &amp; WS Pairs.
                   </div>
                 ) : (
@@ -5405,7 +5473,7 @@ export const MMConsoleView: React.FC<Props> = ({
                       <select
                         value={mdLeaderSymbol}
                         onChange={e => setMdLeaderSymbol(e.target.value)}
-                        className="w-full bg-[#1e293b] text-white font-mono p-2 rounded border border-cyan-500/40 text-xs"
+                        className="w-full bg-[#17212B] text-white font-mono p-2 rounded border border-cyan-500/40 text-xs"
                       >
                         {wsWhitelist.map(w => (
                           <option key={w.symbol} value={w.symbol}>
@@ -5413,7 +5481,7 @@ export const MMConsoleView: React.FC<Props> = ({
                           </option>
                         ))}
                       </select>
-                      <span className="text-[10px] text-slate-400 mt-0.5 block">
+                      <span className="text-[10px] text-[#A1AFB8] mt-0.5 block">
                         Hanya daftar minimal yang diizinkan Admin pada stream WS Binance/Bybit.
                       </span>
                     </div>
@@ -5423,7 +5491,7 @@ export const MMConsoleView: React.FC<Props> = ({
                       <select
                         value={mdLeaderProvider}
                         onChange={e => setMdLeaderProvider(e.target.value as any)}
-                        className="w-full bg-[#1e293b] text-white p-2 rounded border border-cyan-500/40 text-xs"
+                        className="w-full bg-[#17212B] text-white p-2 rounded border border-cyan-500/40 text-xs"
                       >
                         <option value="AGGREGATED">AGGREGATED (Konsensus Binance + Bybit)</option>
                         <option value="BINANCE">BINANCE Spot WS</option>
@@ -5459,9 +5527,9 @@ export const MMConsoleView: React.FC<Props> = ({
                       onChange={e => setMdAnchorLocalPrice(e.target.value)}
                       required
                       placeholder="Misal 1000 atau 0.05"
-                      className="w-full bg-[#1e293b] text-emerald-300 font-mono p-2 rounded border border-emerald-500/40 text-xs"
+                      className="w-full bg-[#17212B] text-emerald-300 font-mono p-2 rounded border border-emerald-500/40 text-xs"
                     />
-                    <span className="text-[9px] text-slate-400 mt-0.5 block">
+                    <span className="text-[9px] text-[#A1AFB8] mt-0.5 block">
                       Patokan harga awal token lokal Anda ({mdPairId.split('-')[1] || 'IDR'}).
                     </span>
                   </div>
@@ -5474,15 +5542,15 @@ export const MMConsoleView: React.FC<Props> = ({
                       value={mdSensitivity}
                       onChange={e => setMdSensitivity(e.target.value)}
                       required
-                      className="w-full bg-[#1e293b] text-cyan-300 font-mono p-2 rounded border border-cyan-500/40 text-xs"
+                      className="w-full bg-[#17212B] text-cyan-300 font-mono p-2 rounded border border-cyan-500/40 text-xs"
                     />
-                    <span className="text-[9px] text-slate-400 mt-0.5 block">
+                    <span className="text-[9px] text-[#A1AFB8] mt-0.5 block">
                       1.0 = ikut 1:1 | 1.5 = lebih agresif | -1.0 = berlawanan
                     </span>
                   </div>
 
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Threshold Trigger (bps) &amp; Spread (bps)</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Threshold Trigger (bps) &amp; Spread (bps)</label>
                     <div className="flex gap-1.5">
                       <input
                         type="number"
@@ -5490,7 +5558,7 @@ export const MMConsoleView: React.FC<Props> = ({
                         onChange={e => setMdThresholdBps(e.target.value)}
                         min="1"
                         title="Threshold Move (bps)"
-                        className="w-1/2 bg-[#1e293b] text-white font-mono p-2 rounded border border-[#334155] text-xs"
+                        className="w-1/2 bg-[#17212B] text-white font-mono p-2 rounded border border-[#2B3944] text-xs"
                       />
                       <input
                         type="number"
@@ -5498,10 +5566,10 @@ export const MMConsoleView: React.FC<Props> = ({
                         onChange={e => setMdSpreadBps(e.target.value)}
                         min="2"
                         title="Half Spread (bps)"
-                        className="w-1/2 bg-[#1e293b] text-amber-300 font-mono p-2 rounded border border-[#334155] text-xs"
+                        className="w-1/2 bg-[#17212B] text-amber-300 font-mono p-2 rounded border border-[#2B3944] text-xs"
                       />
                     </div>
-                    <span className="text-[9px] text-slate-400 mt-0.5 block">
+                    <span className="text-[9px] text-[#A1AFB8] mt-0.5 block">
                       Kiri: Trigger rotasi ({mdThresholdBps} bps) · Kanan: Spread ({mdSpreadBps} bps)
                     </span>
                   </div>
@@ -5509,33 +5577,33 @@ export const MMConsoleView: React.FC<Props> = ({
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Min Price Guard / Floor (Opsional)</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Min Price Guard / Floor (Opsional)</label>
                     <input
                       type="text"
                       value={mdMinPriceGuard}
                       onChange={e => setMdMinPriceGuard(e.target.value)}
                       placeholder="Kosongkan jika bebas"
-                      className="w-full bg-[#1e293b] text-white font-mono p-2 rounded border border-[#334155] text-xs"
+                      className="w-full bg-[#17212B] text-white font-mono p-2 rounded border border-[#2B3944] text-xs"
                     />
                   </div>
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Max Price Guard / Ceiling (Opsional)</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Max Price Guard / Ceiling (Opsional)</label>
                     <input
                       type="text"
                       value={mdMaxPriceGuard}
                       onChange={e => setMdMaxPriceGuard(e.target.value)}
                       placeholder="Kosongkan jika bebas"
-                      className="w-full bg-[#1e293b] text-white font-mono p-2 rounded border border-[#334155] text-xs"
+                      className="w-full bg-[#17212B] text-white font-mono p-2 rounded border border-[#2B3944] text-xs"
                     />
                   </div>
                 </div>
               </div>
 
               {/* SECTION 3: DEPTH & LADDER CONFIGURATION */}
-              <div className="p-3 bg-purple-950/25 border border-purple-500/30 rounded-lg space-y-3">
+              <div className="p-3 bg-purple-950/25 border border-purple-500/30 rounded-[7px] space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-purple-300 uppercase tracking-wide flex items-center gap-1.5">
-                    <span>⚡</span> Mode Distribusi Tangga Likuiditas &amp; Anti-Stacking
+                    Mode Distribusi Tangga Likuiditas &amp; Anti-Stacking
                   </span>
                   <div className="flex items-center gap-2">
                     <input
@@ -5543,10 +5611,10 @@ export const MMConsoleView: React.FC<Props> = ({
                       id="mdAntiStacking"
                       checked={mdAntiStacking}
                       onChange={e => setMdAntiStacking(e.target.checked)}
-                      className="rounded bg-[#1e293b] border-[#334155]"
+                      className="rounded bg-[#17212B] border-[#2B3944]"
                     />
                     <label htmlFor="mdAntiStacking" className="text-[11px] text-emerald-400 font-semibold cursor-pointer">
-                      ✓ Anti-Stacking Aktif
+                      Anti-Stacking Aktif
                     </label>
                   </div>
                 </div>
@@ -5557,7 +5625,7 @@ export const MMConsoleView: React.FC<Props> = ({
                     <select
                       value={mdSpacingMode}
                       onChange={e => setMdSpacingMode(e.target.value as any)}
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-purple-500/40 text-xs"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-purple-500/40 text-xs"
                     >
                       <option value="PERCENT_BPS">PERCENT_BPS (Persentase BPS Dinamis)</option>
                       <option value="LINEAR">LINEAR (Jarak Tangga Proporsional)</option>
@@ -5572,100 +5640,100 @@ export const MMConsoleView: React.FC<Props> = ({
                       type="text"
                       value={mdLevelSpacing}
                       onChange={e => setMdLevelSpacing(e.target.value)}
-                      className="w-full bg-[#1e293b] text-purple-300 font-mono p-2 rounded border border-purple-500/40 text-xs"
+                      className="w-full bg-[#17212B] text-purple-300 font-mono p-2 rounded border border-purple-500/40 text-xs"
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Number of Bid Levels</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Number of Bid Levels</label>
                     <input
                       type="number"
                       min="1"
                       max="20"
                       value={mdNumBids}
                       onChange={e => setMdNumBids(e.target.value)}
-                      className="w-full bg-[#1e293b] text-emerald-400 font-mono p-2 rounded border border-[#334155] text-xs"
+                      className="w-full bg-[#17212B] text-emerald-400 font-mono p-2 rounded border border-[#2B3944] text-xs"
                     />
                   </div>
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Number of Ask Levels</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Number of Ask Levels</label>
                     <input
                       type="number"
                       min="1"
                       max="20"
                       value={mdNumAsks}
                       onChange={e => setMdNumAsks(e.target.value)}
-                      className="w-full bg-[#1e293b] text-red-400 font-mono p-2 rounded border border-[#334155] text-xs"
+                      className="w-full bg-[#17212B] text-red-400 font-mono p-2 rounded border border-[#2B3944] text-xs"
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Bid Quantities ({mdPairId.split('-')[0]})</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Bid Quantities ({mdPairId.split('-')[0]})</label>
                     <input
                       type="text"
                       value={mdBidQuantities}
                       onChange={e => setMdBidQuantities(e.target.value)}
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono text-xs"
                     />
                   </div>
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Ask Quantities ({mdPairId.split('-')[0]})</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Ask Quantities ({mdPairId.split('-')[0]})</label>
                     <input
                       type="text"
                       value={mdAskQuantities}
                       onChange={e => setMdAskQuantities(e.target.value)}
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono text-xs"
                     />
                   </div>
                 </div>
               </div>
 
               {/* SECTION 4: PRECISION, COOLDOWN & RISK CAPS */}
-              <div className="p-3 bg-[#0a101d] border border-blue-500/30 rounded-lg space-y-3">
+              <div className="p-3 bg-[#0a101d] border border-blue-500/30 rounded-[7px] space-y-3">
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div>
-                    <label className="text-[11px] text-slate-300 block mb-1 font-semibold">Cooldown Refresh (dtk)</label>
+                    <label className="text-[11px] text-[#E4EBEF] block mb-1 font-semibold">Cooldown Refresh (dtk)</label>
                     <input
                       type="number"
                       min="2"
                       max="300"
                       value={mdRefreshCooldownSec}
                       onChange={e => setMdRefreshCooldownSec(e.target.value)}
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono text-xs"
                     />
                   </div>
                   <div>
-                    <label className="text-[11px] text-slate-300 block mb-1 font-semibold">Max Open Orders</label>
+                    <label className="text-[11px] text-[#E4EBEF] block mb-1 font-semibold">Max Open Orders</label>
                     <input
                       type="number"
                       min="2"
                       max="100"
                       value={mdMaxOpenOrders}
                       onChange={e => setMdMaxOpenOrders(e.target.value)}
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono text-xs"
                     />
                   </div>
                   <div>
-                    <label className="text-[11px] text-slate-300 block mb-1 font-semibold">Custom Tick Size (Opsional)</label>
+                    <label className="text-[11px] text-[#E4EBEF] block mb-1 font-semibold">Custom Tick Size (Opsional)</label>
                     <input
                       type="text"
                       value={mdTickSize}
                       onChange={e => setMdTickSize(e.target.value)}
                       placeholder="Auto sesuai harga"
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] font-mono text-xs"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono text-xs"
                     />
                   </div>
                   <div className="flex flex-col justify-end">
-                    <label className="flex items-center gap-2 text-xs text-slate-200 cursor-pointer pb-2">
+                    <label className="flex items-center gap-2 text-xs text-[#E4EBEF] cursor-pointer pb-2">
                       <input
                         type="checkbox"
                         checked={mdDryRun}
                         onChange={e => setMdDryRun(e.target.checked)}
-                        className="rounded bg-[#1e293b] border-[#334155]"
+                        className="rounded bg-[#17212B] border-[#2B3944]"
                       />
                       <span>Dry Run (Log saja)</span>
                     </label>
@@ -5702,13 +5770,13 @@ export const MMConsoleView: React.FC<Props> = ({
                 });
 
                 return (
-                  <div className="p-3 bg-[#0b111e] rounded-xl border border-cyan-500/40 text-[11px] font-mono space-y-2.5">
+                  <div className="p-3 bg-[#0b111e] rounded-[10px] border border-cyan-500/40 text-[11px] font-mono space-y-2.5">
                     <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800">
                       <span className="font-sans font-bold text-cyan-300">
-                        🔬 Simulasi Proyeksi Pergerakan ({mdLeaderSymbol} &rarr; {mdPairId})
+                        Simulasi Proyeksi Pergerakan ({mdLeaderSymbol} &rarr; {mdPairId})
                       </span>
                       <div className="flex items-center gap-2">
-                        <span className="text-slate-400">Simulasi {mdLeaderSymbol}:</span>
+                        <span className="text-[#A1AFB8]">Simulasi {mdLeaderSymbol}:</span>
                         <input
                           type="range"
                           min="-5"
@@ -5723,7 +5791,7 @@ export const MMConsoleView: React.FC<Props> = ({
                         </span>
                       </div>
                     </div>
-                    <div className="text-xs text-slate-300 flex flex-wrap gap-4">
+                    <div className="text-xs text-[#E4EBEF] flex flex-wrap gap-4">
                       <span>Anchor Lokal: <strong className="text-white">{fmt(anchor)}</strong></span>
                       <span>&rarr; Proyeksi Mid ({beta}x): <strong className="text-amber-300">{fmt(projected)}</strong></span>
                     </div>
@@ -5732,7 +5800,7 @@ export const MMConsoleView: React.FC<Props> = ({
                         <div className="text-emerald-400 font-bold">BID LADDER (Preview {nB} level)</div>
                         {bidLevels.map((p, idx) => (
                           <div key={idx} className="flex justify-between bg-[#131b2a] px-2 py-1 rounded">
-                            <span className="text-slate-400">Lvl {idx + 1}</span>
+                            <span className="text-[#A1AFB8]">Lvl {idx + 1}</span>
                             <span className="text-emerald-300 font-bold">{fmt(p)}</span>
                           </div>
                         ))}
@@ -5741,7 +5809,7 @@ export const MMConsoleView: React.FC<Props> = ({
                         <div className="text-red-400 font-bold">ASK LADDER (Preview {nA} level)</div>
                         {askLevels.map((p, idx) => (
                           <div key={idx} className="flex justify-between bg-[#131b2a] px-2 py-1 rounded">
-                            <span className="text-slate-400">Lvl {idx + 1}</span>
+                            <span className="text-[#A1AFB8]">Lvl {idx + 1}</span>
                             <span className="text-red-300 font-bold">{fmt(p)}</span>
                           </div>
                         ))}
@@ -5751,7 +5819,7 @@ export const MMConsoleView: React.FC<Props> = ({
                 );
               })()}
 
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#1e293b]">
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#202B34]">
                 <button
                   type="button"
                   onClick={() => setIsMovementDepthModalOpen(false)}
@@ -5762,7 +5830,7 @@ export const MMConsoleView: React.FC<Props> = ({
                 <button
                   type="submit"
                   disabled={isLoading || wsWhitelist.length === 0}
-                  className="px-6 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 disabled:opacity-50 text-white font-bold rounded text-xs shadow-lg transition-all"
+                  className="px-6 py-2.5 bg-[#8DA5B1] hover:bg-[#A5BAC4] text-[#090D12] disabled:opacity-50 text-white font-bold rounded text-xs shadow-lg transition-all"
                 >
                   Simpan &amp; Deploy Bot Depth Movement (WS)
                 </button>
@@ -5774,26 +5842,26 @@ export const MMConsoleView: React.FC<Props> = ({
 
       {/* MODAL: QUANTITATIVE HIGH-FREQUENCY MARKET MAKER (HFT-MM) */}
       {isQuantHftModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 overflow-y-auto">
-          <div className="bg-[#0f172a] border border-[#1e293b] rounded-xl max-w-3xl w-full p-6 text-slate-300 max-h-[92vh] overflow-y-auto shadow-2xl">
-            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#1e293b]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#090D12]/80 p-4 overflow-y-auto">
+          <div className="bg-[#111820] border border-[#202B34] rounded-[10px] max-w-3xl w-full p-6 text-[#E4EBEF] max-h-[92vh] overflow-y-auto shadow-2xl">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#202B34]">
               <div>
                 <div className="flex items-center gap-2">
                   <h2 className="text-base font-bold text-white flex items-center gap-1.5">
-                    <span className="text-cyan-400">⚡</span> Deploy Quantitative HFT Market Maker Bot
+                    Deploy Quantitative HFT Market Maker Bot
                   </h2>
                   <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
                     {currentEnv}
                   </span>
                 </div>
-                <p className="text-xs text-slate-400 mt-0.5">
+                <p className="text-xs text-[#A1AFB8] mt-0.5">
                   Arsitektur 3-Pilar: Analisa Top-5 Depth, Pengetatan Spread Dinamis, Micro-EMA Trend Leaning, dan Anti-Manipulation Flash Defense.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setIsQuantHftModalOpen(false)}
-                className="text-slate-400 hover:text-white text-lg font-bold p-1 rounded hover:bg-slate-800"
+                className="text-[#A1AFB8] hover:text-white text-lg font-bold p-1 rounded hover:bg-slate-800"
               >
                 ✕
               </button>
@@ -5803,21 +5871,21 @@ export const MMConsoleView: React.FC<Props> = ({
               {/* SECTION 1: IDENTITY & PAIR */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-300 block mb-1 font-semibold">Bot Instance Name</label>
+                  <label className="text-[#E4EBEF] block mb-1 font-semibold">Bot Instance Name</label>
                   <input
                     type="text"
                     value={qhftName}
                     onChange={e => setQhftName(e.target.value)}
                     required
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] focus:border-cyan-400 outline-none"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] focus:border-cyan-400 outline-none"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-300 block mb-1 font-semibold">Trading Pair (Target Market)</label>
+                  <label className="text-[#E4EBEF] block mb-1 font-semibold">Trading Pair (Target Market)</label>
                   <select
                     value={qhftPairId}
                     onChange={e => handleQhftPairChange(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] focus:border-cyan-400 outline-none"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] focus:border-cyan-400 outline-none"
                   >
                     {tradingPairs.map(p => (
                       <option key={p.id} value={p.id}>
@@ -5829,36 +5897,36 @@ export const MMConsoleView: React.FC<Props> = ({
               </div>
 
               {/* SECTION 2: PILLAR A - PRICING & SPREAD TIGHTENING */}
-              <div className="p-3 bg-[#131b26] border border-[#1e293b] rounded-lg space-y-3">
+              <div className="p-3 bg-[#17212B] border border-[#202B34] rounded-[7px] space-y-3">
                 <span className="text-xs font-bold text-cyan-400 block uppercase tracking-wide flex items-center gap-1.5">
-                  <span>🏛️</span> Pillar A: Dynamic Spread Tightening & Micro-Lot Sizing
+                  Pillar A: Dynamic Spread Tightening & Micro-Lot Sizing
                 </span>
                 <div className="grid grid-cols-3 gap-3">
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Target Spread (%)</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Target Spread (%)</label>
                     <input
                       type="number"
                       step="0.01"
                       value={qhftTargetSpreadPct}
                       onChange={e => setQhftTargetSpreadPct(e.target.value)}
                       required
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
-                    <span className="text-[10px] text-slate-500 mt-0.5 block">Default: 0.08% (8 bps)</span>
+                    <span className="text-[10px] text-[#71818B] mt-0.5 block">Default: 0.08% (8 bps)</span>
                   </div>
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Micro-Lot Order Size</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Micro-Lot Order Size</label>
                     <input
                       type="text"
                       value={qhftMicroOrderSize}
                       onChange={e => setQhftMicroOrderSize(e.target.value)}
                       required
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
-                    <span className="text-[10px] text-slate-500 mt-0.5 block">Ukuran mikro per kuotasi</span>
+                    <span className="text-[10px] text-[#71818B] mt-0.5 block">Ukuran mikro per kuotasi</span>
                   </div>
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Ladder Levels (1-3)</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Ladder Levels (1-3)</label>
                     <input
                       type="number"
                       min="1"
@@ -5866,9 +5934,9 @@ export const MMConsoleView: React.FC<Props> = ({
                       value={qhftMaxLadderLevels}
                       onChange={e => setQhftMaxLadderLevels(e.target.value)}
                       required
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
-                    <span className="text-[10px] text-slate-500 mt-0.5 block">Jumlah tingkat kedalaman</span>
+                    <span className="text-[10px] text-[#71818B] mt-0.5 block">Jumlah tingkat kedalaman</span>
                   </div>
                 </div>
 
@@ -5882,7 +5950,7 @@ export const MMConsoleView: React.FC<Props> = ({
                     />
                     <div>
                       <span className="text-white font-semibold block text-xs">Aktifkan Dynamic Spread Tightening</span>
-                      <span className="text-[10px] text-slate-400">
+                      <span className="text-[10px] text-[#A1AFB8]">
                         Saat spread pasar &gt; 2 tick, pasang order limit 1 tick di dalam Best Bid & Ask untuk mempersempit spread dan mendapatkan prioritas eksekusi pertama.
                       </span>
                     </div>
@@ -5891,38 +5959,38 @@ export const MMConsoleView: React.FC<Props> = ({
               </div>
 
               {/* SECTION 3: PILLAR C - RISK & INVENTORY MANAGEMENT */}
-              <div className="p-3 bg-[#131b26] border border-[#1e293b] rounded-lg space-y-3">
+              <div className="p-3 bg-[#17212B] border border-[#202B34] rounded-[7px] space-y-3">
                 <span className="text-xs font-bold text-emerald-400 block uppercase tracking-wide flex items-center gap-1.5">
-                  <span>🛡️</span> Pillar C: Risk & Inventory Limits (Anti-Exposure)
+                  Pillar C: Risk & Inventory Limits (Anti-Exposure)
                 </span>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Max Base Token Inventory</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Max Base Token Inventory</label>
                     <input
                       type="text"
                       value={qhftMaxBaseInventory}
                       onChange={e => setQhftMaxBaseInventory(e.target.value)}
                       required
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
-                    <span className="text-[10px] text-slate-500 mt-0.5 block">Batas maksimal akumulasi token dasar</span>
+                    <span className="text-[10px] text-[#71818B] mt-0.5 block">Batas maksimal akumulasi token dasar</span>
                   </div>
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Max Quote (USDT/IDR) Inventory</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Max Quote (USDT/IDR) Inventory</label>
                     <input
                       type="text"
                       value={qhftMaxQuoteInventory}
                       onChange={e => setQhftMaxQuoteInventory(e.target.value)}
                       required
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
-                    <span className="text-[10px] text-slate-500 mt-0.5 block">Batas modal kuotasi yang diekspos</span>
+                    <span className="text-[10px] text-[#71818B] mt-0.5 block">Batas modal kuotasi yang diekspos</span>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3 pt-1">
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Inventory Skew Factor (0.0 - 1.0)</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Inventory Skew Factor (0.0 - 1.0)</label>
                     <input
                       type="number"
                       step="0.05"
@@ -5930,12 +5998,12 @@ export const MMConsoleView: React.FC<Props> = ({
                       max="1"
                       value={qhftInventorySkewFactor}
                       onChange={e => setQhftInventorySkewFactor(e.target.value)}
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
-                    <span className="text-[10px] text-slate-500 mt-0.5 block">Sensitivitas pergeseran harga penyeimbang saldo</span>
+                    <span className="text-[10px] text-[#71818B] mt-0.5 block">Sensitivitas pergeseran harga penyeimbang saldo</span>
                   </div>
                   <div>
-                    <label className="text-slate-300 block mb-1 font-semibold">Siklus Reprice Interval (ms)</label>
+                    <label className="text-[#E4EBEF] block mb-1 font-semibold">Siklus Reprice Interval (ms)</label>
                     <input
                       type="number"
                       step="100"
@@ -5943,17 +6011,17 @@ export const MMConsoleView: React.FC<Props> = ({
                       max="5000"
                       value={qhftRepriceIntervalMs}
                       onChange={e => setQhftRepriceIntervalMs(e.target.value)}
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
-                    <span className="text-[10px] text-slate-500 mt-0.5 block">Kecepatan refresh kuotasi (Default: 1500ms)</span>
+                    <span className="text-[10px] text-[#71818B] mt-0.5 block">Kecepatan refresh kuotasi (Default: 1500ms)</span>
                   </div>
                 </div>
               </div>
 
               {/* SECTION 4: TREND LEANING & FLASH DEFENSE */}
-              <div className="p-3 bg-[#131b26] border border-[#1e293b] rounded-lg space-y-3">
+              <div className="p-3 bg-[#17212B] border border-[#202B34] rounded-[7px] space-y-3">
                 <span className="text-xs font-bold text-amber-400 block uppercase tracking-wide flex items-center gap-1.5">
-                  <span>⚡</span> Trend-Following & Anti-Manipulation (Pump/Dump Protection)
+                  Trend-Following & Anti-Manipulation (Pump/Dump Protection)
                 </span>
                 
                 <div className="space-y-2">
@@ -5967,7 +6035,7 @@ export const MMConsoleView: React.FC<Props> = ({
                       />
                       <div>
                         <span className="text-white font-semibold block text-xs">Aktifkan Micro-EMA Trend Leaning</span>
-                        <span className="text-[10px] text-slate-400">
+                        <span className="text-[10px] text-[#A1AFB8]">
                           Mendeteksi tren jangka mikro (Fast EMA 12 vs Slow EMA 36). Pada UPTREND, geser bid & ask lebih tinggi. Pada DOWNTREND, turunkan bid agar tidak menangkap pisau jatuh (*falling knife*).
                         </span>
                       </div>
@@ -5984,7 +6052,7 @@ export const MMConsoleView: React.FC<Props> = ({
                       />
                       <div>
                         <span className="text-white font-semibold block text-xs">Aktifkan Flash Defense (Pump & Dump Protection)</span>
-                        <span className="text-[10px] text-slate-400">
+                        <span className="text-[10px] text-[#A1AFB8]">
                           Bila terjadi lonjakan volume &gt; 2.5x atau lonjakan harga &gt; 120 bps, hentikan kuotasi agresif, lebarkan perimeter 3.0x, dan kecilkan lot size ke 20% micro-fraksi pada blok support/resistance kunci.
                         </span>
                       </div>
@@ -5994,39 +6062,39 @@ export const MMConsoleView: React.FC<Props> = ({
 
                 <div className="grid grid-cols-3 gap-3 pt-1">
                   <div>
-                    <label className="text-slate-300 block mb-1">Volatility Threshold (bps)</label>
+                    <label className="text-[#E4EBEF] block mb-1">Volatility Threshold (bps)</label>
                     <input
                       type="number"
                       value={qhftVolatilityThresholdBps}
                       onChange={e => setQhftVolatilityThresholdBps(e.target.value)}
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
                   </div>
                   <div>
-                    <label className="text-slate-300 block mb-1">Volume Surge Factor</label>
+                    <label className="text-[#E4EBEF] block mb-1">Volume Surge Factor</label>
                     <input
                       type="number"
                       step="0.5"
                       value={qhftPumpDumpMultiplier}
                       onChange={e => setQhftPumpDumpMultiplier(e.target.value)}
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
                   </div>
                   <div>
-                    <label className="text-slate-300 block mb-1">Defense Perimeter Multiplier</label>
+                    <label className="text-[#E4EBEF] block mb-1">Defense Perimeter Multiplier</label>
                     <input
                       type="number"
                       step="0.5"
                       value={qhftDefensePerimeterMultiplier}
                       onChange={e => setQhftDefensePerimeterMultiplier(e.target.value)}
-                      className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                      className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                     />
                   </div>
                 </div>
               </div>
 
               {/* ACTION BUTTONS */}
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#1e293b]">
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#202B34]">
                 <button
                   type="button"
                   onClick={() => setIsQuantHftModalOpen(false)}
@@ -6037,9 +6105,9 @@ export const MMConsoleView: React.FC<Props> = ({
                 <button
                   type="submit"
                   disabled={isLoading}
-                  className="px-6 py-2.5 bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-bold rounded text-xs shadow-lg transition-all flex items-center gap-1.5"
+                  className="px-6 py-2.5 bg-[#8DA5B1] hover:bg-[#A5BAC4] text-[#090D12] text-white font-bold rounded text-xs shadow-lg transition-all flex items-center gap-1.5"
                 >
-                  <span>⚡</span>
+                  
                   <span>Deploy Quantitative HFT MM Bot</span>
                 </button>
               </div>
@@ -6050,22 +6118,22 @@ export const MMConsoleView: React.FC<Props> = ({
 
       {/* MODAL: EDIT BOT CONFIGURATION */}
       {isEditModalOpen && editingBot && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 overflow-y-auto">
-          <div className="bg-[#0f172a] border border-[#1e293b] rounded-xl max-w-2xl w-full p-6 text-slate-300 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#1e293b]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#090D12]/80 p-4 overflow-y-auto">
+          <div className="bg-[#111820] border border-[#202B34] rounded-[10px] max-w-2xl w-full p-6 text-[#E4EBEF] max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#202B34]">
               <div>
                 <h2 className="text-base font-bold text-white flex items-center gap-2">
                   <span>Edit Konfigurasi Bot:</span>
                   <span className="text-blue-400 font-mono text-sm">{editingBot.name}</span>
                 </h2>
-                <span className="text-xs text-slate-400">
-                  ID: <span className="font-mono text-slate-300">{editingBot.id}</span> · Tipe: <span className="font-semibold text-emerald-400">{editingBot.botType}</span>
+                <span className="text-xs text-[#A1AFB8]">
+                  ID: <span className="font-mono text-[#E4EBEF]">{editingBot.id}</span> · Tipe: <span className="font-semibold text-emerald-400">{editingBot.botType}</span>
                 </span>
               </div>
               <button
                 type="button"
                 onClick={() => setIsEditModalOpen(false)}
-                className="text-slate-400 hover:text-white text-lg font-bold"
+                className="text-[#A1AFB8] hover:text-white text-lg font-bold"
               >
                 ✕
               </button>
@@ -6074,21 +6142,21 @@ export const MMConsoleView: React.FC<Props> = ({
             <form onSubmit={handleSaveEdit} className="space-y-4 text-xs font-sans">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-400 block mb-1">Bot Name</label>
+                  <label className="text-[#A1AFB8] block mb-1">Bot Name</label>
                   <input
                     type="text"
                     value={editName}
                     onChange={e => setEditName(e.target.value)}
                     required
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   />
                 </div>
                 <div>
-                  <label className="text-slate-400 block mb-1">Trading Pair</label>
+                  <label className="text-[#A1AFB8] block mb-1">Trading Pair</label>
                   <select
                     value={editPairId}
                     onChange={e => setEditPairId(e.target.value)}
-                    className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                   >
                     {tradingPairs.map(p => (
                       <option key={p.id} value={p.id}>{p.id}</option>
@@ -6100,29 +6168,29 @@ export const MMConsoleView: React.FC<Props> = ({
               {/* ORDER BOT SPECIFIC FIELDS */}
               {editingBot.botType === 'ORDER_BOT' && (
                 <>
-                  <div className="p-3 bg-[#131b26] rounded-lg border border-[#1e293b] space-y-3">
+                  <div className="p-3 bg-[#17212B] rounded-[7px] border border-[#202B34] space-y-3">
                     <span className="text-xs font-bold text-amber-400 block uppercase tracking-wide">
                       Pengaturan Eksekusi Order Bot (BUY / SELL)
                     </span>
 
                     <div className="grid grid-cols-3 gap-3">
                       <div>
-                        <label className="text-slate-400 block mb-1 font-semibold">Side / Transaction Type</label>
+                        <label className="text-[#A1AFB8] block mb-1 font-semibold">Side / Transaction Type</label>
                         <select
                           value={editObTxType}
                           onChange={e => setEditObTxType(e.target.value as any)}
-                          className="w-full bg-[#1e293b] font-bold text-xs p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] font-bold text-xs p-2 rounded border border-[#2B3944]"
                         >
                           <option value="BUY" className="text-emerald-400">BUY (Beli / Bid)</option>
                           <option value="SELL" className="text-red-400">SELL (Jual / Ask)</option>
                         </select>
                       </div>
                       <div>
-                        <label className="text-slate-400 block mb-1">Price Source</label>
+                        <label className="text-[#A1AFB8] block mb-1">Price Source</label>
                         <select
                           value={editObPriceSource}
                           onChange={e => setEditObPriceSource(e.target.value as any)}
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         >
                           <option value="MIDPOINT">MIDPOINT</option>
                           <option value="BEST_BID">BEST_BID</option>
@@ -6131,123 +6199,123 @@ export const MMConsoleView: React.FC<Props> = ({
                         </select>
                       </div>
                       <div>
-                        <label className="text-slate-400 block mb-1">Order Count (0 = Berjalan Terus)</label>
+                        <label className="text-[#A1AFB8] block mb-1">Order Count (0 = Berjalan Terus)</label>
                         <input
                           type="number"
                           value={editObOrderCount}
                           onChange={e => setEditObOrderCount(e.target.value)}
                           required
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         />
                       </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="text-slate-400 block mb-1">Random Min Quantity</label>
+                        <label className="text-[#A1AFB8] block mb-1">Random Min Quantity</label>
                         <input
                           type="text"
                           value={editObRandomMinQty}
                           onChange={e => setEditObRandomMinQty(e.target.value)}
                           required
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         />
                       </div>
                       <div>
-                        <label className="text-slate-400 block mb-1">Random Max Quantity</label>
+                        <label className="text-[#A1AFB8] block mb-1">Random Max Quantity</label>
                         <input
                           type="text"
                           value={editObRandomMaxQty}
                           onChange={e => setEditObRandomMaxQty(e.target.value)}
                           required
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         />
                       </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="text-slate-400 block mb-1">Price Decimal</label>
+                        <label className="text-[#A1AFB8] block mb-1">Price Decimal</label>
                         <input
                           type="number"
                           value={editObPriceDecimal}
                           onChange={e => setEditObPriceDecimal(e.target.value)}
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         />
                       </div>
                       <div>
-                        <label className="text-slate-400 block mb-1">Quantity Decimal</label>
+                        <label className="text-[#A1AFB8] block mb-1">Quantity Decimal</label>
                         <input
                           type="number"
                           value={editObQtyDecimal}
                           onChange={e => setEditObQtyDecimal(e.target.value)}
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         />
                       </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="text-slate-400 block mb-1">Split Order Mode</label>
+                        <label className="text-[#A1AFB8] block mb-1">Split Order Mode</label>
                         <select
                           value={editObSplitMode}
                           onChange={e => setEditObSplitMode(e.target.value as any)}
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         >
                           <option value="NONE">NONE</option>
                           <option value="RANDOM_SPLIT">RANDOM_SPLIT</option>
                         </select>
                       </div>
                       <div>
-                        <label className="text-slate-400 block mb-1">Split Range</label>
+                        <label className="text-[#A1AFB8] block mb-1">Split Range</label>
                         <input
                           type="text"
                           value={editObSplitRange}
                           onChange={e => setEditObSplitRange(e.target.value)}
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         />
                       </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="text-slate-400 block mb-1">Buy Trailing (Min % - Max %)</label>
+                        <label className="text-[#A1AFB8] block mb-1">Buy Trailing (Min % - Max %)</label>
                         <div className="flex gap-2">
                           <input
                             type="text"
                             value={editObBuyTrailMin}
                             onChange={e => setEditObBuyTrailMin(e.target.value)}
-                            className="w-1/2 bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                            className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                           />
                           <input
                             type="text"
                             value={editObBuyTrailMax}
                             onChange={e => setEditObBuyTrailMax(e.target.value)}
-                            className="w-1/2 bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                            className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                           />
                         </div>
                       </div>
                       <div>
-                        <label className="text-slate-400 block mb-1">Sell Trailing (Min % - Max %)</label>
+                        <label className="text-[#A1AFB8] block mb-1">Sell Trailing (Min % - Max %)</label>
                         <div className="flex gap-2">
                           <input
                             type="text"
                             value={editObSellTrailMin}
                             onChange={e => setEditObSellTrailMin(e.target.value)}
-                            className="w-1/2 bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                            className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                           />
                           <input
                             type="text"
                             value={editObSellTrailMax}
                             onChange={e => setEditObSellTrailMax(e.target.value)}
-                            className="w-1/2 bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                            className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                           />
                         </div>
                       </div>
                     </div>
 
                     {editObTxType === 'BUY' ? (
-                      <div className="p-3 bg-emerald-950/20 border border-emerald-500/30 rounded-lg">
+                      <div className="p-3 bg-emerald-950/20 border border-emerald-500/30 rounded-[7px]">
                         <span className="text-[11px] font-bold text-emerald-400 block mb-2 uppercase tracking-wide">
                           Batasan Harga Order Buy (Beli / Bid)
                         </span>
@@ -6261,9 +6329,9 @@ export const MMConsoleView: React.FC<Props> = ({
                               value={editObBuyMinPrice}
                               onChange={e => setEditObBuyMinPrice(e.target.value)}
                               placeholder="Contoh: 1200000000 (Kosongkan jika tanpa batas)"
-                              className="w-full bg-[#1e293b] text-emerald-300 font-mono p-2 rounded border border-emerald-500/40 focus:border-emerald-400 outline-none"
+                              className="w-full bg-[#17212B] text-emerald-300 font-mono p-2 rounded border border-emerald-500/40 focus:border-emerald-400 outline-none"
                             />
-                            <span className="text-[10px] text-slate-400 mt-0.5 block">
+                            <span className="text-[10px] text-[#A1AFB8] mt-0.5 block">
                               Floor: Bot BUY tidak akan memasang bid di bawah harga ini.
                             </span>
                           </div>
@@ -6276,16 +6344,16 @@ export const MMConsoleView: React.FC<Props> = ({
                               value={editObBuyMaxPrice}
                               onChange={e => setEditObBuyMaxPrice(e.target.value)}
                               placeholder="Contoh: 1500000000 (Kosongkan jika tanpa batas)"
-                              className="w-full bg-[#1e293b] text-emerald-300 font-mono p-2 rounded border border-emerald-500/40 focus:border-emerald-400 outline-none"
+                              className="w-full bg-[#17212B] text-emerald-300 font-mono p-2 rounded border border-emerald-500/40 focus:border-emerald-400 outline-none"
                             />
-                            <span className="text-[10px] text-slate-400 mt-0.5 block">
+                            <span className="text-[10px] text-[#A1AFB8] mt-0.5 block">
                               Ceiling: Bot BUY tidak akan membeli di atas harga ini.
                             </span>
                           </div>
                         </div>
                       </div>
                     ) : (
-                      <div className="p-3 bg-red-950/20 border border-red-500/30 rounded-lg">
+                      <div className="p-3 bg-red-950/20 border border-red-500/30 rounded-[7px]">
                         <span className="text-[11px] font-bold text-red-400 block mb-2 uppercase tracking-wide">
                           Batasan Harga Order Sell (Jual / Ask)
                         </span>
@@ -6299,9 +6367,9 @@ export const MMConsoleView: React.FC<Props> = ({
                               value={editObSellMinPrice}
                               onChange={e => setEditObSellMinPrice(e.target.value)}
                               placeholder="Contoh: 1300000000 (Kosongkan jika tanpa batas)"
-                              className="w-full bg-[#1e293b] text-red-300 font-mono p-2 rounded border border-red-500/40 focus:border-red-400 outline-none"
+                              className="w-full bg-[#17212B] text-red-300 font-mono p-2 rounded border border-red-500/40 focus:border-red-400 outline-none"
                             />
-                            <span className="text-[10px] text-slate-400 mt-0.5 block">
+                            <span className="text-[10px] text-[#A1AFB8] mt-0.5 block">
                               Floor: Bot SELL tidak akan menjual di bawah harga ini.
                             </span>
                           </div>
@@ -6314,9 +6382,9 @@ export const MMConsoleView: React.FC<Props> = ({
                               value={editObSellMaxPrice}
                               onChange={e => setEditObSellMaxPrice(e.target.value)}
                               placeholder="Contoh: 1650000000 (Kosongkan jika tanpa batas)"
-                              className="w-full bg-[#1e293b] text-red-300 font-mono p-2 rounded border border-red-500/40 focus:border-red-400 outline-none"
+                              className="w-full bg-[#17212B] text-red-300 font-mono p-2 rounded border border-red-500/40 focus:border-red-400 outline-none"
                             />
-                            <span className="text-[10px] text-slate-400 mt-0.5 block">
+                            <span className="text-[10px] text-[#A1AFB8] mt-0.5 block">
                               Ceiling: Bot SELL tidak akan memasang ask di atas harga ini.
                             </span>
                           </div>
@@ -6326,30 +6394,30 @@ export const MMConsoleView: React.FC<Props> = ({
 
                     <div className="grid grid-cols-3 gap-3">
                       <div>
-                        <label className="text-slate-400 block mb-1">Expire Time (Detik, 0 = GTC)</label>
+                        <label className="text-[#A1AFB8] block mb-1">Expire Time (Detik, 0 = GTC)</label>
                         <input
                           type="number"
                           value={editObExpireTime}
                           onChange={e => setEditObExpireTime(e.target.value)}
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         />
                       </div>
                       <div>
-                        <label className="text-slate-400 block mb-1">Jitter Timing (%)</label>
+                        <label className="text-[#A1AFB8] block mb-1">Jitter Timing (%)</label>
                         <input
                           type="number"
                           value={editObJitterTiming}
                           onChange={e => setEditObJitterTiming(e.target.value)}
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         />
                       </div>
                       <div>
-                        <label className="text-slate-400 block mb-1">Jitter Price (%)</label>
+                        <label className="text-[#A1AFB8] block mb-1">Jitter Price (%)</label>
                         <input
                           type="number"
                           value={editObJitterPrice}
                           onChange={e => setEditObJitterPrice(e.target.value)}
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         />
                       </div>
                     </div>
@@ -6360,28 +6428,28 @@ export const MMConsoleView: React.FC<Props> = ({
               {/* VOLUME BOT SPECIFIC FIELDS */}
               {editingBot.botType === 'VOLUME_BOT' && (
                 <>
-                  <div className="p-3 bg-[#131b26] rounded-lg border border-[#1e293b] space-y-3">
+                  <div className="p-3 bg-[#17212B] rounded-[7px] border border-[#202B34] space-y-3">
                     <span className="text-xs font-bold text-indigo-400 block uppercase tracking-wide">
                       Pengaturan Eksekusi Volume Bot
                     </span>
 
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="text-slate-400 block mb-1">Target Stop Volume (IDR)</label>
+                        <label className="text-[#A1AFB8] block mb-1">Target Stop Volume (IDR)</label>
                         <input
                           type="text"
                           value={editVbVolIdrStop}
                           onChange={e => setEditVbVolIdrStop(e.target.value)}
                           required
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         />
                       </div>
                       <div>
-                        <label className="text-slate-400 block mb-1">Priority</label>
+                        <label className="text-[#A1AFB8] block mb-1">Priority</label>
                         <select
                           value={editVbPriority}
                           onChange={e => setEditVbPriority(e.target.value as any)}
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         >
                           <option value="RANDOM">random</option>
                           <option value="HIGH">high</option>
@@ -6392,59 +6460,59 @@ export const MMConsoleView: React.FC<Props> = ({
 
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="text-slate-400 block mb-1">Random Min Quantity</label>
+                        <label className="text-[#A1AFB8] block mb-1">Random Min Quantity</label>
                         <input
                           type="text"
                           value={editVbRandomMinQty}
                           onChange={e => setEditVbRandomMinQty(e.target.value)}
                           required
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         />
                       </div>
                       <div>
-                        <label className="text-slate-400 block mb-1">Random Max Quantity</label>
+                        <label className="text-[#A1AFB8] block mb-1">Random Max Quantity</label>
                         <input
                           type="text"
                           value={editVbRandomMaxQty}
                           onChange={e => setEditVbRandomMaxQty(e.target.value)}
                           required
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         />
                       </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="text-slate-400 block mb-1">Scheduling Delay (Min - Max Detik)</label>
+                        <label className="text-[#A1AFB8] block mb-1">Scheduling Delay (Min - Max Detik)</label>
                         <div className="flex gap-2">
                           <input
                             type="number"
                             value={editVbMinDelay}
                             onChange={e => setEditVbMinDelay(e.target.value)}
-                            className="w-1/2 bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                            className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                           />
                           <input
                             type="number"
                             value={editVbMaxDelay}
                             onChange={e => setEditVbMaxDelay(e.target.value)}
-                            className="w-1/2 bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                            className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                           />
                         </div>
                       </div>
                       <div>
-                        <label className="text-slate-400 block mb-1">Difference Spread (Min - Max)</label>
+                        <label className="text-[#A1AFB8] block mb-1">Difference Spread (Min - Max)</label>
                         <div className="flex gap-2">
                           <input
                             type="text"
                             value={editVbMinDiff}
                             onChange={e => setEditVbMinDiff(e.target.value)}
-                            className="w-1/2 bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                            className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                           />
                           <input
                             type="text"
                             value={editVbMaxDiff}
                             onChange={e => setEditVbMaxDiff(e.target.value)}
-                            className="w-1/2 bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                            className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                           />
                         </div>
                       </div>
@@ -6452,43 +6520,43 @@ export const MMConsoleView: React.FC<Props> = ({
 
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="text-slate-400 block mb-1">Min Limit Price (IDR)</label>
+                        <label className="text-[#A1AFB8] block mb-1">Min Limit Price (IDR)</label>
                         <input
                           type="text"
                           value={editVbMinLimitPrice}
                           onChange={e => setEditVbMinLimitPrice(e.target.value)}
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         />
                       </div>
                       <div>
-                        <label className="text-slate-400 block mb-1">Max Limit Price (IDR)</label>
+                        <label className="text-[#A1AFB8] block mb-1">Max Limit Price (IDR)</label>
                         <input
                           type="text"
                           value={editVbMaxLimitPrice}
                           onChange={e => setEditVbMaxLimitPrice(e.target.value)}
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         />
                       </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="text-slate-400 block mb-1">Vol IDR Start Threshold</label>
+                        <label className="text-[#A1AFB8] block mb-1">Vol IDR Start Threshold</label>
                         <input
                           type="text"
                           value={editVbVolIdrStart}
                           onChange={e => setEditVbVolIdrStart(e.target.value)}
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         />
                       </div>
                       <div>
-                        <label className="text-slate-400 block mb-1">Volume Sell Account ID (Opsional)</label>
+                        <label className="text-[#A1AFB8] block mb-1">Volume Sell Account ID (Opsional)</label>
                         <input
                           type="text"
                           value={editVbSellAccountId}
                           onChange={e => setEditVbSellAccountId(e.target.value)}
                           placeholder="None (Gunakan akun default)"
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                         />
                       </div>
                     </div>
@@ -6499,9 +6567,9 @@ export const MMConsoleView: React.FC<Props> = ({
               {/* DEPTH LIQUIDITY BOT SPECIFIC FIELDS */}
               {editingBot.botType === 'DEPTH_LIQUIDITY' && (
                 <>
-                  <div className="p-3 bg-purple-950/25 border border-purple-500/30 rounded-lg space-y-3">
+                  <div className="p-3 bg-purple-950/25 border border-purple-500/30 rounded-[7px] space-y-3">
                     <span className="text-xs font-bold text-purple-300 block uppercase tracking-wide flex items-center gap-1.5">
-                      <span>⚡</span> Pengaturan Depth & Liquidity (Cooldown, Jitter & Ladder)
+                      Pengaturan Depth & Liquidity (Cooldown, Jitter & Ladder)
                     </span>
 
                     <div className="grid grid-cols-2 gap-3">
@@ -6516,9 +6584,9 @@ export const MMConsoleView: React.FC<Props> = ({
                           min="3"
                           max="300"
                           required
-                          className="w-full bg-[#1e293b] text-purple-300 font-mono p-2 rounded border border-purple-500/40 text-xs"
+                          className="w-full bg-[#17212B] text-purple-300 font-mono p-2 rounded border border-purple-500/40 text-xs"
                         />
-                        <span className="text-[10px] text-slate-400 mt-0.5 block">
+                        <span className="text-[10px] text-[#A1AFB8] mt-0.5 block">
                           Jeda cooldown antar siklus refresh. Default 10s (Min 3s).
                         </span>
                       </div>
@@ -6535,9 +6603,9 @@ export const MMConsoleView: React.FC<Props> = ({
                           max="10"
                           disabled={!editDlRandomizePlacement}
                           required
-                          className="w-full bg-[#1e293b] text-purple-300 font-mono p-2 rounded border border-purple-500/40 text-xs disabled:opacity-50"
+                          className="w-full bg-[#17212B] text-purple-300 font-mono p-2 rounded border border-purple-500/40 text-xs disabled:opacity-50"
                         />
-                        <span className="text-[10px] text-slate-400 mt-0.5 block">
+                        <span className="text-[10px] text-[#A1AFB8] mt-0.5 block">
                           Rentang jitter acak halus (±{editDlPriceRandomizationTicks} ticks).
                         </span>
                       </div>
@@ -6549,9 +6617,9 @@ export const MMConsoleView: React.FC<Props> = ({
                         id="editDlRandomizePlacement"
                         checked={editDlRandomizePlacement}
                         onChange={e => setEditDlRandomizePlacement(e.target.checked)}
-                        className="rounded bg-[#1e293b] border-[#334155] text-purple-600 cursor-pointer"
+                        className="rounded bg-[#17212B] border-[#2B3944] text-purple-600 cursor-pointer"
                       />
-                      <label htmlFor="editDlRandomizePlacement" className="text-slate-200 font-medium cursor-pointer">
+                      <label htmlFor="editDlRandomizePlacement" className="text-[#E4EBEF] font-medium cursor-pointer">
                         Aktifkan Dynamic Micro-Jitter Placement (Mencegah bot placing di harga yang sama terus)
                       </label>
                     </div>
@@ -6562,15 +6630,15 @@ export const MMConsoleView: React.FC<Props> = ({
                         id="editDlAntiStacking"
                         checked={editDlAntiStacking}
                         onChange={e => setEditDlAntiStacking(e.target.checked)}
-                        className="rounded bg-[#1e293b] border-[#334155] text-purple-600"
+                        className="rounded bg-[#17212B] border-[#2B3944] text-purple-600"
                       />
                       <label htmlFor="editDlAntiStacking" className="text-emerald-400 font-semibold cursor-pointer text-xs">
-                        ✓ Anti-Numpuk / Anti-Stacking (Rotasi Bersih Cancel-and-Replace)
+                        Anti-Numpuk / Anti-Stacking (Rotasi Bersih Cancel-and-Replace)
                       </label>
                     </div>
 
                     <div className="pt-2 border-t border-purple-500/20 space-y-2">
-                      <label className="text-slate-300 block font-semibold">Mode Penentuan Harga</label>
+                      <label className="text-[#E4EBEF] block font-semibold">Mode Penentuan Harga</label>
                       <div className="grid grid-cols-2 gap-2">
                         <button
                           type="button"
@@ -6578,7 +6646,7 @@ export const MMConsoleView: React.FC<Props> = ({
                           className={`p-2 rounded text-left border text-xs ${
                             editDlPriceMode === 'CUSTOM_BOUNDS'
                               ? 'bg-purple-900/40 border-purple-500 text-white font-bold'
-                              : 'bg-[#1e293b] border-[#334155] text-slate-400'
+                              : 'bg-[#17212B] border-[#2B3944] text-[#A1AFB8]'
                           }`}
                         >
                           Custom Bounds (Bebas / Tanpa Feed)
@@ -6589,7 +6657,7 @@ export const MMConsoleView: React.FC<Props> = ({
                           className={`p-2 rounded text-left border text-xs ${
                             editDlPriceMode === 'EXTERNAL_REFERENCE'
                               ? 'bg-blue-900/40 border-blue-500 text-white font-bold'
-                              : 'bg-[#1e293b] border-[#334155] text-slate-400'
+                              : 'bg-[#17212B] border-[#2B3944] text-[#A1AFB8]'
                           }`}
                         >
                           External Reference Tracker
@@ -6604,7 +6672,7 @@ export const MMConsoleView: React.FC<Props> = ({
                               type="text"
                               value={editDlMinBuyPrice}
                               onChange={e => setEditDlMinBuyPrice(e.target.value)}
-                              className="w-full bg-[#1e293b] text-emerald-400 font-mono p-1.5 rounded border border-emerald-500/40 text-xs"
+                              className="w-full bg-[#17212B] text-emerald-400 font-mono p-1.5 rounded border border-emerald-500/40 text-xs"
                             />
                           </div>
                           <div>
@@ -6613,7 +6681,7 @@ export const MMConsoleView: React.FC<Props> = ({
                               type="text"
                               value={editDlMaxBuyPrice}
                               onChange={e => setEditDlMaxBuyPrice(e.target.value)}
-                              className="w-full bg-[#1e293b] text-emerald-300 font-mono p-1.5 rounded border border-emerald-500/40 text-xs"
+                              className="w-full bg-[#17212B] text-emerald-300 font-mono p-1.5 rounded border border-emerald-500/40 text-xs"
                             />
                           </div>
                           <div>
@@ -6622,7 +6690,7 @@ export const MMConsoleView: React.FC<Props> = ({
                               type="text"
                               value={editDlMinSellPrice}
                               onChange={e => setEditDlMinSellPrice(e.target.value)}
-                              className="w-full bg-[#1e293b] text-red-300 font-mono p-1.5 rounded border border-red-500/40 text-xs"
+                              className="w-full bg-[#17212B] text-red-300 font-mono p-1.5 rounded border border-red-500/40 text-xs"
                             />
                           </div>
                           <div>
@@ -6631,7 +6699,7 @@ export const MMConsoleView: React.FC<Props> = ({
                               type="text"
                               value={editDlMaxSellPrice}
                               onChange={e => setEditDlMaxSellPrice(e.target.value)}
-                              className="w-full bg-[#1e293b] text-red-400 font-mono p-1.5 rounded border border-red-500/40 text-xs"
+                              className="w-full bg-[#17212B] text-red-400 font-mono p-1.5 rounded border border-red-500/40 text-xs"
                             />
                           </div>
                         </div>
@@ -6640,11 +6708,11 @@ export const MMConsoleView: React.FC<Props> = ({
 
                     <div className="grid grid-cols-3 gap-3 pt-2 border-t border-purple-500/20">
                       <div>
-                        <label className="text-slate-300 block mb-1">Mode Spacing</label>
+                        <label className="text-[#E4EBEF] block mb-1">Mode Spacing</label>
                         <select
                           value={editDlSpacingMode}
                           onChange={e => setEditDlSpacingMode(e.target.value as any)}
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] text-xs"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] text-xs"
                         >
                           <option value="LINEAR">LINEAR</option>
                           <option value="GEOMETRIC">GEOMETRIC</option>
@@ -6654,16 +6722,16 @@ export const MMConsoleView: React.FC<Props> = ({
                         </select>
                       </div>
                       <div>
-                        <label className="text-slate-300 block mb-1">Jarak Antar Level (IDR/Step)</label>
+                        <label className="text-[#E4EBEF] block mb-1">Jarak Antar Level (IDR/Step)</label>
                         <input
                           type="number"
                           value={editDlLevelSpacingIdr}
                           onChange={e => setEditDlLevelSpacingIdr(e.target.value)}
-                          className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] text-xs"
+                          className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] text-xs"
                         />
                       </div>
                       <div>
-                        <label className="text-slate-300 block mb-1">Levels (Bid / Ask)</label>
+                        <label className="text-[#E4EBEF] block mb-1">Levels (Bid / Ask)</label>
                         <div className="flex gap-1.5">
                           <input
                             type="number"
@@ -6672,7 +6740,7 @@ export const MMConsoleView: React.FC<Props> = ({
                             min="1"
                             max="20"
                             placeholder="Bids"
-                            className="w-1/2 bg-[#1e293b] text-emerald-400 font-bold p-2 rounded border border-[#334155] text-xs"
+                            className="w-1/2 bg-[#17212B] text-emerald-400 font-bold p-2 rounded border border-[#2B3944] text-xs"
                           />
                           <input
                             type="number"
@@ -6681,7 +6749,7 @@ export const MMConsoleView: React.FC<Props> = ({
                             min="1"
                             max="20"
                             placeholder="Asks"
-                            className="w-1/2 bg-[#1e293b] text-red-400 font-bold p-2 rounded border border-[#334155] text-xs"
+                            className="w-1/2 bg-[#17212B] text-red-400 font-bold p-2 rounded border border-[#2B3944] text-xs"
                           />
                         </div>
                       </div>
@@ -6692,9 +6760,9 @@ export const MMConsoleView: React.FC<Props> = ({
 
               {/* MOVEMENT DEPTH LIQUIDITY SPECIFIC FIELDS */}
               {editingBot.botType === 'MOVEMENT_DEPTH_LIQUIDITY' && (
-                <div className="p-3 bg-cyan-950/25 border border-cyan-500/30 rounded-lg space-y-3">
+                <div className="p-3 bg-cyan-950/25 border border-cyan-500/30 rounded-[7px] space-y-3">
                   <span className="text-xs font-bold text-cyan-300 block uppercase tracking-wide flex items-center gap-1.5">
-                    <span>📡</span> Pengaturan Depth Movement (WS Acuan &amp; Anchor Lokal)
+                    Pengaturan Depth Movement (WS Acuan &amp; Anchor Lokal)
                   </span>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -6703,7 +6771,7 @@ export const MMConsoleView: React.FC<Props> = ({
                       <select
                         value={editMdLeaderSymbol}
                         onChange={e => setEditMdLeaderSymbol(e.target.value)}
-                        className="w-full bg-[#1e293b] text-white font-mono p-2 rounded border border-cyan-500/40 text-xs"
+                        className="w-full bg-[#17212B] text-white font-mono p-2 rounded border border-cyan-500/40 text-xs"
                       >
                         {wsWhitelist.map(w => (
                           <option key={w.symbol} value={w.symbol}>{w.symbol}</option>
@@ -6715,7 +6783,7 @@ export const MMConsoleView: React.FC<Props> = ({
                       <select
                         value={editMdLeaderProvider}
                         onChange={e => setEditMdLeaderProvider(e.target.value as any)}
-                        className="w-full bg-[#1e293b] text-white p-2 rounded border border-cyan-500/40 text-xs"
+                        className="w-full bg-[#17212B] text-white p-2 rounded border border-cyan-500/40 text-xs"
                       >
                         <option value="AGGREGATED">AGGREGATED (Binance + Bybit)</option>
                         <option value="BINANCE">BINANCE Spot WS</option>
@@ -6731,7 +6799,7 @@ export const MMConsoleView: React.FC<Props> = ({
                         type="text"
                         value={editMdAnchorLocalPrice}
                         onChange={e => setEditMdAnchorLocalPrice(e.target.value)}
-                        className="w-full bg-[#1e293b] text-emerald-300 font-mono p-2 rounded border border-emerald-500/40 text-xs"
+                        className="w-full bg-[#17212B] text-emerald-300 font-mono p-2 rounded border border-emerald-500/40 text-xs"
                       />
                     </div>
                     <div>
@@ -6741,25 +6809,25 @@ export const MMConsoleView: React.FC<Props> = ({
                         step="0.1"
                         value={editMdSensitivity}
                         onChange={e => setEditMdSensitivity(e.target.value)}
-                        className="w-full bg-[#1e293b] text-cyan-300 font-mono p-2 rounded border border-cyan-500/40 text-xs"
+                        className="w-full bg-[#17212B] text-cyan-300 font-mono p-2 rounded border border-cyan-500/40 text-xs"
                       />
                     </div>
                     <div>
-                      <label className="text-slate-300 block mb-1 font-semibold">Spread / Threshold (bps)</label>
+                      <label className="text-[#E4EBEF] block mb-1 font-semibold">Spread / Threshold (bps)</label>
                       <div className="flex gap-1.5">
                         <input
                           type="number"
                           value={editMdSpreadBps}
                           onChange={e => setEditMdSpreadBps(e.target.value)}
                           placeholder="Spread"
-                          className="w-1/2 bg-[#1e293b] text-white font-mono p-2 rounded border border-[#334155] text-xs"
+                          className="w-1/2 bg-[#17212B] text-white font-mono p-2 rounded border border-[#2B3944] text-xs"
                         />
                         <input
                           type="number"
                           value={editMdThresholdBps}
                           onChange={e => setEditMdThresholdBps(e.target.value)}
                           placeholder="Move"
-                          className="w-1/2 bg-[#1e293b] text-amber-300 font-mono p-2 rounded border border-[#334155] text-xs"
+                          className="w-1/2 bg-[#17212B] text-amber-300 font-mono p-2 rounded border border-[#2B3944] text-xs"
                         />
                       </div>
                     </div>
@@ -6767,11 +6835,11 @@ export const MMConsoleView: React.FC<Props> = ({
 
                   <div className="grid grid-cols-3 gap-3">
                     <div>
-                      <label className="text-slate-300 block mb-1">Mode Spacing</label>
+                      <label className="text-[#E4EBEF] block mb-1">Mode Spacing</label>
                       <select
                         value={editMdSpacingMode}
                         onChange={e => setEditMdSpacingMode(e.target.value as any)}
-                        className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] text-xs"
+                        className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] text-xs"
                       >
                         <option value="PERCENT_BPS">PERCENT_BPS</option>
                         <option value="LINEAR">LINEAR</option>
@@ -6781,17 +6849,17 @@ export const MMConsoleView: React.FC<Props> = ({
                       </select>
                     </div>
                     <div>
-                      <label className="text-slate-300 block mb-1">Cooldown (dtk)</label>
+                      <label className="text-[#E4EBEF] block mb-1">Cooldown (dtk)</label>
                       <input
                         type="number"
                         min="2"
                         value={editMdRefreshCooldown}
                         onChange={e => setEditMdRefreshCooldown(e.target.value)}
-                        className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] text-xs"
+                        className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] text-xs"
                       />
                     </div>
                     <div>
-                      <label className="text-slate-300 block mb-1">Levels (Bid / Ask)</label>
+                      <label className="text-[#E4EBEF] block mb-1">Levels (Bid / Ask)</label>
                       <div className="flex gap-1.5">
                         <input
                           type="number"
@@ -6799,7 +6867,7 @@ export const MMConsoleView: React.FC<Props> = ({
                           max="20"
                           value={editMdNumBids}
                           onChange={e => setEditMdNumBids(e.target.value)}
-                          className="w-1/2 bg-[#1e293b] text-emerald-400 p-2 rounded border border-[#334155] text-xs"
+                          className="w-1/2 bg-[#17212B] text-emerald-400 p-2 rounded border border-[#2B3944] text-xs"
                         />
                         <input
                           type="number"
@@ -6807,7 +6875,7 @@ export const MMConsoleView: React.FC<Props> = ({
                           max="20"
                           value={editMdNumAsks}
                           onChange={e => setEditMdNumAsks(e.target.value)}
-                          className="w-1/2 bg-[#1e293b] text-red-400 p-2 rounded border border-[#334155] text-xs"
+                          className="w-1/2 bg-[#17212B] text-red-400 p-2 rounded border border-[#2B3944] text-xs"
                         />
                       </div>
                     </div>
@@ -6817,9 +6885,9 @@ export const MMConsoleView: React.FC<Props> = ({
 
               {/* QUANT HFT MM SPECIFIC FIELDS */}
               {editingBot.botType === 'QUANT_HFT_MM' && (
-                <div className="p-3 bg-cyan-950/25 border border-cyan-500/30 rounded-lg space-y-3">
+                <div className="p-3 bg-cyan-950/25 border border-cyan-500/30 rounded-[7px] space-y-3">
                   <span className="text-xs font-bold text-cyan-300 block uppercase tracking-wide flex items-center gap-1.5">
-                    <span>⚡</span> Parameter Quantitative HFT MM (3-Pillar Execution)
+                    Parameter Quantitative HFT MM (3-Pillar Execution)
                   </span>
                   <div className="grid grid-cols-3 gap-3">
                     <div>
@@ -6829,7 +6897,7 @@ export const MMConsoleView: React.FC<Props> = ({
                         step="0.01"
                         value={editQhftTargetSpread}
                         onChange={e => setEditQhftTargetSpread(e.target.value)}
-                        className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] text-xs"
+                        className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] text-xs"
                       />
                     </div>
                     <div>
@@ -6838,7 +6906,7 @@ export const MMConsoleView: React.FC<Props> = ({
                         type="text"
                         value={editQhftMicroOrderSize}
                         onChange={e => setEditQhftMicroOrderSize(e.target.value)}
-                        className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] text-xs"
+                        className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] text-xs"
                       />
                     </div>
                     <div>
@@ -6849,65 +6917,65 @@ export const MMConsoleView: React.FC<Props> = ({
                         max="3"
                         value={editQhftMaxLadderLevels}
                         onChange={e => setEditQhftMaxLadderLevels(e.target.value)}
-                        className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] text-xs"
+                        className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] text-xs"
                       />
                     </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="text-slate-300 block mb-1 font-semibold">Max Base Inventory</label>
+                      <label className="text-[#E4EBEF] block mb-1 font-semibold">Max Base Inventory</label>
                       <input
                         type="text"
                         value={editQhftMaxBaseInventory}
                         onChange={e => setEditQhftMaxBaseInventory(e.target.value)}
-                        className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] text-xs"
+                        className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] text-xs"
                       />
                     </div>
                     <div>
-                      <label className="text-slate-300 block mb-1 font-semibold">Max Quote Inventory</label>
+                      <label className="text-[#E4EBEF] block mb-1 font-semibold">Max Quote Inventory</label>
                       <input
                         type="text"
                         value={editQhftMaxQuoteInventory}
                         onChange={e => setEditQhftMaxQuoteInventory(e.target.value)}
-                        className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155] text-xs"
+                        className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] text-xs"
                       />
                     </div>
                   </div>
 
                   <div className="grid grid-cols-3 gap-2 pt-2 border-t border-cyan-500/20 text-[11px]">
-                    <label className="flex items-center gap-2 cursor-pointer bg-[#0f172a] p-2 rounded border border-cyan-500/20">
+                    <label className="flex items-center gap-2 cursor-pointer bg-[#111820] p-2 rounded border border-cyan-500/20">
                       <input
                         type="checkbox"
                         checked={editQhftTightenSpread}
                         onChange={e => setEditQhftTightenSpread(e.target.checked)}
                         className="rounded border-slate-700 text-cyan-500"
                       />
-                      <span className="text-slate-200 font-semibold">Tighten Inside Spread</span>
+                      <span className="text-[#E4EBEF] font-semibold">Tighten Inside Spread</span>
                     </label>
-                    <label className="flex items-center gap-2 cursor-pointer bg-[#0f172a] p-2 rounded border border-cyan-500/20">
+                    <label className="flex items-center gap-2 cursor-pointer bg-[#111820] p-2 rounded border border-cyan-500/20">
                       <input
                         type="checkbox"
                         checked={editQhftTrendLeaning}
                         onChange={e => setEditQhftTrendLeaning(e.target.checked)}
                         className="rounded border-slate-700 text-cyan-500"
                       />
-                      <span className="text-slate-200 font-semibold">Trend Leaning Skew</span>
+                      <span className="text-[#E4EBEF] font-semibold">Trend Leaning Skew</span>
                     </label>
-                    <label className="flex items-center gap-2 cursor-pointer bg-[#0f172a] p-2 rounded border border-cyan-500/20">
+                    <label className="flex items-center gap-2 cursor-pointer bg-[#111820] p-2 rounded border border-cyan-500/20">
                       <input
                         type="checkbox"
                         checked={editQhftFlashDefense}
                         onChange={e => setEditQhftFlashDefense(e.target.checked)}
                         className="rounded border-slate-700 text-cyan-500"
                       />
-                      <span className="text-slate-200 font-semibold">Flash Defense Protection</span>
+                      <span className="text-[#E4EBEF] font-semibold">Flash Defense Protection</span>
                     </label>
                   </div>
                 </div>
               )}
 
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-[#1e293b]">
+              <div className="flex items-center justify-end gap-3 pt-4 border-t border-[#202B34]">
                 <button
                   type="button"
                   onClick={() => setIsEditModalOpen(false)}
@@ -6930,29 +6998,29 @@ export const MMConsoleView: React.FC<Props> = ({
 
       {/* MODAL: CLONE BOT (Phase 8 - Enhanced Multi-Instance Support) */}
       {isCloneModalOpen && cloneSourceBot && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
-          <div className="bg-[#0f172a] border border-[#1e293b] rounded-xl max-w-lg w-full p-6 text-slate-300">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#090D12]/80 p-4">
+          <div className="bg-[#111820] border border-[#202B34] rounded-[10px] max-w-lg w-full p-6 text-[#E4EBEF]">
             <h2 className="text-base font-bold text-white mb-2">Clone Bot Instance (Multi-Bot Setup)</h2>
-            <p className="text-xs text-slate-400 mb-4 leading-relaxed">
+            <p className="text-xs text-[#A1AFB8] mb-4 leading-relaxed">
               Kloning membuat instance bot baru dengan ID unik dan worker lease independen.
               Anda dapat mengkloning untuk membuat kombinasi misal <strong>3 Bot BUY dan 3 Bot SELL</strong> dengan setingan config yang beda.
             </p>
 
             <div className="space-y-4 text-xs font-sans">
               <div>
-                <label className="text-slate-400 block mb-1 font-semibold">New Bot Name</label>
+                <label className="text-[#A1AFB8] block mb-1 font-semibold">New Bot Name</label>
                 <input
                   type="text"
                   value={cloneNewName}
                   onChange={e => setCloneNewName(e.target.value)}
                   required
-                  className="w-full bg-[#1e293b] text-white p-2 rounded border border-[#334155]"
+                  className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
                 />
               </div>
 
               {/* Order Bot Side Selection on Clone */}
               {cloneSourceBot.botType === 'ORDER_BOT' && (
-                <div className="p-3 bg-[#131b26] rounded-lg border border-[#1e293b]">
+                <div className="p-3 bg-[#17212B] rounded-[7px] border border-[#202B34]">
                   <label className="text-amber-400 block mb-1.5 font-bold uppercase text-[11px]">
                     Pilih Sisi Transaksi untuk Kloning Ini:
                   </label>
@@ -6960,10 +7028,10 @@ export const MMConsoleView: React.FC<Props> = ({
                     <button
                       type="button"
                       onClick={() => setCloneTxType('BUY')}
-                      className={`p-2.5 rounded-lg border text-left font-bold transition-all ${
+                      className={`p-2.5 rounded-[7px] border text-left font-bold transition-all ${
                         cloneTxType === 'BUY'
                           ? 'bg-emerald-600/20 border-emerald-500 text-emerald-400 shadow-sm'
-                          : 'bg-[#1e293b] border-[#334155] text-slate-400 hover:text-white'
+                          : 'bg-[#17212B] border-[#2B3944] text-[#A1AFB8] hover:text-white'
                       }`}
                     >
                       <span className="block text-xs">BUY Bot (Beli)</span>
@@ -6972,30 +7040,30 @@ export const MMConsoleView: React.FC<Props> = ({
                     <button
                       type="button"
                       onClick={() => setCloneTxType('SELL')}
-                      className={`p-2.5 rounded-lg border text-left font-bold transition-all ${
+                      className={`p-2.5 rounded-[7px] border text-left font-bold transition-all ${
                         cloneTxType === 'SELL'
                           ? 'bg-red-600/20 border-red-500 text-red-400 shadow-sm'
-                          : 'bg-[#1e293b] border-[#334155] text-slate-400 hover:text-white'
+                          : 'bg-[#17212B] border-[#2B3944] text-[#A1AFB8] hover:text-white'
                       }`}
                     >
                       <span className="block text-xs">SELL Bot (Jual)</span>
                       <span className="block text-[10px] font-normal opacity-75">Pasang likuiditas ask / jual</span>
                     </button>
                   </div>
-                  <span className="text-[10px] text-slate-400 block mt-2">
+                  <span className="text-[10px] text-[#A1AFB8] block mt-2">
                     * Induk saat ini: <strong>{cloneSourceBot.orderBotConfig?.transaction_type}</strong> · Kloning ini akan diset sebagai <strong>{cloneTxType}</strong>.
                   </span>
                 </div>
               )}
 
-              <div className="p-3 bg-[#0a0f18] rounded border border-[#1e293b] text-slate-400 font-mono text-[11px] space-y-1">
+              <div className="p-3 bg-[#0a0f18] rounded border border-[#202B34] text-[#A1AFB8] font-mono text-[11px] space-y-1">
                 <div>Pair: <span className="text-white font-bold">{cloneSourceBot.pairId}</span></div>
                 <div>Environment: <span className="text-white">{cloneSourceBot.environment}</span></div>
                 <div>Config Version: <span className="text-white">v1 (Fresh independent configuration)</span></div>
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 mt-5 pt-3 border-t border-[#1e293b]">
+            <div className="flex justify-end gap-2 mt-5 pt-3 border-t border-[#202B34]">
               <button
                 type="button"
                 onClick={() => setIsCloneModalOpen(false)}
@@ -7018,19 +7086,19 @@ export const MMConsoleView: React.FC<Props> = ({
 
       {/* MODAL: CSV IMPORT (Phase 11) */}
       {isCsvImportModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 overflow-y-auto">
-          <div className="bg-[#0f172a] border border-[#1e293b] rounded-xl max-w-2xl w-full p-6 text-slate-300">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#090D12]/80 p-4 overflow-y-auto">
+          <div className="bg-[#111820] border border-[#202B34] rounded-[10px] max-w-2xl w-full p-6 text-[#E4EBEF]">
             <h2 className="text-base font-bold text-white mb-2">CSV Bot Configuration Import (Phase 11)</h2>
-            <p className="text-xs text-slate-400 mb-4">
+            <p className="text-xs text-[#A1AFB8] mb-4">
               Tempelkan konten CSV Anda di bawah ini untuk melihat pratinjau validasi baris per baris sebelum disimpan.
             </p>
 
             <div className="mb-3">
-              <label className="text-xs text-slate-400 block mb-1">Bot Type Scheme</label>
+              <label className="text-xs text-[#A1AFB8] block mb-1">Bot Type Scheme</label>
               <select
                 value={csvImportType}
                 onChange={e => setCsvImportType(e.target.value as any)}
-                className="bg-[#1e293b] text-white text-xs p-2 rounded border border-[#334155]"
+                className="bg-[#17212B] text-white text-xs p-2 rounded border border-[#2B3944]"
               >
                 <option value="ORDER_BOT">Order Bot Scheme</option>
                 <option value="VOLUME_BOT">Volume Bot Scheme</option>
@@ -7042,11 +7110,11 @@ export const MMConsoleView: React.FC<Props> = ({
               value={csvRawText}
               onChange={e => setCsvRawText(e.target.value)}
               placeholder="id,name,pairId,transaction_type,random_min_quantity,random_max_quantity,order_count..."
-              className="w-full bg-[#05080f] text-slate-200 font-mono text-xs p-3 rounded border border-[#334155] mb-4"
+              className="w-full bg-[#05080f] text-[#E4EBEF] font-mono text-xs p-3 rounded border border-[#2B3944] mb-4"
             />
 
             {csvPreview && (
-              <div className="mb-4 p-3 bg-[#131b26] rounded border border-[#1e293b] text-xs">
+              <div className="mb-4 p-3 bg-[#17212B] rounded border border-[#202B34] text-xs">
                 <div className="flex justify-between font-bold mb-2">
                   <span>Pratinjau Hasil Validasi:</span>
                   <span className={csvPreview.validRowsCount > 0 ? 'text-emerald-400' : 'text-red-400'}>
@@ -7063,11 +7131,11 @@ export const MMConsoleView: React.FC<Props> = ({
               </div>
             )}
 
-            <div className="flex justify-between items-center pt-3 border-t border-[#1e293b]">
+            <div className="flex justify-between items-center pt-3 border-t border-[#202B34]">
               <button
                 type="button"
                 onClick={handleCsvPreview}
-                className="px-4 py-2 bg-[#1e293b] hover:bg-[#283548] text-white text-xs font-semibold rounded"
+                className="px-4 py-2 bg-[#17212B] hover:bg-[#1D2832] text-white text-xs font-semibold rounded"
               >
                 Pratinjau & Validasi Baris
               </button>
@@ -7094,113 +7162,119 @@ export const MMConsoleView: React.FC<Props> = ({
       )}
 
       {/* MODAL: DELETE BOT CONFIRMATION */}
-      {isDeleteModalOpen && botToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
-          <div className="bg-[#0f172a] border border-red-500/40 rounded-xl max-w-md w-full p-6 text-slate-300 shadow-2xl">
-            <div className="flex items-center gap-3 mb-4 text-red-400">
-              <span className="text-2xl">🗑️</span>
-              <div>
-                <h3 className="text-base font-bold text-white">Hapus Bot Instance?</h3>
-                <span className="text-xs text-slate-400">Tindakan ini tidak dapat dibatalkan.</span>
-              </div>
-            </div>
-
-            <div className="p-3 bg-[#1e293b]/60 rounded-lg border border-[#334155] space-y-1.5 text-xs font-mono mb-4">
+      <Modal
+        isOpen={isDeleteModalOpen && Boolean(botToDelete)}
+        onClose={() => {
+          setIsDeleteModalOpen(false);
+          setBotToDelete(null);
+        }}
+        title="Hapus Bot Instance?"
+        subtitle="Tindakan ini bersifat permanen dan tidak dapat dibatalkan."
+        maxWidth="max-w-md"
+      >
+        {botToDelete && (
+          <div className="space-y-4">
+            <div className="p-3 bg-[#17212B] rounded-[7px] border border-[#2B3944] space-y-1.5 text-xs font-mono">
               <div className="flex justify-between">
-                <span className="text-slate-400">Nama Bot:</span>
-                <strong className="text-white">{botToDelete.name}</strong>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">ID Bot:</span>
-                <span className="text-slate-300">{botToDelete.id}</span>
+                <span className="text-[#A1AFB8]">Nama Bot:</span>
+                <strong className="text-[#E4EBEF]">{botToDelete.name}</strong>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Tipe / Pair:</span>
-                <span className="text-amber-400">{botToDelete.botType} ({botToDelete.pairId})</span>
+                <span className="text-[#A1AFB8]">ID Bot:</span>
+                <span className="text-[#E4EBEF]">{botToDelete.id}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">Status Saat Ini:</span>
-                <span className={botToDelete.status === 'RUNNING' ? 'text-emerald-400 font-bold' : 'text-slate-400'}>
+                <span className="text-[#A1AFB8]">Tipe / Pair:</span>
+                <span className="text-[#D6A85C]">{botToDelete.botType} ({botToDelete.pairId})</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[#A1AFB8]">Status Saat Ini:</span>
+                <span className={botToDelete.status === 'RUNNING' ? 'text-[#35B887] font-semibold' : 'text-[#A1AFB8]'}>
                   {botToDelete.status}
                 </span>
               </div>
             </div>
 
-            <p className="text-xs text-amber-300 bg-amber-500/10 p-2.5 rounded border border-amber-500/20 mb-5 leading-relaxed">
-              ⚠️ <strong>Perhatian:</strong> Jika bot sedang berjalan, worker akan segera dihentikan dan seluruh order terbuka milik bot ini pada buku order akan otomatis dibatalkan.
-            </p>
+            <div className="flex items-start gap-2.5 text-xs text-[#D6A85C] bg-[#2C2415]/60 p-3 rounded-[7px] border border-[#D6A85C]/30 leading-relaxed">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <p>
+                <strong>Perhatian:</strong> Jika bot sedang berjalan, worker akan segera dihentikan dan seluruh order terbuka milik bot ini pada buku order akan otomatis dibatalkan.
+              </p>
+            </div>
 
-            <div className="flex items-center justify-end gap-3">
-              <button
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#202B34]">
+              <Button
                 type="button"
+                variant="secondary"
+                size="sm"
                 onClick={() => {
                   setIsDeleteModalOpen(false);
                   setBotToDelete(null);
                 }}
-                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded text-xs font-medium"
               >
                 Batal
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="danger"
+                size="sm"
                 onClick={handleConfirmDeleteBot}
-                disabled={isLoading}
-                className="px-5 py-2 bg-red-600 hover:bg-red-500 text-white rounded text-xs font-bold shadow-md shadow-red-950/40"
+                isLoading={isLoading}
+                icon={<Trash2 className="w-3.5 h-3.5" />}
               >
-                {isLoading ? 'Menghapus...' : 'Ya, Hapus Bot'}
-              </button>
+                Ya, Hapus Bot
+              </Button>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
 
       {/* MODAL: KILL-SWITCH CONFIRMATION */}
-      {isKillSwitchConfirmOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4">
-          <div className="bg-[#150a0f] border border-red-600 rounded-xl max-w-md w-full p-6 text-slate-300 shadow-2xl">
-            <div className="flex items-center gap-3 mb-4 text-red-400">
-              <span className="text-3xl animate-bounce">🛑</span>
-              <div>
-                <h3 className="text-base font-bold text-white">Konfirmasi Emergency Kill-Switch</h3>
-                <span className="text-xs text-red-300">Penghentian Darurat Semua Aktivitas Bot</span>
-              </div>
-            </div>
+      <Modal
+        isOpen={isKillSwitchConfirmOpen}
+        onClose={() => setIsKillSwitchConfirmOpen(false)}
+        title="Konfirmasi Emergency Kill-Switch"
+        subtitle="Penghentian Darurat Semua Aktivitas Bot"
+        maxWidth="max-w-md"
+      >
+        <div className="space-y-4">
+          <p className="text-xs text-[#E4EBEF] leading-relaxed">
+            Apakah Anda yakin ingin mengaktifkan <strong>Emergency Kill-Switch</strong>?
+          </p>
 
-            <p className="text-xs text-slate-300 mb-4 leading-relaxed">
-              Apakah Anda yakin ingin mengaktifkan <strong>Emergency Kill-Switch</strong>?
-            </p>
+          <div className="p-3 bg-[#401F27]/50 rounded-[7px] border border-[#EA5B65]/40 text-xs text-[#E4EBEF] space-y-1.5">
+            <div>• <strong>Semua bot aktif</strong> di seluruh environment akan seketika dihentikan (HALTED).</div>
+            <div>• <strong>Seluruh order terbuka</strong> yang dipasang oleh bot akan langsung ditarik dari order book.</div>
+            <div>• Sistem dapat dipulihkan kapan saja dengan menekan <em>Reset Kill-Switch</em>.</div>
+          </div>
 
-            <div className="p-3 bg-red-950/40 rounded-lg border border-red-500/30 text-xs text-red-200 space-y-1 mb-5">
-              <div>• <strong>Semua bot aktif</strong> di seluruh environment akan seketika dihentikan (HALTED).</div>
-              <div>• <strong>Seluruh order terbuka</strong> yang dipasang oleh bot akan langsung ditarik dari order book.</div>
-              <div>• Sistem dapat dipulihkan kapan saja dengan menekan <em>Reset Kill-Switch</em>.</div>
-            </div>
-
-            <div className="flex items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => setIsKillSwitchConfirmOpen(false)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded text-xs font-medium"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  setIsKillSwitchConfirmOpen(false);
-                  try {
-                    await handleAction('/api/mm/kill-switch', 'POST');
-                  } catch (e) {}
-                }}
-                disabled={isLoading}
-                className="px-5 py-2 bg-red-600 hover:bg-red-500 text-white rounded text-xs font-bold shadow-lg shadow-red-950/60"
-              >
-                {isLoading ? 'Mengeksekusi...' : 'Aktifkan Kill-Switch Sekarang'}
-              </button>
-            </div>
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#202B34]">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => setIsKillSwitchConfirmOpen(false)}
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              onClick={async () => {
+                setIsKillSwitchConfirmOpen(false);
+                try {
+                  await handleAction('/api/mm/kill-switch', 'POST');
+                } catch (e) {}
+              }}
+              isLoading={isLoading}
+              icon={<ShieldAlert className="w-3.5 h-3.5" />}
+            >
+              Aktifkan Kill-Switch Sekarang
+            </Button>
           </div>
         </div>
-      )}
+      </Modal>
     </div>
   );
 };

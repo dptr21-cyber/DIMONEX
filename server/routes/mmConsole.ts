@@ -28,6 +28,7 @@ import { timeframeAnalyticsService } from '../services/analytics/TimeframeAnalyt
 import { portfolioRebalanceService } from '../services/rebalance/PortfolioRebalanceService.js';
 import { PrecisionMath } from '../ledger/PrecisionMath.js';
 import { engineTelemetry } from '../engine/EngineTelemetry.js';
+import { priceThresholdService } from '../services/PriceThresholdService.js';
 
 export const mmConsoleRouter = Router();
 
@@ -2722,3 +2723,107 @@ mmConsoleRouter.get('/engine/telemetry', requireMMOrAdmin, (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ==========================================
+// 13. PRICE THRESHOLD ALERTS & AUTOMATED LADDER ADJUSTMENT
+// ==========================================
+
+mmConsoleRouter.get('/thresholds', requireMMOrAdmin, (req, res) => {
+  try {
+    const environment = req.query.environment as Environment | undefined;
+    const pairId = req.query.pairId as string | undefined;
+    const triggers = priceThresholdService.listTriggers(environment, pairId);
+    const events = priceThresholdService.listEvents(environment, 80);
+    res.json({ success: true, triggers, events });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+mmConsoleRouter.post('/thresholds', requireMMOrAdmin, (req, res) => {
+  try {
+    const user = (req as any).user;
+    const {
+      name,
+      pairId,
+      environment,
+      condition,
+      thresholdPrice,
+      soundEnabled,
+      soundTone,
+      action,
+      targetBotId,
+      adjustStepPct,
+      cooldownSec,
+      autoResetAfterCooldown,
+    } = req.body;
+
+    if (!pairId || !thresholdPrice) {
+      return res.status(400).json({ error: 'pairId dan thresholdPrice wajib diisi.' });
+    }
+
+    const trigger = priceThresholdService.createTrigger({
+      name,
+      pairId,
+      environment: (environment as Environment) || 'DEMO',
+      condition: condition || 'ABOVE_OR_EQUAL',
+      thresholdPrice: String(thresholdPrice),
+      soundEnabled: soundEnabled !== false,
+      soundTone: soundTone || 'CHIME',
+      action: action || 'NONE',
+      targetBotId: targetBotId || undefined,
+      adjustStepPct: adjustStepPct !== undefined ? Number(adjustStepPct) : 1.5,
+      cooldownSec: cooldownSec !== undefined ? Number(cooldownSec) : 30,
+      autoResetAfterCooldown: autoResetAfterCooldown !== false,
+      createdBy: user.email || user.id,
+    });
+
+    res.json({
+      success: true,
+      message: `Aturan threshold "${trigger.name}" aktif pada ${trigger.pairId}.`,
+      trigger,
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+mmConsoleRouter.put('/thresholds/:id', requireMMOrAdmin, (req, res) => {
+  try {
+    const trigger = priceThresholdService.updateTrigger(req.params.id, req.body || {});
+    res.json({
+      success: true,
+      message: `Aturan threshold "${trigger.name}" diperbarui.`,
+      trigger,
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+mmConsoleRouter.delete('/thresholds/:id', requireMMOrAdmin, (req, res) => {
+  try {
+    const deleted = priceThresholdService.deleteTrigger(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Aturan threshold tidak ditemukan.' });
+    }
+    res.json({ success: true, message: 'Aturan threshold dihapus.' });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+mmConsoleRouter.post('/thresholds/:id/test', requireMMOrAdmin, (req, res) => {
+  try {
+    const executeBotAdjustment = req.body?.executeBotAdjustment !== false;
+    const event = priceThresholdService.triggerManualTest(req.params.id, executeBotAdjustment);
+    res.json({
+      success: true,
+      message: event.adjustmentSummary,
+      event,
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+

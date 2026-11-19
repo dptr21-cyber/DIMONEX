@@ -1,9 +1,9 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * src/components/ui/Tabs.tsx
- * Segmented control and tab selector adhering to anti-pill interactive button guidelines.
+ * Precision segmented control adhering to matte mineral guidelines.
  */
 
 import React from 'react';
@@ -34,7 +34,7 @@ export function SegmentedTabs<T extends string>({
 
   return (
     <div
-      className={`inline-flex items-center p-1 bg-[#0E1016] border border-[#292C38] rounded-lg ${
+      className={`inline-flex items-center p-1 bg-[#111820] border border-[#202B34] rounded-[7px] ${
         fullWidth ? 'w-full flex' : ''
       }`}
     >
@@ -45,18 +45,22 @@ export function SegmentedTabs<T extends string>({
             key={tab.id}
             type="button"
             onClick={() => onChange(tab.id)}
-            className={`${sizeClasses} ${fullWidth ? 'flex-1 justify-center' : ''} flex items-center gap-1.5 rounded-md transition-all duration-150 whitespace-nowrap ${
+            className={`${sizeClasses} ${fullWidth ? 'flex-1 justify-center' : ''} flex items-center gap-1.5 rounded-[5px] transition-colors duration-150 whitespace-nowrap cursor-pointer ${
               isActive
-                ? 'bg-[#1C1F29] text-[#F5F5F7] font-semibold shadow-sm border border-[#292C38]'
-                : 'text-[#969BA8] hover:text-[#F5F5F7] hover:bg-[#15171F]'
+                ? 'bg-[#1D2832] text-[#E4EBEF] font-semibold border border-[#2B3944]'
+                : 'text-[#71818B] hover:text-[#E4EBEF] hover:bg-[#17212B] border border-transparent'
             }`}
           >
-            {tab.icon && <span className="shrink-0">{tab.icon}</span>}
+            {tab.icon && <span className={`shrink-0 ${isActive ? 'text-[#8DA5B1]' : ''}`}>{tab.icon}</span>}
             <span>{tab.label}</span>
             {tab.badge !== undefined && (
-              <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${
-                isActive ? 'bg-[#EB3458]/20 text-[#EB3458]' : 'bg-[#15171F] text-[#686D7A]'
-              }`}>
+              <span
+                className={`text-[10px] px-1.5 py-0.5 rounded-[5px] font-mono tabular-nums ${
+                  isActive
+                    ? 'bg-[#8DA5B1]/15 text-[#C1D0D6]'
+                    : 'bg-[#141C24] text-[#71818B]'
+                }`}
+              >
                 {tab.badge}
               </span>
             )}

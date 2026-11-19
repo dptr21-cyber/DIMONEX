@@ -16,7 +16,8 @@ import {
   BotInstance, RiskControlsConfig,
   Asset, ListingRequest, ListingApproval, Market, ListingAuditEvent,
   TransactionalOutboxEvent, IdempotencyRecord, PortfolioRebalanceConfig,
-  ExternalWsWhitelistEntry
+  ExternalWsWhitelistEntry, PriceThresholdTrigger, PriceThresholdEvent,
+  FuturesOrder, FuturesPosition
 } from './types.js';
 import { PrecisionMath } from '../ledger/PrecisionMath.js';
 
@@ -100,6 +101,10 @@ export interface PersistedExchangeState {
   idempotencyRecords?: [string, IdempotencyRecord][];
   portfolioRebalanceConfigs?: [string, PortfolioRebalanceConfig][];
   externalWsWhitelist?: [string, ExternalWsWhitelistEntry][];
+  priceThresholdTriggers?: [string, PriceThresholdTrigger][];
+  priceThresholdEvents?: PriceThresholdEvent[];
+  futuresOrders?: [string, FuturesOrder][];
+  futuresPositions?: [string, FuturesPosition][];
 }
 
 class DatabaseStore {
@@ -129,6 +134,10 @@ class DatabaseStore {
   idempotencyRecords: Map<string, IdempotencyRecord> = new Map();
   portfolioRebalanceConfigs: Map<string, PortfolioRebalanceConfig> = new Map();
   externalWsWhitelist: Map<string, ExternalWsWhitelistEntry> = new Map();
+  priceThresholdTriggers: Map<string, PriceThresholdTrigger> = new Map();
+  priceThresholdEvents: PriceThresholdEvent[] = [];
+  futuresOrders: Map<string, FuturesOrder> = new Map();
+  futuresPositions: Map<string, FuturesPosition> = new Map();
   
   private saveTimer: NodeJS.Timeout | null = null;
   private isSaving = false;
@@ -1226,7 +1235,11 @@ class DatabaseStore {
         outboxEvents: Array.from(this.outboxEvents.entries()),
         idempotencyRecords: Array.from(this.idempotencyRecords.entries()),
         portfolioRebalanceConfigs: Array.from(this.portfolioRebalanceConfigs.entries()),
-        externalWsWhitelist: Array.from(this.externalWsWhitelist.entries())
+        externalWsWhitelist: Array.from(this.externalWsWhitelist.entries()),
+        priceThresholdTriggers: Array.from(this.priceThresholdTriggers.entries()),
+        priceThresholdEvents: this.priceThresholdEvents.slice(-500),
+        futuresOrders: Array.from(this.futuresOrders.entries()),
+        futuresPositions: Array.from(this.futuresPositions.entries())
       };
 
       const jsonStr = JSON.stringify(state, (key, value) =>
@@ -1351,6 +1364,10 @@ class DatabaseStore {
             if (data.idempotencyRecords) this.idempotencyRecords = new Map(data.idempotencyRecords);
             if (data.portfolioRebalanceConfigs) this.portfolioRebalanceConfigs = new Map(data.portfolioRebalanceConfigs);
             if (data.externalWsWhitelist) this.externalWsWhitelist = new Map(data.externalWsWhitelist);
+            if (data.priceThresholdTriggers) this.priceThresholdTriggers = new Map(data.priceThresholdTriggers);
+            if (data.priceThresholdEvents) this.priceThresholdEvents = data.priceThresholdEvents.slice(-500);
+            if (data.futuresOrders) this.futuresOrders = new Map(data.futuresOrders);
+            if (data.futuresPositions) this.futuresPositions = new Map(data.futuresPositions);
 
             this.lastLoadedMtime = fs.statSync(p).mtimeMs;
             console.log(`[DIMONEX Database] Berhasil memuat snapshot disk (${p}): ${this.users.size} pengguna, ${this.orders.size} order, ${this.trades.length} transaksi, ${this.sessions.size} sesi login aktif.`);

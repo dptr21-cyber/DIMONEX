@@ -35,7 +35,9 @@ export type JournalTxType =
   | 'ORDER_LOCK' 
   | 'ORDER_UNLOCK' 
   | 'TRADE_SETTLEMENT' 
-  | 'FEE_COLLECTION';
+  | 'FEE_COLLECTION'
+  | 'FUTURES_FEE'
+  | 'FUTURES_PNL';
 
 export type LedgerEntryType = 'DEBIT' | 'CREDIT';
 
@@ -910,4 +912,118 @@ export interface BacktestResult {
   fills: SimulatedFillEvent[];
   rungHitDistribution: RungHitStat[];
   executionTimeMs: number;
+}
+
+export type PriceThresholdCondition = 'ABOVE_OR_EQUAL' | 'BELOW_OR_EQUAL' | 'CROSS_EITHER';
+export type PriceThresholdSoundTone = 'NONE' | 'CHIME' | 'PING' | 'ALERT_DOUBLE' | 'SIREN';
+export type PriceThresholdAction =
+  | 'NONE'
+  | 'LADDER_RECENTER'
+  | 'LADDER_WIDEN_SPREAD'
+  | 'LADDER_SHIFT_UP'
+  | 'LADDER_SHIFT_DOWN'
+  | 'PAUSE_BOT';
+
+export interface PriceThresholdTrigger {
+  id: string;
+  name: string;
+  pairId: string;
+  environment: Environment;
+  condition: PriceThresholdCondition;
+  thresholdPrice: string;
+  thresholdPriceUnits: string;
+  quoteCurrency: string;
+  quoteDecimals: number;
+  soundEnabled: boolean;
+  soundTone: PriceThresholdSoundTone;
+  action: PriceThresholdAction;
+  targetBotId?: string;
+  adjustStepPct: number;
+  cooldownSec: number;
+  autoResetAfterCooldown: boolean;
+  enabled: boolean;
+  status: 'ARMED' | 'COOLDOWN' | 'TRIGGERED';
+  triggerCount: number;
+  lastTriggeredAt?: number;
+  lastObservedPriceUnits?: string;
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PriceThresholdEvent {
+  id: string;
+  triggerId: string;
+  triggerName: string;
+  pairId: string;
+  environment: Environment;
+  condition: PriceThresholdCondition;
+  thresholdPriceUnits: string;
+  breachedPriceUnits: string;
+  quoteCurrency: string;
+  quoteDecimals: number;
+  soundEnabled: boolean;
+  soundTone: PriceThresholdSoundTone;
+  action: PriceThresholdAction;
+  targetBotId?: string;
+  adjustmentSummary: string;
+  timestamp: number;
+  isTest?: boolean;
+}
+
+export type FuturesSide = 'LONG' | 'SHORT';
+export type FuturesMarginMode = 'CROSS' | 'ISOLATED';
+export type FuturesOrderType = 'MARKET' | 'LIMIT';
+export type FuturesOrderStatus = 'OPEN' | 'FILLED' | 'CANCELLED' | 'REJECTED';
+export type FuturesPositionStatus = 'OPEN' | 'CLOSED' | 'LIQUIDATED';
+
+export interface FuturesOrder {
+  id: string;
+  userId: string;
+  pairId: string;
+  baseCurrency: string;
+  quoteCurrency: string;
+  baseDecimals: number;
+  quoteDecimals: number;
+  side: FuturesSide;
+  orderType: FuturesOrderType;
+  marginMode: FuturesMarginMode;
+  leverage: number;
+  limitPriceUnits: string;
+  quantityUnits: string;
+  marginRequiredUnits: string;
+  feeReservedUnits: string;
+  status: FuturesOrderStatus;
+  positionId?: string;
+  filledAt?: number;
+  cancelledAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface FuturesPosition {
+  id: string;
+  userId: string;
+  pairId: string;
+  baseCurrency: string;
+  quoteCurrency: string;
+  baseDecimals: number;
+  quoteDecimals: number;
+  side: FuturesSide;
+  marginMode: FuturesMarginMode;
+  leverage: number;
+  sizeUnits: string;
+  entryPriceUnits: string;
+  markPriceUnits: string;
+  liqPriceUnits: string;
+  marginLockedUnits: string;
+  openFeeUnits: string;
+  closeFeeUnits?: string;
+  unrealizedPnlUnits: string;
+  realizedPnlUnits: string;
+  roePct: number;
+  status: FuturesPositionStatus;
+  openedAt: number;
+  closedAt?: number;
+  updatedAt: number;
 }

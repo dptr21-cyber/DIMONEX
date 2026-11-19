@@ -1,16 +1,22 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * src/components/orders/OrdersView.tsx
- * Full-page Orders & History management with search, filters, pagination, and cancel actions.
+ * Full-page Orders & History management with search, filters, pagination, and real Blob CSV export.
  */
 
 import React, { useState, useMemo } from 'react';
-import { Search, Filter, Download, X, Clock, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Download } from 'lucide-react';
 import { OrderItem, TradeItem, TradingPairItem } from '../../types/index.js';
-import { formatIDR, formatCrypto, formatQuotePrice } from '../../lib/formatters.js';
+import { formatCrypto, formatQuotePrice } from '../../lib/formatters.js';
 import { useToast } from '../ui/Toast.js';
+import { PageHeader } from '../ui/PanelHeader.js';
+import { SegmentedTabs } from '../ui/Tabs.js';
+import { SearchInput, Pagination } from '../ui/Controls.js';
+import { StatusBadge, BadgeTone } from '../ui/StatusBadge.js';
+import { Button } from '../ui/Button.js';
+import { EmptyState } from '../ui/StateViews.js';
 
 interface OrdersViewProps {
   openOrders: OrderItem[];
@@ -51,77 +57,84 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
   const paginatedList = currentList.slice((page - 1) * pageSize, page * pageSize);
 
   const handleExportCSV = () => {
-    showToast('info', 'Export Started', 'Generating CSV ledger statements...');
+    try {
+      const headers = ['Timestamp', 'ID', 'Pair', 'Type', 'Side', 'PriceUnits', 'QuantityUnits', 'FilledUnits', 'Status'];
+      const lines = currentList.map(item => [
+        item.createdAt ? new Date(item.createdAt).toISOString() : '',
+        item.id || '',
+        item.pairId || '',
+        item.orderType || 'LIMIT',
+        item.side || '',
+        item.price || '0',
+        item.quantity || '0',
+        item.filledQuantity || '0',
+        item.status || (activeTab === 'TRADES' ? 'SETTLED' : 'OPEN'),
+      ].map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','));
+
+      const csvContent = [headers.join(','), ...lines].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `dimonex-${activeTab.toLowerCase()}-${new Date().toISOString().slice(0, 10)}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      showToast('success', 'CSV Statement Exported', `Downloaded ${currentList.length} records.`);
+    } catch {
+      showToast('error', 'Export Failed', 'Unable to generate CSV file.');
+    }
+  };
+
+  const getStatusTone = (status?: string): BadgeTone => {
+    if (status === 'FILLED' || status === 'SETTLED') return 'buy';
+    if (status === 'CANCELLED' || status === 'REJECTED') return 'neutral';
+    if (status === 'PARTIAL') return 'warning';
+    return 'info';
   };
 
   return (
-    <div className="flex-1 flex flex-col p-4 lg:p-6 bg-[#08090D] overflow-y-auto">
-      {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-xl lg:text-2xl font-bold tracking-tight text-[#F5F5F7]">
-            Orders & Trade History
-          </h1>
-          <p className="text-xs text-[#969BA8] mt-1">
-            Review active limit orders, historical trade executions, and double-entry settlements.
-          </p>
-        </div>
-
-        <button
-          onClick={handleExportCSV}
-          className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#15171F] border border-[#292C38] text-[#F5F5F7] hover:border-[#EB3458]/50 transition-colors w-fit"
-        >
-          <Download className="w-3.5 h-3.5 text-[#EB3458]" />
-          Export Statement (.CSV)
-        </button>
-      </div>
+    <div className="flex-1 flex flex-col p-4 lg:p-6 bg-[#090D12] overflow-y-auto space-y-5">
+      <PageHeader
+        title="Orders & Trade History"
+        subtitle="Review active limit orders, historical trade executions, and double-entry settlements."
+        actions={
+          <Button variant="secondary" size="sm" onClick={handleExportCSV}>
+            <Download className="w-3.5 h-3.5 text-[#8DA5B1]" />
+            Export Statement (.CSV)
+          </Button>
+        }
+      />
 
       {/* Tabs & Filter Bar */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4 pb-3 border-b border-[#292C38]">
-        {/* Navigation Tabs */}
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => { setActiveTab('OPEN'); setPage(1); }}
-            className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
-              activeTab === 'OPEN'
-                ? 'bg-[#1C1F29] text-[#F5F5F7] font-semibold border border-[#292C38]'
-                : 'text-[#969BA8] hover:text-[#F5F5F7]'
-            }`}
-          >
-            Open Orders ({openOrders.length})
-          </button>
-          <button
-            onClick={() => { setActiveTab('HISTORY'); setPage(1); }}
-            className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
-              activeTab === 'HISTORY'
-                ? 'bg-[#1C1F29] text-[#F5F5F7] font-semibold border border-[#292C38]'
-                : 'text-[#969BA8] hover:text-[#F5F5F7]'
-            }`}
-          >
-            Order History ({orderHistory.length})
-          </button>
-          <button
-            onClick={() => { setActiveTab('TRADES'); setPage(1); }}
-            className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
-              activeTab === 'TRADES'
-                ? 'bg-[#1C1F29] text-[#F5F5F7] font-semibold border border-[#292C38]'
-                : 'text-[#969BA8] hover:text-[#F5F5F7]'
-            }`}
-          >
-            Execution Logs ({recentTrades.length})
-          </button>
-        </div>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <SegmentedTabs
+          tabs={[
+            { id: 'OPEN', label: 'Open Orders', badge: openOrders.length },
+            { id: 'HISTORY', label: 'Order History', badge: orderHistory.length },
+            { id: 'TRADES', label: 'Execution Logs', badge: recentTrades.length },
+          ]}
+          activeTab={activeTab}
+          onChange={id => {
+            setActiveTab(id);
+            setPage(1);
+          }}
+        />
 
-        {/* Filter Controls */}
         <div className="flex items-center gap-2">
-          {/* Side Filter */}
-          <div className="flex items-center p-0.5 bg-[#0E1016] border border-[#292C38] rounded-lg text-xs">
+          <div className="flex items-center p-0.5 bg-[#111820] border border-[#202B34] rounded-[7px] text-xs">
             {(['ALL', 'BUY', 'SELL'] as const).map(s => (
               <button
                 key={s}
-                onClick={() => { setSideFilter(s); setPage(1); }}
-                className={`px-2.5 py-1 rounded text-[11px] font-semibold transition-colors ${
-                  sideFilter === s ? 'bg-[#1C1F29] text-[#F5F5F7]' : 'text-[#686D7A]'
+                type="button"
+                onClick={() => {
+                  setSideFilter(s);
+                  setPage(1);
+                }}
+                className={`px-2.5 py-1 rounded-[5px] text-[11px] font-medium transition-colors cursor-pointer ${
+                  sideFilter === s ? 'bg-[#1D2832] text-[#E4EBEF] font-semibold' : 'text-[#71818B] hover:text-[#E4EBEF]'
                 }`}
               >
                 {s}
@@ -129,45 +142,43 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
             ))}
           </div>
 
-          {/* Pair Search */}
-          <div className="relative w-44">
-            <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#686D7A]" />
-            <input
-              placeholder="Filter pair..."
-              value={search}
-              onChange={e => { setSearch(e.target.value); setPage(1); }}
-              className="w-full pl-8 pr-3 py-1 text-xs bg-[#0E1016] border border-[#292C38] rounded-lg text-[#F5F5F7] placeholder-[#686D7A] outline-none focus:border-[#EB3458]"
-            />
-          </div>
+          <SearchInput
+            placeholder="Filter pair..."
+            value={search}
+            onChange={val => {
+              setSearch(val);
+              setPage(1);
+            }}
+            className="w-48"
+          />
         </div>
       </div>
 
       {/* Orders Table */}
-      <div className="rounded-xl bg-[#15171F] border border-[#292C38] overflow-hidden shadow-xl mb-4">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs font-mono">
-            <thead className="bg-[#0E1016] text-[#686D7A] text-[11px] border-b border-[#292C38]">
-              <tr>
-                <th className="py-3 px-4 font-sans">Date / Time</th>
-                <th className="py-3 px-4 font-sans">Pair</th>
-                <th className="py-3 px-4 font-sans">Type</th>
-                <th className="py-3 px-4 font-sans">Side</th>
-                <th className="py-3 px-4 text-right">Price</th>
-                <th className="py-3 px-4 text-right">Amount</th>
-                <th className="py-3 px-4 text-right">Filled</th>
-                <th className="py-3 px-4 text-center font-sans">Status</th>
-                {activeTab === 'OPEN' && <th className="py-3 px-4 text-right font-sans">Action</th>}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#292C38]/40">
-              {paginatedList.length === 0 ? (
+      <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
+        {paginatedList.length === 0 ? (
+          <EmptyState
+            title={`No records in ${activeTab.toLowerCase()} view`}
+            description="Adjust pair or side filters, or submit an order from the Spot Trade terminal."
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs font-mono tabular-nums">
+              <thead className="bg-[#111820] text-[#71818B] text-[11px] uppercase tracking-wider border-b border-[#202B34]">
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-xs text-[#686D7A] font-sans">
-                    No records found in {activeTab.toLowerCase()} view.
-                  </td>
+                  <th className="py-3 px-4 font-sans font-medium">Date / Time</th>
+                  <th className="py-3 px-4 font-sans font-medium">Pair</th>
+                  <th className="py-3 px-4 font-sans font-medium">Type</th>
+                  <th className="py-3 px-4 font-sans font-medium">Side</th>
+                  <th className="py-3 px-4 text-right font-sans font-medium">Price</th>
+                  <th className="py-3 px-4 text-right font-sans font-medium">Amount</th>
+                  <th className="py-3 px-4 text-right font-sans font-medium">Filled</th>
+                  <th className="py-3 px-4 text-center font-sans font-medium">Status</th>
+                  {activeTab === 'OPEN' && <th className="py-3 px-4 text-right font-sans font-medium">Action</th>}
                 </tr>
-              ) : (
-                paginatedList.map(item => {
+              </thead>
+              <tbody className="divide-y divide-[#202B34]">
+                {paginatedList.map(item => {
                   const isBuy = item.side === 'BUY';
                   const dateStr = item.createdAt
                     ? new Date(item.createdAt).toLocaleString('id-ID', {
@@ -182,83 +193,49 @@ export const OrdersView: React.FC<OrdersViewProps> = ({
                   const qCurr = matchedPair?.quoteCurrency || (item.pairId || '').split('-')[1] || 'IDR';
                   const qDec = matchedPair?.quoteDecimals ?? (qCurr === 'USDT' ? 6 : 2);
                   const bDec = matchedPair?.baseDecimals ?? 8;
+                  const statusLabel = item.status || (activeTab === 'TRADES' ? 'SETTLED' : 'OPEN');
 
                   return (
-                    <tr key={item.id} className="hover:bg-[#1C1F29]/60 transition-colors">
-                      <td className="py-3 px-4 text-[#969BA8] font-sans text-[11px]">{dateStr}</td>
-                      <td className="py-3 px-4 font-bold text-[#F5F5F7]">{item.pairId || 'BTC-IDR'}</td>
-                      <td className="py-3 px-4 text-[#969BA8] font-sans">{item.orderType || 'LIMIT'}</td>
-                      <td className="py-3 px-4 font-sans font-bold">
-                        <span className={isBuy ? 'text-[#00C087]' : 'text-[#EB3458]'}>
-                          {item.side}
-                        </span>
+                    <tr key={item.id} className="hover:bg-[#17212B] transition-colors">
+                      <td className="py-3 px-4 text-[#A1AFB8] font-sans text-[11px]">{dateStr}</td>
+                      <td className="py-3 px-4 font-semibold text-[#E4EBEF]">{item.pairId || 'BTC-IDR'}</td>
+                      <td className="py-3 px-4 text-[#A1AFB8] font-sans">{item.orderType || 'LIMIT'}</td>
+                      <td className="py-3 px-4 font-sans font-semibold">
+                        <span className={isBuy ? 'text-[#16A879]' : 'text-[#EA5B65]'}>{item.side}</span>
                       </td>
-                      <td className="py-3 px-4 text-right text-[#F5F5F7] font-bold font-mono">
+                      <td className="py-3 px-4 text-right text-[#E4EBEF] font-semibold">
                         {formatQuotePrice(item.price, qCurr, qDec, true)}
                       </td>
-                      <td className="py-3 px-4 text-right text-[#F5F5F7]">
+                      <td className="py-3 px-4 text-right text-[#E4EBEF]">
                         {formatCrypto(item.quantity, bDec)}
                       </td>
-                      <td className="py-3 px-4 text-right text-[#969BA8]">
+                      <td className="py-3 px-4 text-right text-[#A1AFB8]">
                         {item.filledQuantity ? formatCrypto(item.filledQuantity, bDec) : '0.00'}
                       </td>
                       <td className="py-3 px-4 text-center font-sans">
-                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${
-                          item.status === 'FILLED'
-                            ? 'bg-[#00C087]/15 text-[#00C087]'
-                            : item.status === 'CANCELLED'
-                            ? 'bg-[#686D7A]/20 text-[#969BA8]'
-                            : 'bg-[#EB3458]/15 text-[#EB3458]'
-                        }`}>
-                          {item.status || 'NEW'}
-                        </span>
+                        <StatusBadge tone={getStatusTone(statusLabel)}>{statusLabel}</StatusBadge>
                       </td>
                       {activeTab === 'OPEN' && (
                         <td className="py-3 px-4 text-right font-sans">
-                          <button
+                          <Button
+                            variant="danger"
+                            size="sm"
                             onClick={() => onCancelOrder(item.id, item.pairId)}
-                            className="px-2.5 py-1 text-[11px] font-semibold text-[#EB3458] hover:bg-[#EB3458]/15 rounded border border-[#EB3458]/30 transition-colors"
                           >
                             Cancel
-                          </button>
+                          </Button>
                         </td>
                       )}
                     </tr>
                   );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
-      {/* Pagination Controls */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between text-xs text-[#969BA8] px-2 font-mono">
-          <span>
-            Showing {(page - 1) * pageSize + 1} - {Math.min(page * pageSize, currentList.length)} of {currentList.length} items
-          </span>
-          <div className="flex items-center gap-1.5">
-            <button
-              disabled={page <= 1}
-              onClick={() => setPage(p => p - 1)}
-              className="px-2.5 py-1 rounded bg-[#15171F] border border-[#292C38] disabled:opacity-40 hover:text-white"
-            >
-              Prev
-            </button>
-            <span className="px-2 font-bold text-[#F5F5F7]">
-              {page} / {totalPages}
-            </span>
-            <button
-              disabled={page >= totalPages}
-              onClick={() => setPage(p => p + 1)}
-              className="px-2.5 py-1 rounded bg-[#15171F] border border-[#292C38] disabled:opacity-40 hover:text-white"
-            >
-              Next
-            </button>
-          </div>
-        </div>
-      )}
+      <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
     </div>
   );
 };

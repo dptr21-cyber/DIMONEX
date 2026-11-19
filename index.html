@@ -16,19 +16,17 @@
           );
         }
 
-        // Intercept global error in capture phase before iframe reporters can receive it
         window.addEventListener('error', function(event) {
           var msg = event.message || (event.error && event.error.message);
           var src = event.filename || (event.error && event.error.stack);
           if (isExtensionCrash(msg, src, event.error)) {
             event.preventDefault();
             event.stopImmediatePropagation();
-            console.debug('[DOMINEX Shield] Suppressed third-party extension error:', msg);
+            console.debug('[DIMONEX Shield] Suppressed third-party extension error:', msg);
             return true;
           }
         }, true);
 
-        // Intercept unhandled promise rejections in capture phase
         window.addEventListener('unhandledrejection', function(event) {
           var reason = event.reason;
           var msg = reason && (reason.message || (typeof reason === 'string' ? reason : ''));
@@ -36,25 +34,24 @@
           if (isExtensionCrash(msg, stack, reason)) {
             event.preventDefault();
             event.stopImmediatePropagation();
-            console.debug('[DOMINEX Shield] Suppressed third-party extension unhandled rejection:', msg);
+            console.debug('[DIMONEX Shield] Suppressed third-party extension unhandled rejection:', msg);
             return true;
           }
         }, true);
       })();
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DOMINEX — Trade Beyond Limits | Next-Generation Crypto Exchange</title>
-    <meta name="description" content="DOMINEX is a next-generation centralized cryptocurrency exchange featuring Obsidian Glass architecture, spot & futures trading, copy trading, and institutional security." />
-    <meta property="og:title" content="DOMINEX — Trade Beyond Limits | Next-Generation Crypto Exchange" />
-    <meta property="og:description" content="Trade digital assets with institutional execution speed, obsidian glass design, spot & perpetual futures, copy trading, and high-yield earning." />
+    <title>DIMONEX — Spot Crypto Exchange IDR</title>
+    <meta name="description" content="Bursa spot aset kripto dengan quote currency Rupiah (IDR), double-entry ledger immutable, price-time priority matching engine, dan live market data." />
+    <meta property="og:title" content="DIMONEX — Spot Crypto Exchange IDR" />
+    <meta property="og:description" content="Precision in Every Trade. Institutional spot crypto exchange with double-entry atomic ledger, L2 order book, and live market data." />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=Roboto+Mono:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   </head>
-  <body class="bg-[#08090D] text-[#F5F5F7] antialiased selection:bg-[#FF087F]/30 selection:text-white">
+  <body class="bg-[#090D12] text-[#E4EBEF] antialiased selection:bg-[#8DA5B1]/30 selection:text-[#E4EBEF]">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

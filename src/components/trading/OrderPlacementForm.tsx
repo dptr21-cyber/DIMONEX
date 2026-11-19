@@ -1,10 +1,10 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * src/components/trading/OrderPlacementForm.tsx
- * Professional Order Placement Form with Limit, Market, and Stop-Limit order types,
- * percentage allocation controls, and Black & Crimson-Pink styling.
+ * Precision Order Placement Form with Limit, Market, and Stop-Limit order types,
+ * zero-float BigInt allocation math, and Obsidian Iridium styling.
  */
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -33,9 +33,10 @@ function clampDecimalString(decStr: string, maxDecimals: number): string {
   if (!decStr.includes('.')) return decStr;
   const [intPart, fracPart] = decStr.split('.');
   const firstNonZero = fracPart.search(/[1-9]/);
-  const keepDec = firstNonZero >= maxDecimals
-    ? Math.min(fracPart.length, firstNonZero + 4)
-    : maxDecimals;
+  const keepDec =
+    firstNonZero >= maxDecimals
+      ? Math.min(fracPart.length, firstNonZero + 4)
+      : maxDecimals;
   const sliced = fracPart.slice(0, keepDec).replace(/0+$/, '');
   return sliced ? `${intPart}.${sliced}` : intPart;
 }
@@ -63,13 +64,14 @@ export const OrderPlacementForm: React.FC<Props> = ({
   const quoteDecimals =
     pair?.quoteDecimals !== undefined && pair?.quoteDecimals !== null
       ? pair.quoteDecimals
-      : (isQuoteIDR ? 2 : 6);
+      : isQuoteIDR
+      ? 2
+      : 6;
   const baseDecimals =
     pair?.baseDecimals !== undefined && pair?.baseDecimals !== null
       ? pair.baseDecimals
       : 8;
 
-  // Reset form inputs when switching trading pair, or populate from initial lastPrice
   useEffect(() => {
     if (prevPairIdRef.current !== pair?.id) {
       prevPairIdRef.current = pair?.id || null;
@@ -86,14 +88,12 @@ export const OrderPlacementForm: React.FC<Props> = ({
     }
   }, [pair?.id, pair?.lastPrice, quoteDecimals]);
 
-  // Populate initial price if pair.lastPrice arrived slightly after mount and user hasn't typed yet
   useEffect(() => {
     if (!priceInput && !selectedPriceUnits && pair?.lastPrice && safeBigInt(pair.lastPrice) > 0n) {
       setPriceInput(formatUnitsToDecimal(pair.lastPrice, quoteDecimals, true));
     }
   }, [pair?.lastPrice, quoteDecimals]);
 
-  // Sync selected price from order book click
   useEffect(() => {
     if (selectedPriceUnits) {
       const units = safeBigInt(selectedPriceUnits);
@@ -104,7 +104,6 @@ export const OrderPlacementForm: React.FC<Props> = ({
     }
   }, [selectedPriceUnits, quoteDecimals]);
 
-  // Find relevant balances
   const quoteBalance = balances.find(b => b.currency === pair?.quoteCurrency);
   const baseBalance = balances.find(b => b.currency === pair?.baseCurrency);
 
@@ -114,7 +113,6 @@ export const OrderPlacementForm: React.FC<Props> = ({
   const baseScale = 10n ** BigInt(Math.max(0, baseDecimals));
   const takerFeeBps = safeBigInt(pair?.takerFeeBps, 20n);
 
-  // Handle balance percentage fill using pure zero-float BigInt arithmetic
   const handlePercentageClick = (percent: number) => {
     setAllocationPct(percent);
     if (!user) {
@@ -130,7 +128,6 @@ export const OrderPlacementForm: React.FC<Props> = ({
       if (effectivePriceUnits <= 0n || availableQuoteBig <= 0n) return;
 
       const budgetQuote = (availableQuoteBig * BigInt(percent)) / 100n;
-      // Reserve taker fee + 1 bps buffer so lockedAmount never exceeds available balance
       const netQuote = (budgetQuote * 10000n) / (10000n + takerFeeBps + 1n);
       const qtyUnits = (netQuote * baseScale) / effectivePriceUnits;
       if (qtyUnits > 0n) {
@@ -147,16 +144,13 @@ export const OrderPlacementForm: React.FC<Props> = ({
     }
   };
 
-  // Estimate total quote amount & fee safely with Zero-Float BigInt math
   const priceUnits =
     orderType === 'LIMIT' || orderType === 'STOP_LIMIT'
       ? parseDecimalToUnits(priceInput, quoteDecimals)
       : safeBigInt(pair?.lastPrice);
 
   const stopPriceUnits =
-    orderType === 'STOP_LIMIT'
-      ? parseDecimalToUnits(stopPriceInput, quoteDecimals)
-      : 0n;
+    orderType === 'STOP_LIMIT' ? parseDecimalToUnits(stopPriceInput, quoteDecimals) : 0n;
 
   const qtyUnits = parseDecimalToUnits(quantityInput, baseDecimals);
 
@@ -214,9 +208,9 @@ export const OrderPlacementForm: React.FC<Props> = ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       });
 
       let data: any = {};
@@ -231,7 +225,7 @@ export const OrderPlacementForm: React.FC<Props> = ({
       showToast(
         'success',
         `${side === 'BUY' ? 'Buy' : 'Sell'} Order Submitted`,
-        `Successfully placed ${side} ${quantityInput} ${pair.baseCurrency}.`
+        `Placed ${side} ${quantityInput} ${pair.baseCurrency}.`
       );
       setQuantityInput('');
       setAllocationPct(null);
@@ -247,27 +241,33 @@ export const OrderPlacementForm: React.FC<Props> = ({
   const pricePlaceholder = isQuoteIDR ? '0' : '0.0000';
 
   return (
-    <div className="flex flex-col obsidian-glass border border-white/10 rounded-xl overflow-hidden p-4 shadow-xl select-none">
+    <div className="flex flex-col bg-[#141C24] border border-[#202B34] rounded-[10px] overflow-hidden p-4 select-none">
       {/* Buy / Sell Segmented Control */}
-      <div className="grid grid-cols-2 gap-2 p-1 bg-[#0D1017] border border-white/10 rounded-lg mb-4">
+      <div className="grid grid-cols-2 gap-1.5 p-1 bg-[#111820] border border-[#202B34] rounded-[7px] mb-3.5">
         <button
           type="button"
-          onClick={() => { setSide('BUY'); setAllocationPct(null); }}
-          className={`py-2 text-xs font-bold rounded-md transition-all flex items-center justify-center ${
+          onClick={() => {
+            setSide('BUY');
+            setAllocationPct(null);
+          }}
+          className={`py-2 text-xs font-semibold rounded-[5px] transition-colors flex items-center justify-center cursor-pointer ${
             side === 'BUY'
-              ? 'bg-[#16C784] text-white shadow-lg shadow-[#16C784]/25'
-              : 'text-[#9298A6] hover:text-[#F5F5F7]'
+              ? 'bg-[#16A879] text-[#090D12]'
+              : 'text-[#A1AFB8] hover:text-[#E4EBEF]'
           }`}
         >
           Buy {pair.baseCurrency}
         </button>
         <button
           type="button"
-          onClick={() => { setSide('SELL'); setAllocationPct(null); }}
-          className={`py-2 text-xs font-bold rounded-md transition-all flex items-center justify-center ${
+          onClick={() => {
+            setSide('SELL');
+            setAllocationPct(null);
+          }}
+          className={`py-2 text-xs font-semibold rounded-[5px] transition-colors flex items-center justify-center cursor-pointer ${
             side === 'SELL'
-              ? 'bg-[#EA3943] text-white shadow-lg shadow-[#EA3943]/25'
-              : 'text-[#9298A6] hover:text-[#F5F5F7]'
+              ? 'bg-[#EA5B65] text-[#090D12]'
+              : 'text-[#A1AFB8] hover:text-[#E4EBEF]'
           }`}
         >
           Sell {pair.baseCurrency}
@@ -275,54 +275,42 @@ export const OrderPlacementForm: React.FC<Props> = ({
       </div>
 
       {/* Order Type Tabs */}
-      <div className="flex items-center gap-4 text-xs font-semibold pb-3 mb-3 border-b border-white/10">
-        <button
-          type="button"
-          onClick={() => setOrderType('LIMIT')}
-          className={`pb-1 transition-colors ${
-            orderType === 'LIMIT'
-              ? 'text-[#F5F5F7] border-b-2 border-[#FF087F] font-bold'
-              : 'text-[#686D7A] hover:text-[#9298A6]'
-          }`}
-        >
-          Limit
-        </button>
-        <button
-          type="button"
-          onClick={() => setOrderType('MARKET')}
-          className={`pb-1 transition-colors ${
-            orderType === 'MARKET'
-              ? 'text-[#F5F5F7] border-b-2 border-[#FF087F] font-bold'
-              : 'text-[#686D7A] hover:text-[#9298A6]'
-          }`}
-        >
-          Market
-        </button>
-        <button
-          type="button"
-          onClick={() => setOrderType('STOP_LIMIT')}
-          className={`pb-1 transition-colors ${
-            orderType === 'STOP_LIMIT'
-              ? 'text-[#F5F5F7] border-b-2 border-[#FF087F] font-bold'
-              : 'text-[#686D7A] hover:text-[#9298A6]'
-          }`}
-        >
-          Stop-Limit
-        </button>
+      <div className="flex items-center gap-4 text-xs font-semibold pb-2.5 mb-3 border-b border-[#202B34]">
+        {(['LIMIT', 'MARKET', 'STOP_LIMIT'] as const).map(type => {
+          const active = orderType === type;
+          return (
+            <button
+              key={type}
+              type="button"
+              onClick={() => setOrderType(type)}
+              className={`pb-1 transition-colors border-b-2 cursor-pointer ${
+                active
+                  ? 'text-[#E4EBEF] border-[#8DA5B1]'
+                  : 'text-[#71818B] border-transparent hover:text-[#A1AFB8]'
+              }`}
+            >
+              {type === 'LIMIT' ? 'Limit' : type === 'MARKET' ? 'Market' : 'Stop-Limit'}
+            </button>
+          );
+        })}
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-3.5">
-        {/* Available Balances */}
-        <div className="flex items-center justify-between text-[11px] font-mono text-[#969BA8] px-0.5">
+      <form onSubmit={handleSubmit} className="space-y-3">
+        {/* Available Balance */}
+        <div className="flex items-center justify-between text-[11px] font-mono tabular-nums text-[#A1AFB8] px-0.5">
           <span>Available:</span>
-          <span className="font-bold text-[#F5F5F7]">
+          <span className="font-semibold text-[#E4EBEF]">
             {side === 'BUY'
-              ? formatQuotePrice(availableQuoteBig.toString(), pair.quoteCurrency, quoteDecimals, true)
+              ? formatQuotePrice(
+                  availableQuoteBig.toString(),
+                  pair.quoteCurrency,
+                  quoteDecimals,
+                  true
+                )
               : `${formatCrypto(availableBaseBig.toString(), baseDecimals)} ${pair.baseCurrency}`}
           </span>
         </div>
 
-        {/* Stop Price (for Stop-Limit) */}
         {orderType === 'STOP_LIMIT' && (
           <Input
             label="Stop Trigger Price"
@@ -333,41 +321,45 @@ export const OrderPlacementForm: React.FC<Props> = ({
           />
         )}
 
-        {/* Limit Price Input */}
         {orderType !== 'MARKET' ? (
           <Input
             label="Price"
             suffixText={pair.quoteCurrency}
             placeholder={pricePlaceholder}
             value={priceInput}
-            onChange={e => { setPriceInput(e.target.value); setAllocationPct(null); }}
+            onChange={e => {
+              setPriceInput(e.target.value);
+              setAllocationPct(null);
+            }}
           />
         ) : (
-          <div className="p-2.5 rounded-lg bg-[#0E1016] border border-[#292C38] text-xs text-[#686D7A] text-center font-mono">
+          <div className="p-2.5 rounded-[7px] bg-[#111820] border border-[#2B3944] text-xs text-[#71818B] text-center font-mono">
             Best Market Price Execution
           </div>
         )}
 
-        {/* Amount Input */}
         <Input
           label="Amount"
           suffixText={pair.baseCurrency}
           placeholder="0.00"
           value={quantityInput}
-          onChange={e => { setQuantityInput(e.target.value); setAllocationPct(null); }}
+          onChange={e => {
+            setQuantityInput(e.target.value);
+            setAllocationPct(null);
+          }}
         />
 
-        {/* Percentage Allocation Pills */}
+        {/* Percentage Allocation Controls */}
         <div className="grid grid-cols-4 gap-1.5">
           {[25, 50, 75, 100].map(pct => (
             <button
               key={pct}
               type="button"
               onClick={() => handlePercentageClick(pct)}
-              className={`py-1 text-[11px] font-mono font-semibold rounded border transition-colors ${
+              className={`py-1 text-[11px] font-mono font-medium rounded-[5px] border transition-colors cursor-pointer ${
                 allocationPct === pct
-                  ? 'bg-[#FF087F]/15 border-[#FF087F] text-[#FF087F]'
-                  : 'bg-[#0D1017] border-white/10 text-[#9298A6] hover:text-[#F5F5F7]'
+                  ? 'bg-[#1D2832] border-[#8DA5B1] text-[#E4EBEF]'
+                  : 'bg-[#111820] border-[#202B34] text-[#71818B] hover:text-[#E4EBEF] hover:border-[#2B3944]'
               }`}
             >
               {pct}%
@@ -376,47 +368,61 @@ export const OrderPlacementForm: React.FC<Props> = ({
         </div>
 
         {/* Order Summary */}
-        <div className="p-3 rounded-lg bg-[#0D1017] border border-white/10 space-y-1.5 text-xs font-mono">
-          <div className="flex justify-between text-[#9298A6]">
+        <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-1.5 text-xs font-mono tabular-nums">
+          <div className="flex justify-between text-[#71818B]">
             <span>Order Value</span>
-            <span className="text-[#F5F5F7] font-semibold">{formatQuotePrice(quoteVolumeUnits.toString(), pair.quoteCurrency, quoteDecimals, true)}</span>
+            <span className="text-[#E4EBEF] font-semibold">
+              {formatQuotePrice(
+                quoteVolumeUnits.toString(),
+                pair.quoteCurrency,
+                quoteDecimals,
+                true
+              )}
+            </span>
           </div>
-          <div className="flex justify-between text-[#9298A6]">
+          <div className="flex justify-between text-[#71818B]">
             <span>Est. Fee ({(Number(takerFeeBps) / 100).toFixed(2)}%)</span>
-            <span className="text-[#9298A6]">{formatQuotePrice(estimatedFeeUnits.toString(), pair.quoteCurrency, quoteDecimals, true)}</span>
+            <span className="text-[#A1AFB8]">
+              {formatQuotePrice(
+                estimatedFeeUnits.toString(),
+                pair.quoteCurrency,
+                quoteDecimals,
+                true
+              )}
+            </span>
           </div>
         </div>
 
         {errorMessage && (
-          <p className="text-[11px] text-[#EA3943] font-medium">{errorMessage}</p>
+          <p className="text-[11px] text-[#EA5B65] font-medium">{errorMessage}</p>
         )}
 
-        {/* Market Halted or Inactive Notice */}
         {pair.isHalted && (
-          <div className="p-2.5 rounded-lg bg-[#EB3458]/10 border border-[#EB3458]/30 text-[#EB3458] text-xs font-medium">
+          <div className="p-2.5 rounded-[7px] bg-[#401F27]/60 border border-[#EA5B65]/40 text-[#EA5B65] text-xs font-medium">
             Perdagangan untuk pasar ini sedang dihentikan sementara (HALTED).
           </div>
         )}
         {!pair.isActive && (
-          <div className="p-2.5 rounded-lg bg-[#F5B942]/10 border border-[#F5B942]/30 text-[#F5B942] text-xs font-medium">
+          <div className="p-2.5 rounded-[7px] bg-[#2C2415]/60 border border-[#D6A85C]/40 text-[#D6A85C] text-xs font-medium">
             Pasar ini belum aktif diperdagangkan (PREPARING).
           </div>
         )}
 
-        {/* Submit Button */}
         <Button
           type="submit"
           variant={side === 'BUY' ? 'profit' : 'danger'}
           size="lg"
-          className="w-full font-bold"
+          className="w-full font-semibold"
           isLoading={isSubmitting}
           disabled={pair.isHalted || !pair.isActive}
         >
-          {pair.isHalted 
-            ? 'Trading Halted' 
-            : !pair.isActive 
-            ? 'Market Preparing' 
-            : (side === 'BUY' ? `Buy ${pair.baseCurrency}` : `Sell ${pair.baseCurrency}`)}
+          {pair.isHalted
+            ? 'Trading Halted'
+            : !pair.isActive
+            ? 'Market Preparing'
+            : side === 'BUY'
+            ? `Buy ${pair.baseCurrency}`
+            : `Sell ${pair.baseCurrency}`}
         </Button>
       </form>
     </div>

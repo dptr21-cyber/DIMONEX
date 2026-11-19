@@ -1,21 +1,27 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * src/components/trading/OrderBookView.tsx
- * High-performance Market Maker Order Book Depth Visualizer featuring:
- * 1. Visual Heatmap Overlay: Multi-tier thermal gradients, liquidity wall detection,
- *    and instant Key Support / Resistance zone highlights.
- * 2. Price-Level Aggregation: Strict deduplication and volume summing across identical
- *    price levels to prevent visual clutter, with dynamic step grouping.
- * 3. Market Maker tactical quick-action banner to target key support and resistance walls.
+ * High-performance Order Book Depth Visualizer in Obsidian Iridium matte style.
  */
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { TradingPairItem } from '../../types/index.js';
-import { formatCrypto, safeBigInt, formatQuotePrice, parseDecimalToUnits } from '../../lib/formatters.js';
+import {
+  formatCrypto,
+  safeBigInt,
+  formatQuotePrice,
+  parseDecimalToUnits,
+} from '../../lib/formatters.js';
 import { D3DepthChart } from './D3DepthChart.js';
-import { AreaChart as AreaChartIcon, Layers, Flame, Shield, TrendingDown, TrendingUp, SlidersHorizontal } from 'lucide-react';
+import {
+  AreaChart as AreaChartIcon,
+  Layers,
+  Flame,
+  TrendingDown,
+  TrendingUp,
+} from 'lucide-react';
 
 interface UserOrderSummary {
   count: number;
@@ -26,7 +32,7 @@ interface UserOrderSummary {
 interface Props {
   pair: TradingPairItem;
   depth: {
-    bids: [string, string, string][]; // [price, qty, cumulativeQty]
+    bids: [string, string, string][];
     asks: [string, string, string][];
     spread: string;
   };
@@ -43,7 +49,7 @@ export interface AggregatedLevel {
   qty: string;
   cumQty: string;
   orderCount: number;
-  densityPercent: number; // 0 - 100 relative to max single-level volume
+  densityPercent: number;
   isWall: boolean;
   isTopWall: boolean;
   side: 'BID' | 'ASK';
@@ -54,10 +60,8 @@ export const OrderBookView: React.FC<Props> = ({
   depth,
   myOpenOrderPrices,
   myOrdersByPrice,
-  userRole,
   onSelectPrice,
 }) => {
-  // Heatmap Overlay Toggle (Persisted in localStorage, default: true)
   const [showHeatmap, setShowHeatmapState] = useState<boolean>(() => {
     const saved = localStorage.getItem('dimonex_orderbook_heatmap');
     return saved !== null ? saved === 'true' : true;
@@ -71,7 +75,6 @@ export const OrderBookView: React.FC<Props> = ({
     });
   };
 
-  // View Mode: SPLIT, DEPTH_D3, HYBRID, BIDS, ASKS
   const [viewMode, setViewModeState] = useState<OrderBookViewMode>(() => {
     const saved = localStorage.getItem('dimonex_orderbook_view');
     if (saved && ['SPLIT', 'DEPTH_D3', 'HYBRID', 'BIDS', 'ASKS'].includes(saved)) {
@@ -86,9 +89,13 @@ export const OrderBookView: React.FC<Props> = ({
   };
 
   const isQuoteIDR = (pair.quoteCurrency || 'IDR').toUpperCase() === 'IDR';
-  const quoteDecimals = pair.quoteDecimals !== undefined && pair.quoteDecimals !== null ? pair.quoteDecimals : (isQuoteIDR ? 2 : 6);
+  const quoteDecimals =
+    pair.quoteDecimals !== undefined && pair.quoteDecimals !== null
+      ? pair.quoteDecimals
+      : isQuoteIDR
+      ? 2
+      : 6;
 
-  // Determine reference price magnitude for adaptive aggregation steps
   const refPriceUnits = useMemo(() => {
     const lp = safeBigInt(pair.lastPrice);
     if (lp > 0n) return lp;
@@ -99,7 +106,6 @@ export const OrderBookView: React.FC<Props> = ({
     return 0n;
   }, [pair.lastPrice, depth.asks, depth.bids]);
 
-  // Dynamic aggregation options tailored to pair quote currency & price scale
   const aggregationOptions = useMemo(() => {
     const scaleNum = 10 ** Math.max(0, quoteDecimals);
     const refPrice = Number(refPriceUnits) / (scaleNum || 1);
@@ -168,7 +174,6 @@ export const OrderBookView: React.FC<Props> = ({
     ];
   }, [isQuoteIDR, quoteDecimals, refPriceUnits]);
 
-  // Aggregation precision state
   const [precision, setPrecisionState] = useState<string>(() => {
     const saved = localStorage.getItem('dimonex_orderbook_precision');
     if (saved) return saved;
@@ -180,7 +185,6 @@ export const OrderBookView: React.FC<Props> = ({
     localStorage.setItem('dimonex_orderbook_precision', p);
   };
 
-  // Auto-reset precision to 'exact' when switching pairs if saved value is not valid for this pair
   useEffect(() => {
     if (!aggregationOptions.some(opt => opt.value === precision)) {
       setPrecisionState('exact');
@@ -188,7 +192,6 @@ export const OrderBookView: React.FC<Props> = ({
     }
   }, [pair.id, aggregationOptions, precision]);
 
-  // Calculate step units in raw BigInt based on selected aggregation precision
   const stepUnits = useMemo<bigint>(() => {
     if (precision === 'exact') return 1n;
     const parsed = parseDecimalToUnits(precision, quoteDecimals);
@@ -197,11 +200,6 @@ export const OrderBookView: React.FC<Props> = ({
 
   const asksContainerRef = useRef<HTMLDivElement>(null);
 
-  /**
-   * Price-Level Aggregation Function:
-   * Consolidates all orders at the identical price (or bucketed price tick) into
-   * a single distinct row with summed volume and order count, preventing visual clutter.
-   */
   const aggregateSide = (
     entries: [string, string, string][],
     isAsk: boolean
@@ -218,10 +216,8 @@ export const OrderBookView: React.FC<Props> = ({
 
         let bucketP: bigint;
         if (stepUnits <= 1n) {
-          // Exact price level deduplication
           bucketP = rawP;
         } else {
-          // Price-level aggregation bucket
           bucketP = isAsk
             ? ((rawP + stepUnits - 1n) / stepUnits) * stepUnits
             : (rawP / stepUnits) * stepUnits;
@@ -247,13 +243,10 @@ export const OrderBookView: React.FC<Props> = ({
       }
     }
 
-    // Sort order:
-    // Asks: ASCENDING (lowest ask closest to mid spread)
-    // Bids: DESCENDING (highest bid closest to mid spread)
     const sortedBuckets = Array.from(bucketMap.entries()).sort((a, b) => {
       const pA = safeBigInt(a[0]);
       const pB = safeBigInt(b[0]);
-      return isAsk ? (pA < pB ? -1 : pA > pB ? 1 : 0) : (pA > pB ? -1 : pA < pB ? 1 : 0);
+      return isAsk ? (pA < pB ? -1 : pA > pB ? 1 : 0) : pA > pB ? -1 : pA < pB ? 1 : 0;
     });
 
     let runningCum = 0n;
@@ -272,10 +265,8 @@ export const OrderBookView: React.FC<Props> = ({
   const aggregatedAsks = useMemo(() => aggregateSide(depth.asks, true), [depth.asks, stepUnits]);
   const aggregatedBids = useMemo(() => aggregateSide(depth.bids, false), [depth.bids, stepUnits]);
 
-  // Determine visible limits based on view mode
   const rawDisplayAsks = useMemo(() => {
     const limit = viewMode === 'ASKS' ? 100 : 50;
-    // Asks reversed so highest price is at top, lowest ask is nearest to spread
     return aggregatedAsks.slice(0, limit).reverse();
   }, [aggregatedAsks, viewMode]);
 
@@ -284,11 +275,9 @@ export const OrderBookView: React.FC<Props> = ({
     return aggregatedBids.slice(0, limit);
   }, [aggregatedBids, viewMode]);
 
-  // Calculate maximum single-level volume for Heatmap Density and cumulative maxVolume for depth bars
   const { maxVolume, maxSingleLevelVolume, topResistanceWall, topSupportWall } = useMemo(() => {
     let maxCum = 0n;
     let maxSingle = 0n;
-
     let topAsk: { price: string; qty: bigint } | null = null;
     let topBid: { price: string; qty: bigint } | null = null;
 
@@ -297,9 +286,7 @@ export const OrderBookView: React.FC<Props> = ({
       const c = safeBigInt(a.cumQty);
       if (c > maxCum) maxCum = c;
       if (q > maxSingle) maxSingle = q;
-      if (!topAsk || q > topAsk.qty) {
-        topAsk = { price: a.price, qty: q };
-      }
+      if (!topAsk || q > topAsk.qty) topAsk = { price: a.price, qty: q };
     }
 
     for (const b of rawDisplayBids) {
@@ -307,9 +294,7 @@ export const OrderBookView: React.FC<Props> = ({
       const c = safeBigInt(b.cumQty);
       if (c > maxCum) maxCum = c;
       if (q > maxSingle) maxSingle = q;
-      if (!topBid || q > topBid.qty) {
-        topBid = { price: b.price, qty: q };
-      }
+      if (!topBid || q > topBid.qty) topBid = { price: b.price, qty: q };
     }
 
     return {
@@ -320,44 +305,32 @@ export const OrderBookView: React.FC<Props> = ({
     };
   }, [rawDisplayAsks, rawDisplayBids]);
 
-  // Enrich display rows with Heatmap metrics (density percentage, wall flags)
   const displayAsks = useMemo<AggregatedLevel[]>(() => {
     return rawDisplayAsks.map(row => {
       const q = safeBigInt(row.qty);
-      const density = maxSingleLevelVolume > 0n
-        ? Math.min(100, Math.round(Number((q * 100n) / maxSingleLevelVolume)))
-        : 0;
+      const density =
+        maxSingleLevelVolume > 0n
+          ? Math.min(100, Math.round(Number((q * 100n) / maxSingleLevelVolume)))
+          : 0;
       const isTop = topResistanceWall !== null && row.price === topResistanceWall.price;
       const isWall = density >= 70 || isTop;
-
-      return {
-        ...row,
-        densityPercent: density,
-        isWall,
-        isTopWall: isTop,
-      };
+      return { ...row, densityPercent: density, isWall, isTopWall: isTop };
     });
   }, [rawDisplayAsks, maxSingleLevelVolume, topResistanceWall]);
 
   const displayBids = useMemo<AggregatedLevel[]>(() => {
     return rawDisplayBids.map(row => {
       const q = safeBigInt(row.qty);
-      const density = maxSingleLevelVolume > 0n
-        ? Math.min(100, Math.round(Number((q * 100n) / maxSingleLevelVolume)))
-        : 0;
+      const density =
+        maxSingleLevelVolume > 0n
+          ? Math.min(100, Math.round(Number((q * 100n) / maxSingleLevelVolume)))
+          : 0;
       const isTop = topSupportWall !== null && row.price === topSupportWall.price;
       const isWall = density >= 70 || isTop;
-
-      return {
-        ...row,
-        densityPercent: density,
-        isWall,
-        isTopWall: isTop,
-      };
+      return { ...row, densityPercent: density, isWall, isTopWall: isTop };
     });
   }, [rawDisplayBids, maxSingleLevelVolume, topSupportWall]);
 
-  // Initial scroll position for asks container in SPLIT mode
   useEffect(() => {
     if (viewMode === 'SPLIT' && asksContainerRef.current) {
       asksContainerRef.current.scrollTop = asksContainerRef.current.scrollHeight;
@@ -372,7 +345,10 @@ export const OrderBookView: React.FC<Props> = ({
     }
   }, [depth.spread, pair.quoteCurrency, pair.quoteDecimals]);
 
-  const getBucketUserOrderSummary = (bucketPrice: string, isAsk: boolean): UserOrderSummary | null => {
+  const getBucketUserOrderSummary = (
+    bucketPrice: string,
+    isAsk: boolean
+  ): UserOrderSummary | null => {
     if (!myOrdersByPrice || myOrdersByPrice.size === 0) return null;
     if (stepUnits <= 1n) {
       return myOrdersByPrice.get(bucketPrice) || null;
@@ -402,12 +378,10 @@ export const OrderBookView: React.FC<Props> = ({
     }
   };
 
-  /**
-   * Render Individual Ask (Sell) Row with Visual Heatmap Overlay & Price Aggregation details
-   */
   const renderAskRow = (row: AggregatedLevel, idx: number) => {
     const { price, qty, cumQty, orderCount, densityPercent, isWall, isTopWall } = row;
-    const depthPercent = maxVolume > 0n ? Math.min(100, Number((safeBigInt(cumQty) * 100n) / maxVolume)) : 0;
+    const depthPercent =
+      maxVolume > 0n ? Math.min(100, Number((safeBigInt(cumQty) * 100n) / maxVolume)) : 0;
     const userOrderSummary = getBucketUserOrderSummary(price, true);
     const isMyOrder = Boolean(userOrderSummary);
 
@@ -416,106 +390,76 @@ export const OrderBookView: React.FC<Props> = ({
         key={`ask-${price}-${idx}`}
         type="button"
         onClick={() => onSelectPrice(price)}
-        className={`relative grid grid-cols-3 px-3.5 py-0.5 text-xs font-mono tabular-nums text-right hover:bg-[#EB3458]/15 transition-all w-full group ${
-          isMyOrder ? 'bg-[#EB3458]/10 border-l-2 border-[#EB3458]' : ''
+        className={`relative grid grid-cols-3 px-3 py-0.5 text-xs font-mono tabular-nums text-right hover:bg-[#EA5B65]/12 transition-colors w-full cursor-pointer ${
+          isMyOrder ? 'bg-[#EA5B65]/10 border-l-2 border-[#EA5B65]' : ''
         } ${
           showHeatmap && isTopWall
-            ? 'border-r-2 border-amber-400 bg-amber-500/[0.04]'
+            ? 'border-r-2 border-[#D6A85C] bg-[#2C2415]/30'
             : showHeatmap && isWall
-            ? 'border-r border-[#EB3458]/70'
+            ? 'border-r border-[#EA5B65]/60'
             : ''
         }`}
       >
-        {/* Layer 1: Cumulative Depth Bar */}
         <div
-          className="absolute right-0 top-0 bottom-0 bg-[#EB3458]/10 pointer-events-none transition-all duration-150"
+          className="absolute right-0 top-0 bottom-0 bg-[#EA5B65]/10 pointer-events-none"
           style={{ width: `${depthPercent}%` }}
         />
 
-        {/* Layer 2: Visual Liquidity Density Heatmap Overlay */}
         {showHeatmap && (
           <div
-            className={`absolute right-0 top-0 bottom-0 pointer-events-none transition-all duration-200 ${
+            className={`absolute right-0 top-0 bottom-0 pointer-events-none ${
               isTopWall
-                ? 'bg-gradient-to-l from-amber-400/40 via-[#EB3458]/35 to-transparent shadow-[inset_0_0_8px_rgba(251,191,36,0.3)]'
+                ? 'bg-gradient-to-l from-[#D6A85C]/30 via-[#EA5B65]/25 to-transparent'
                 : densityPercent >= 70
-                ? 'bg-gradient-to-l from-[#EB3458]/35 via-[#EB3458]/20 to-transparent'
+                ? 'bg-gradient-to-l from-[#EA5B65]/25 via-[#EA5B65]/12 to-transparent'
                 : densityPercent >= 40
-                ? 'bg-gradient-to-l from-[#EB3458]/20 via-[#EB3458]/10 to-transparent'
-                : 'bg-gradient-to-l from-[#EB3458]/8 to-transparent'
+                ? 'bg-gradient-to-l from-[#EA5B65]/15 to-transparent'
+                : 'bg-gradient-to-l from-[#EA5B65]/6 to-transparent'
             }`}
             style={{ width: `${densityPercent}%` }}
           />
         )}
 
-        {/* Col 1: Price + Support/Resistance Tags */}
         <div className="flex items-center gap-1.5 text-left relative z-10 overflow-hidden">
-          <span className="font-semibold text-[#EB3458] truncate">
+          <span className="font-semibold text-[#EA5B65] truncate">
             {formatQuotePrice(price, pair.quoteCurrency, pair.quoteDecimals)}
           </span>
-
-          {/* User's own orders */}
           {isMyOrder && (
-            <span className="text-[9px] px-1 py-0.2 rounded bg-[#EB3458] text-white font-sans font-bold shrink-0">
+            <span className="text-[9px] px-1 rounded-[3px] bg-[#EA5B65] text-[#090D12] font-sans font-bold shrink-0">
               You
             </span>
           )}
-
-          {/* Heatmap: Key Resistance Wall Indicator */}
           {showHeatmap && isTopWall && (
-            <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-sans font-bold flex items-center gap-0.5 tracking-tight shrink-0 shadow-xs">
-              <Flame className="w-2.5 h-2.5 text-amber-400 fill-amber-400" />
+            <span className="text-[9px] px-1 rounded-[3px] bg-[#2C2415] text-[#D6A85C] border border-[#D6A85C]/40 font-sans font-semibold flex items-center gap-0.5 shrink-0">
+              <Flame className="w-2.5 h-2.5" />
               <span>WALL</span>
-            </span>
-          )}
-          {showHeatmap && isWall && !isTopWall && (
-            <span className="text-[8px] px-0.8 py-0.1 rounded bg-[#EB3458]/25 text-[#EB3458] border border-[#EB3458]/40 font-sans font-semibold shrink-0">
-              RESIST
             </span>
           )}
         </div>
 
-        {/* Col 2: Size + Aggregated Order Count + Heatmap Density */}
-        <div className="relative z-10 text-[#F5F5F7] flex items-center justify-end gap-1">
+        <div className="relative z-10 text-[#E4EBEF] flex items-center justify-end gap-1">
           <span>{formatCrypto(qty, pair.baseDecimals)}</span>
-          
-          {/* Price-Level Aggregation badge if multiple orders exist at this level */}
           {orderCount > 1 && (
             <span
-              className="text-[9px] text-[#969BA8] bg-[#1E222D] px-1 py-0.2 rounded border border-[#292C38] font-sans font-medium"
-              title={`${orderCount} orders aggregated at this price level`}
+              className="text-[9px] text-[#A1AFB8] bg-[#17212B] px-1 rounded border border-[#2B3944] font-sans"
+              title={`${orderCount} orders aggregated`}
             >
               {orderCount}x
             </span>
           )}
-
-          {/* Heatmap Density percentage badge on hover or high density */}
-          {showHeatmap && densityPercent >= 50 && (
-            <span
-              className={`text-[9px] font-mono font-medium ${
-                isTopWall ? 'text-amber-400' : 'text-[#EB3458]'
-              }`}
-              title={`Liquidity Density: ${densityPercent}% of max visible level`}
-            >
-              {densityPercent}%
-            </span>
-          )}
         </div>
 
-        {/* Col 3: Cumulative Total */}
-        <span className="text-[#686D7A] relative z-10 text-right">
+        <span className="text-[#71818B] relative z-10 text-right">
           {formatCrypto(cumQty, pair.baseDecimals)}
         </span>
       </button>
     );
   };
 
-  /**
-   * Render Individual Bid (Buy) Row with Visual Heatmap Overlay & Price Aggregation details
-   */
   const renderBidRow = (row: AggregatedLevel, idx: number) => {
     const { price, qty, cumQty, orderCount, densityPercent, isWall, isTopWall } = row;
-    const depthPercent = maxVolume > 0n ? Math.min(100, Number((safeBigInt(cumQty) * 100n) / maxVolume)) : 0;
+    const depthPercent =
+      maxVolume > 0n ? Math.min(100, Number((safeBigInt(cumQty) * 100n) / maxVolume)) : 0;
     const userOrderSummary = getBucketUserOrderSummary(price, false);
     const isMyOrder = Boolean(userOrderSummary);
 
@@ -524,300 +468,251 @@ export const OrderBookView: React.FC<Props> = ({
         key={`bid-${price}-${idx}`}
         type="button"
         onClick={() => onSelectPrice(price)}
-        className={`relative grid grid-cols-3 px-3.5 py-0.5 text-xs font-mono tabular-nums text-right hover:bg-[#00C087]/15 transition-all w-full group ${
-          isMyOrder ? 'bg-[#00C087]/10 border-l-2 border-[#00C087]' : ''
+        className={`relative grid grid-cols-3 px-3 py-0.5 text-xs font-mono tabular-nums text-right hover:bg-[#16A879]/12 transition-colors w-full cursor-pointer ${
+          isMyOrder ? 'bg-[#16A879]/10 border-l-2 border-[#16A879]' : ''
         } ${
           showHeatmap && isTopWall
-            ? 'border-r-2 border-amber-400 bg-amber-500/[0.04]'
+            ? 'border-r-2 border-[#D6A85C] bg-[#2C2415]/30'
             : showHeatmap && isWall
-            ? 'border-r border-[#00C087]/70'
+            ? 'border-r border-[#16A879]/60'
             : ''
         }`}
       >
-        {/* Layer 1: Cumulative Depth Bar */}
         <div
-          className="absolute right-0 top-0 bottom-0 bg-[#00C087]/10 pointer-events-none transition-all duration-150"
+          className="absolute right-0 top-0 bottom-0 bg-[#16A879]/10 pointer-events-none"
           style={{ width: `${depthPercent}%` }}
         />
 
-        {/* Layer 2: Visual Liquidity Density Heatmap Overlay */}
         {showHeatmap && (
           <div
-            className={`absolute right-0 top-0 bottom-0 pointer-events-none transition-all duration-200 ${
+            className={`absolute right-0 top-0 bottom-0 pointer-events-none ${
               isTopWall
-                ? 'bg-gradient-to-l from-amber-400/40 via-[#00C087]/35 to-transparent shadow-[inset_0_0_8px_rgba(251,191,36,0.3)]'
+                ? 'bg-gradient-to-l from-[#D6A85C]/30 via-[#16A879]/25 to-transparent'
                 : densityPercent >= 70
-                ? 'bg-gradient-to-l from-[#00C087]/35 via-[#00C087]/20 to-transparent'
+                ? 'bg-gradient-to-l from-[#16A879]/25 via-[#16A879]/12 to-transparent'
                 : densityPercent >= 40
-                ? 'bg-gradient-to-l from-[#00C087]/20 via-[#00C087]/10 to-transparent'
-                : 'bg-gradient-to-l from-[#00C087]/8 to-transparent'
+                ? 'bg-gradient-to-l from-[#16A879]/15 to-transparent'
+                : 'bg-gradient-to-l from-[#16A879]/6 to-transparent'
             }`}
             style={{ width: `${densityPercent}%` }}
           />
         )}
 
-        {/* Col 1: Price + Support/Resistance Tags */}
         <div className="flex items-center gap-1.5 text-left relative z-10 overflow-hidden">
-          <span className="font-semibold text-[#00C087] truncate">
+          <span className="font-semibold text-[#16A879] truncate">
             {formatQuotePrice(price, pair.quoteCurrency, pair.quoteDecimals)}
           </span>
-
-          {/* User's own orders */}
           {isMyOrder && (
-            <span className="text-[9px] px-1 py-0.2 rounded bg-[#00C087] text-white font-sans font-bold shrink-0">
+            <span className="text-[9px] px-1 rounded-[3px] bg-[#16A879] text-[#090D12] font-sans font-bold shrink-0">
               You
             </span>
           )}
-
-          {/* Heatmap: Key Support Wall Indicator */}
           {showHeatmap && isTopWall && (
-            <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 font-sans font-bold flex items-center gap-0.5 tracking-tight shrink-0 shadow-xs">
-              <Flame className="w-2.5 h-2.5 text-amber-400 fill-amber-400" />
+            <span className="text-[9px] px-1 rounded-[3px] bg-[#2C2415] text-[#D6A85C] border border-[#D6A85C]/40 font-sans font-semibold flex items-center gap-0.5 shrink-0">
+              <Flame className="w-2.5 h-2.5" />
               <span>WALL</span>
-            </span>
-          )}
-          {showHeatmap && isWall && !isTopWall && (
-            <span className="text-[8px] px-0.8 py-0.1 rounded bg-[#00C087]/25 text-[#00C087] border border-[#00C087]/40 font-sans font-semibold shrink-0">
-              SUPPORT
             </span>
           )}
         </div>
 
-        {/* Col 2: Size + Aggregated Order Count + Heatmap Density */}
-        <div className="relative z-10 text-[#F5F5F7] flex items-center justify-end gap-1">
+        <div className="relative z-10 text-[#E4EBEF] flex items-center justify-end gap-1">
           <span>{formatCrypto(qty, pair.baseDecimals)}</span>
-
-          {/* Price-Level Aggregation badge if multiple orders exist at this level */}
           {orderCount > 1 && (
             <span
-              className="text-[9px] text-[#969BA8] bg-[#1E222D] px-1 py-0.2 rounded border border-[#292C38] font-sans font-medium"
-              title={`${orderCount} orders aggregated at this price level`}
+              className="text-[9px] text-[#A1AFB8] bg-[#17212B] px-1 rounded border border-[#2B3944] font-sans"
+              title={`${orderCount} orders aggregated`}
             >
               {orderCount}x
             </span>
           )}
-
-          {/* Heatmap Density percentage badge on hover or high density */}
-          {showHeatmap && densityPercent >= 50 && (
-            <span
-              className={`text-[9px] font-mono font-medium ${
-                isTopWall ? 'text-amber-400' : 'text-[#00C087]'
-              }`}
-              title={`Liquidity Density: ${densityPercent}% of max visible level`}
-            >
-              {densityPercent}%
-            </span>
-          )}
         </div>
 
-        {/* Col 3: Cumulative Total */}
-        <span className="text-[#686D7A] relative z-10 text-right">
+        <span className="text-[#71818B] relative z-10 text-right">
           {formatCrypto(cumQty, pair.baseDecimals)}
         </span>
       </button>
     );
   };
 
-  // Spread bar element with mid price and 24h change
   const renderSpreadBar = () => (
-    <div className="flex items-center justify-between px-3.5 py-1.5 bg-[#0E1016] border-y border-[#292C38] text-xs font-mono shrink-0">
+    <div className="flex items-center justify-between px-3 py-1.5 bg-[#111820] border-y border-[#202B34] text-xs font-mono tabular-nums shrink-0">
       <div className="flex items-center gap-2">
-        <span className="font-bold text-sm text-[#F5F5F7]">
+        <span className="font-semibold text-sm text-[#E4EBEF]">
           {formatQuotePrice(pair.lastPrice, pair.quoteCurrency, pair.quoteDecimals)}
         </span>
-        <span className={`text-[11px] font-bold ${(pair.priceChange24h || '').startsWith('+') || parseFloat(pair.priceChangePercent24h || pair.priceChange24h?.replace('+', '') || '0') >= 0 ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
-          {pair.priceChange24h?.endsWith('%') ? pair.priceChange24h : `${pair.priceChange24h || '0.00'}%`}
+        <span
+          className={`text-[11px] font-semibold ${
+            (pair.priceChange24h || '').startsWith('+') ||
+            parseFloat(pair.priceChangePercent24h || pair.priceChange24h?.replace('+', '') || '0') >= 0
+              ? 'text-[#16A879]'
+              : 'text-[#EA5B65]'
+          }`}
+        >
+          {pair.priceChange24h?.endsWith('%')
+            ? pair.priceChange24h
+            : `${pair.priceChange24h || '0.00'}%`}
         </span>
       </div>
-      <div className="flex items-center gap-2 text-[11px] text-[#686D7A]">
-        <span>Spread: <strong className="text-[#969BA8]">{spreadFormatted}</strong></span>
+      <div className="text-[11px] text-[#71818B]">
+        <span>
+          Spread: <strong className="text-[#A1AFB8]">{spreadFormatted}</strong>
+        </span>
       </div>
     </div>
   );
 
   return (
-    <div className="flex flex-col bg-[#15171F] border border-[#292C38] rounded-xl overflow-hidden h-full shadow-xl">
-      {/* Top Header with Mode Switcher, Heatmap Toggle, and Price Aggregation Precision */}
-      <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-[#292C38] bg-[#0E1016]">
+    <div className="flex flex-col bg-[#141C24] border border-[#202B34] rounded-[8px] overflow-hidden h-full">
+      {/* Header Controls */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-[#202B34] bg-[#111820]">
         <div className="flex items-center gap-2">
-          <h3 className="text-xs font-bold text-[#F5F5F7]">Order Book</h3>
+          <h3 className="text-xs font-semibold text-[#E4EBEF]">Order Book</h3>
 
-          {/* View Mode Switcher (Split / Bids / Asks / D3 Depth / Hybrid) */}
-          <div className="flex items-center bg-[#15171F] p-0.5 rounded border border-[#292C38] gap-0.5">
-            {/* Split Mode */}
+          <div className="flex items-center bg-[#141C24] p-0.5 rounded-[6px] border border-[#202B34] gap-0.5">
             <button
               type="button"
-              title="Tampilan Penuh (Bids & Asks)"
+              title="Bids & Asks"
               onClick={() => setViewMode('SPLIT')}
-              className={`p-1.5 rounded transition-all ${
-                viewMode === 'SPLIT'
-                  ? 'bg-[#292C38] text-white shadow-xs'
-                  : 'text-[#686D7A] hover:text-[#F5F5F7] hover:bg-[#1E222D]'
+              className={`p-1 rounded-[4px] cursor-pointer ${
+                viewMode === 'SPLIT' ? 'bg-[#1D2832] text-[#E4EBEF]' : 'text-[#71818B] hover:text-[#E4EBEF]'
               }`}
             >
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                <rect x="2" y="2" width="12" height="5" rx="1" fill="#EB3458" />
-                <rect x="2" y="9" width="12" height="5" rx="1" fill="#00C087" />
+                <rect x="2" y="2" width="12" height="5" rx="1" fill="#EA5B65" />
+                <rect x="2" y="9" width="12" height="5" rx="1" fill="#16A879" />
               </svg>
             </button>
 
-            {/* D3 Visual Depth Curve Mode */}
             <button
               type="button"
-              title="Visualisasi Kedalaman Likuiditas Pasar (D3.js Depth Curve)"
+              title="D3 Depth Curve"
               onClick={() => setViewMode('DEPTH_D3')}
-              className={`p-1.5 rounded transition-all flex items-center gap-1 ${
-                viewMode === 'DEPTH_D3'
-                  ? 'bg-[#292C38] text-[#00C087] shadow-xs'
-                  : 'text-[#686D7A] hover:text-[#00C087] hover:bg-[#1E222D]'
+              className={`p-1 rounded-[4px] cursor-pointer ${
+                viewMode === 'DEPTH_D3' ? 'bg-[#1D2832] text-[#16A879]' : 'text-[#71818B] hover:text-[#16A879]'
               }`}
             >
               <AreaChartIcon className="w-3.5 h-3.5" />
             </button>
 
-            {/* Hybrid Mode (D3 Curve + Ladder) */}
             <button
               type="button"
-              title="Tampilan Hybrid (D3 Curve + Tabel Order Book)"
+              title="Hybrid View"
               onClick={() => setViewMode('HYBRID')}
-              className={`p-1.5 rounded transition-all ${
-                viewMode === 'HYBRID'
-                  ? 'bg-[#292C38] text-[#5B9DFF] shadow-xs'
-                  : 'text-[#686D7A] hover:text-[#5B9DFF] hover:bg-[#1E222D]'
+              className={`p-1 rounded-[4px] cursor-pointer ${
+                viewMode === 'HYBRID' ? 'bg-[#1D2832] text-[#8DA5B1]' : 'text-[#71818B] hover:text-[#8DA5B1]'
               }`}
             >
               <Layers className="w-3.5 h-3.5" />
             </button>
 
-            {/* Bids Only */}
             <button
               type="button"
-              title="Hanya Order Beli (Bids Only)"
+              title="Bids Only"
               onClick={() => setViewMode('BIDS')}
-              className={`p-1.5 rounded transition-all ${
-                viewMode === 'BIDS'
-                  ? 'bg-[#292C38] text-[#00C087] shadow-xs'
-                  : 'text-[#686D7A] hover:text-[#00C087] hover:bg-[#1E222D]'
+              className={`p-1 rounded-[4px] cursor-pointer ${
+                viewMode === 'BIDS' ? 'bg-[#1D2832]' : 'opacity-60 hover:opacity-100'
               }`}
             >
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                <rect x="2" y="2" width="12" height="3" rx="0.5" fill="#00C087" />
-                <rect x="2" y="6.5" width="12" height="3" rx="0.5" fill="#00C087" />
-                <rect x="2" y="11" width="12" height="3" rx="0.5" fill="#00C087" />
+                <rect x="2" y="2" width="12" height="3" rx="0.5" fill="#16A879" />
+                <rect x="2" y="6.5" width="12" height="3" rx="0.5" fill="#16A879" />
+                <rect x="2" y="11" width="12" height="3" rx="0.5" fill="#16A879" />
               </svg>
             </button>
 
-            {/* Asks Only */}
             <button
               type="button"
-              title="Hanya Order Jual (Asks Only)"
+              title="Asks Only"
               onClick={() => setViewMode('ASKS')}
-              className={`p-1.5 rounded transition-all ${
-                viewMode === 'ASKS'
-                  ? 'bg-[#292C38] text-[#EB3458] shadow-xs'
-                  : 'text-[#686D7A] hover:text-[#EB3458] hover:bg-[#1E222D]'
+              className={`p-1 rounded-[4px] cursor-pointer ${
+                viewMode === 'ASKS' ? 'bg-[#1D2832]' : 'opacity-60 hover:opacity-100'
               }`}
             >
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-                <rect x="2" y="2" width="12" height="3" rx="0.5" fill="#EB3458" />
-                <rect x="2" y="6.5" width="12" height="3" rx="0.5" fill="#EB3458" />
-                <rect x="2" y="11" width="12" height="3" rx="0.5" fill="#EB3458" />
+                <rect x="2" y="2" width="12" height="3" rx="0.5" fill="#EA5B65" />
+                <rect x="2" y="6.5" width="12" height="3" rx="0.5" fill="#EA5B65" />
+                <rect x="2" y="11" width="12" height="3" rx="0.5" fill="#EA5B65" />
               </svg>
             </button>
           </div>
         </div>
 
-        {/* Right Controls: Heatmap Overlay Toggle & Price Aggregation Grouping */}
-        <div className="flex items-center gap-2">
-          {/* Visual Heatmap Overlay Toggle */}
+        <div className="flex items-center gap-1.5">
           <button
             type="button"
             onClick={toggleHeatmap}
-            title={showHeatmap ? 'Nonaktifkan Heatmap Likuiditas' : 'Aktifkan Heatmap Likuiditas & Area Support/Resistance'}
-            className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] font-sans font-medium transition-all border ${
+            className={`flex items-center gap-1 px-2 py-1 rounded-[5px] text-[10px] font-medium border transition-colors cursor-pointer ${
               showHeatmap
-                ? 'bg-amber-500/15 text-amber-300 border-amber-500/40 shadow-xs'
-                : 'bg-[#15171F] text-[#686D7A] border-[#292C38] hover:text-[#F5F5F7] hover:border-[#3E4252]'
+                ? 'bg-[#2C2415] text-[#D6A85C] border-[#D6A85C]/40'
+                : 'bg-[#141C24] text-[#71818B] border-[#202B34] hover:text-[#E4EBEF]'
             }`}
           >
-            <Flame className={`w-3.5 h-3.5 ${showHeatmap ? 'text-amber-400 fill-amber-400' : 'text-[#686D7A]'}`} />
+            <Flame className="w-3 h-3" />
             <span>Heatmap</span>
           </button>
 
-          {/* Price-Level Aggregation Step Selector */}
           {viewMode !== 'DEPTH_D3' && (
-            <div className="flex items-center gap-1">
-              <span className="text-[10px] text-[#686D7A] font-sans hidden sm:inline">Agg:</span>
-              <div className="flex items-center bg-[#15171F] p-0.5 rounded border border-[#292C38] text-[10px] font-mono">
-                {aggregationOptions.map(opt => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => setPrecision(opt.value)}
-                    title={`Agregasi harga: ${opt.label}`}
-                    className={`px-1.5 py-0.5 rounded font-semibold transition-colors ${
-                      precision === opt.value
-                        ? 'bg-[#EB3458] text-white shadow-xs'
-                        : 'text-[#686D7A] hover:text-[#F5F5F7]'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
+            <div className="flex items-center bg-[#141C24] p-0.5 rounded-[5px] border border-[#202B34] text-[10px] font-mono">
+              {aggregationOptions.map(opt => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setPrecision(opt.value)}
+                  className={`px-1.5 py-0.5 rounded-[4px] font-semibold transition-colors cursor-pointer ${
+                    precision === opt.value
+                      ? 'bg-[#8DA5B1] text-[#090D12]'
+                      : 'text-[#71818B] hover:text-[#E4EBEF]'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
           )}
         </div>
       </div>
 
-      {/* Market Maker Tactical Summary Strip: Key Resistance Wall & Key Support Wall */}
+      {/* Tactical Wall Strip */}
       {showHeatmap && (topResistanceWall || topSupportWall) && viewMode !== 'DEPTH_D3' && (
-        <div className="grid grid-cols-2 px-3 py-1 bg-[#0A0C10] border-b border-[#292C38]/80 text-[10px] font-mono">
-          {/* Key Resistance Wall */}
+        <div className="grid grid-cols-2 px-3 py-1 bg-[#090D12] border-b border-[#202B34] text-[10px] font-mono tabular-nums">
           <div className="flex items-center gap-1.5 overflow-hidden">
-            <span className="text-[#686D7A] font-sans shrink-0 flex items-center gap-0.5">
-              <TrendingDown className="w-3 h-3 text-[#EB3458]" />
-              <span>Resist:</span>
-            </span>
+            <TrendingDown className="w-3 h-3 text-[#EA5B65] shrink-0" />
             {topResistanceWall ? (
               <button
                 type="button"
                 onClick={() => onSelectPrice(topResistanceWall.price)}
-                className="flex items-center gap-1 text-[#EB3458] hover:underline font-semibold truncate"
-                title={`Klik untuk mengisi harga Resistance Wall: ${formatQuotePrice(topResistanceWall.price, pair.quoteCurrency, pair.quoteDecimals)}`}
+                className="flex items-center gap-1 text-[#EA5B65] hover:underline font-semibold truncate cursor-pointer"
               >
                 <span>{formatQuotePrice(topResistanceWall.price, pair.quoteCurrency, pair.quoteDecimals)}</span>
-                <span className="text-[#969BA8] font-normal">({formatCrypto(topResistanceWall.qty.toString(), pair.baseDecimals)})</span>
+                <span className="text-[#71818B] font-normal">
+                  ({formatCrypto(topResistanceWall.qty.toString(), pair.baseDecimals)})
+                </span>
               </button>
             ) : (
-              <span className="text-[#686D7A]">-</span>
+              <span className="text-[#53616A]">-</span>
             )}
           </div>
 
-          {/* Key Support Wall */}
           <div className="flex items-center justify-end gap-1.5 overflow-hidden">
-            <span className="text-[#686D7A] font-sans shrink-0 flex items-center gap-0.5">
-              <TrendingUp className="w-3 h-3 text-[#00C087]" />
-              <span>Support:</span>
-            </span>
+            <TrendingUp className="w-3 h-3 text-[#16A879] shrink-0" />
             {topSupportWall ? (
               <button
                 type="button"
                 onClick={() => onSelectPrice(topSupportWall.price)}
-                className="flex items-center gap-1 text-[#00C087] hover:underline font-semibold truncate"
-                title={`Klik untuk mengisi harga Support Wall: ${formatQuotePrice(topSupportWall.price, pair.quoteCurrency, pair.quoteDecimals)}`}
+                className="flex items-center gap-1 text-[#16A879] hover:underline font-semibold truncate cursor-pointer"
               >
                 <span>{formatQuotePrice(topSupportWall.price, pair.quoteCurrency, pair.quoteDecimals)}</span>
-                <span className="text-[#969BA8] font-normal">({formatCrypto(topSupportWall.qty.toString(), pair.baseDecimals)})</span>
+                <span className="text-[#71818B] font-normal">
+                  ({formatCrypto(topSupportWall.qty.toString(), pair.baseDecimals)})
+                </span>
               </button>
             ) : (
-              <span className="text-[#686D7A]">-</span>
+              <span className="text-[#53616A]">-</span>
             )}
           </div>
         </div>
       )}
 
-      {/* VIEW MODE: FULL D3 DEPTH CHART */}
       {viewMode === 'DEPTH_D3' && (
         <div className="flex-1 p-2">
           <D3DepthChart
@@ -830,10 +725,9 @@ export const OrderBookView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* VIEW MODE: HYBRID (D3 Curve on Top + Condensed Split Ladder Below) */}
       {viewMode === 'HYBRID' && (
         <div className="flex flex-col flex-1 overflow-hidden">
-          <div className="p-2 border-b border-[#292C38]">
+          <div className="p-2 border-b border-[#202B34]">
             <D3DepthChart
               pair={pair}
               depth={depth}
@@ -843,28 +737,21 @@ export const OrderBookView: React.FC<Props> = ({
               compact
             />
           </div>
-
-          <div className="grid grid-cols-3 px-3.5 py-1 text-[10px] text-[#686D7A] font-medium border-b border-[#292C38]/60 bg-[#0E1016]/50">
+          <div className="grid grid-cols-3 px-3 py-1 text-[10px] text-[#71818B] font-medium border-b border-[#202B34] bg-[#111820]/60">
             <span className="text-left">Price ({pair.quoteCurrency})</span>
             <span className="text-right">Size ({pair.baseCurrency})</span>
             <span className="text-right">Total</span>
           </div>
-
-          {/* Asks (Sell Orders) */}
           <div
             ref={asksContainerRef}
-            className="flex-1 overflow-y-auto max-h-[140px] py-1 space-y-px scroll-smooth"
+            className="flex-1 overflow-y-auto max-h-[140px] py-1 space-y-px"
             style={{ overscrollBehavior: 'contain' }}
           >
             {displayAsks.slice(-15).map((row, idx) => renderAskRow(row, idx))}
           </div>
-
-          {/* Spread Indicator */}
           {renderSpreadBar()}
-
-          {/* Bids (Buy Orders) */}
           <div
-            className="flex-1 overflow-y-auto max-h-[140px] py-1 space-y-px scroll-smooth"
+            className="flex-1 overflow-y-auto max-h-[140px] py-1 space-y-px"
             style={{ overscrollBehavior: 'contain' }}
           >
             {displayBids.slice(0, 15).map((row, idx) => renderBidRow(row, idx))}
@@ -872,45 +759,36 @@ export const OrderBookView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Table Column Titles (When in Split, Asks, or Bids modes) */}
       {viewMode !== 'DEPTH_D3' && viewMode !== 'HYBRID' && (
-        <div className="grid grid-cols-3 px-3.5 py-1.5 text-[11px] text-[#686D7A] font-medium border-b border-[#292C38]/60 bg-[#0E1016]/50">
+        <div className="grid grid-cols-3 px-3 py-1.5 text-[11px] text-[#71818B] font-medium border-b border-[#202B34] bg-[#111820]/60">
           <span className="text-left">Price ({pair.quoteCurrency})</span>
-          <span className="text-right">
-            Size ({pair.baseCurrency}) {precision !== 'exact' && <span className="text-[9px] text-amber-400 font-sans font-normal">(Agg)</span>}
-          </span>
+          <span className="text-right">Size ({pair.baseCurrency})</span>
           <span className="text-right">Total</span>
         </div>
       )}
 
-      {/* VIEW MODE: SPLIT (Both Asks & Bids) */}
       {viewMode === 'SPLIT' && (
         <>
-          {/* Asks (Sell Orders - Crimson Pink) with full scrollability to the top */}
           <div
             ref={asksContainerRef}
-            className="flex-1 overflow-y-auto max-h-[220px] py-1 space-y-px scroll-smooth"
+            className="flex-1 overflow-y-auto max-h-[220px] py-1 space-y-px"
             style={{ overscrollBehavior: 'contain' }}
           >
             {displayAsks.length === 0 && (
-              <div className="py-6 text-center text-[11px] text-[#686D7A] font-mono">
-                Buku ask kosong (Belum ada order jual)
+              <div className="py-6 text-center text-[11px] text-[#71818B] font-mono">
+                No open ask orders
               </div>
             )}
             {displayAsks.map((row, idx) => renderAskRow(row, idx))}
           </div>
-
-          {/* Middle Spread Indicator */}
           {renderSpreadBar()}
-
-          {/* Bids (Buy Orders - Green) */}
           <div
-            className="flex-1 overflow-y-auto max-h-[220px] py-1 space-y-px scroll-smooth"
+            className="flex-1 overflow-y-auto max-h-[220px] py-1 space-y-px"
             style={{ overscrollBehavior: 'contain' }}
           >
             {displayBids.length === 0 && (
-              <div className="py-6 text-center text-[11px] text-[#686D7A] font-mono">
-                Buku bid kosong (Belum ada order beli)
+              <div className="py-6 text-center text-[11px] text-[#71818B] font-mono">
+                No open bid orders
               </div>
             )}
             {displayBids.map((row, idx) => renderBidRow(row, idx))}
@@ -918,17 +796,16 @@ export const OrderBookView: React.FC<Props> = ({
         </>
       )}
 
-      {/* VIEW MODE: ASKS ONLY (Sell Side Full Height) */}
       {viewMode === 'ASKS' && (
         <div className="flex flex-col flex-1">
           <div
             ref={asksContainerRef}
-            className="flex-1 overflow-y-auto max-h-[440px] py-1 space-y-px scroll-smooth"
+            className="flex-1 overflow-y-auto max-h-[440px] py-1 space-y-px"
             style={{ overscrollBehavior: 'contain' }}
           >
             {displayAsks.length === 0 && (
-              <div className="py-12 text-center text-[11px] text-[#686D7A] font-mono">
-                Buku order jual (Asks) kosong
+              <div className="py-12 text-center text-[11px] text-[#71818B] font-mono">
+                No open ask orders
               </div>
             )}
             {displayAsks.map((row, idx) => renderAskRow(row, idx))}
@@ -937,17 +814,16 @@ export const OrderBookView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* VIEW MODE: BIDS ONLY (Buy Side Full Height) */}
       {viewMode === 'BIDS' && (
         <div className="flex flex-col flex-1">
           {renderSpreadBar()}
           <div
-            className="flex-1 overflow-y-auto max-h-[440px] py-1 space-y-px scroll-smooth"
+            className="flex-1 overflow-y-auto max-h-[440px] py-1 space-y-px"
             style={{ overscrollBehavior: 'contain' }}
           >
             {displayBids.length === 0 && (
-              <div className="py-12 text-center text-[11px] text-[#686D7A] font-mono">
-                Buku order beli (Bids) kosong
+              <div className="py-12 text-center text-[11px] text-[#71818B] font-mono">
+                No open bid orders
               </div>
             )}
             {displayBids.map((row, idx) => renderBidRow(row, idx))}
@@ -955,25 +831,12 @@ export const OrderBookView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Footer Info Strip */}
-      <div className="flex items-center justify-between px-3.5 py-1.5 bg-[#0A0C10] border-t border-[#292C38] text-[10px] text-[#686D7A] font-mono">
-        <div className="flex items-center gap-2">
-          <span>
-            {viewMode === 'DEPTH_D3' && `Visualisasi Kedalaman D3.js (${displayAsks.length} Asks, ${displayBids.length} Bids)`}
-            {viewMode === 'HYBRID' && `Hybrid D3 & Ladder (${displayAsks.length} Asks · ${displayBids.length} Bids)`}
-            {viewMode === 'SPLIT' && `${displayAsks.length} Asks · ${displayBids.length} Bids`}
-            {viewMode === 'ASKS' && `Menampilkan ${displayAsks.length} Order Jual (Asks)`}
-            {viewMode === 'BIDS' && `Menampilkan ${displayBids.length} Order Beli (Bids)`}
-          </span>
-          {showHeatmap && (
-            <span className="text-amber-400 font-sans font-medium flex items-center gap-0.5">
-              <Flame className="w-2.5 h-2.5 fill-amber-400" />
-              <span>Heatmap Active</span>
-            </span>
-          )}
-        </div>
-        <span className="text-[#969BA8]">
-          {precision === 'exact' ? 'Exact Level Aggregated' : `Aggregated (${precision})`}
+      <div className="flex items-center justify-between px-3 py-1.5 bg-[#090D12] border-t border-[#202B34] text-[10px] text-[#71818B] font-mono">
+        <span>
+          {displayAsks.length} Asks · {displayBids.length} Bids
+        </span>
+        <span className="text-[#A1AFB8]">
+          {precision === 'exact' ? 'Exact Precision' : `Grouped (${precision})`}
         </span>
       </div>
     </div>

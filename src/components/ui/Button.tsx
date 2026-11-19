@@ -1,9 +1,9 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * src/components/ui/Button.tsx
- * Reusable buttons adhering to Black & Crimson-Pink design specifications.
+ * Institutional matte mineral button variants for DIMONEX Obsidian Iridium.
  */
 
 import React from 'react';
@@ -26,29 +26,30 @@ export const Button: React.FC<ButtonProps> = ({
   disabled,
   ...props
 }) => {
-  const baseStyles = 'relative inline-flex items-center justify-center font-medium rounded-lg transition-all duration-150 select-none whitespace-nowrap active:scale-[0.98] disabled:opacity-45 disabled:pointer-events-none disabled:active:scale-100';
+  const baseStyles =
+    'relative inline-flex items-center justify-center font-medium rounded-[7px] transition-colors duration-150 select-none whitespace-nowrap disabled:opacity-45 disabled:pointer-events-none cursor-pointer';
 
   const sizeStyles = {
     sm: 'text-xs h-8 px-3 gap-1.5 min-w-[32px]',
-    md: 'text-xs sm:text-sm h-9 sm:h-10 px-4 gap-2 min-h-[40px]',
-    lg: 'text-sm font-semibold h-11 px-5 gap-2.5 min-h-[44px]',
+    md: 'text-xs sm:text-sm h-9 sm:h-10 px-4 gap-2',
+    lg: 'text-sm font-semibold h-11 px-5 gap-2.5',
   };
 
   const variantStyles = {
-    // Primary: Electric Magenta brand accent
-    primary: 'bg-[#FF087F] hover:bg-[#FF268F] text-white shadow-sm hover:shadow-[#FF087F]/25 hover:shadow-lg',
-    // Gradient: Magenta to Violet Obsidian accent
-    gradient: 'bg-gradient-to-r from-[#FF087F] to-[#D926FF] hover:brightness-110 text-white font-semibold shadow-lg shadow-[#FF087F]/25',
-    // Secondary: Dark elevated glass surface with subtle border
-    secondary: 'bg-[#171923] hover:bg-[#202330] text-[#F5F5F7] border border-white/10',
-    // Profit: Crisp Bullish Green (#16C784)
-    profit: 'bg-[#16C784] hover:bg-[#1CDA92] text-white font-semibold shadow-sm hover:shadow-[#16C784]/25 hover:shadow-lg',
-    // Danger: Bearish Red (#EA3943)
-    danger: 'bg-[#EA3943] hover:bg-[#F14D56] text-white font-semibold shadow-sm hover:shadow-[#EA3943]/25',
-    // Outline
-    outline: 'bg-transparent hover:bg-[#171923] text-[#F5F5F7] border border-white/10 hover:border-white/20',
-    // Ghost: Subtle highlight
-    ghost: 'bg-transparent hover:bg-[#171923] text-[#9298A6] hover:text-[#F5F5F7]',
+    primary:
+      'bg-[#8DA5B1] hover:bg-[#A5BAC4] text-[#090D12] font-semibold border border-[#C1D0D6]/20 shadow-xs',
+    gradient:
+      'bg-[#8DA5B1] hover:bg-[#A5BAC4] text-[#090D12] font-semibold border border-[#C1D0D6]/30 shadow-xs',
+    secondary:
+      'bg-[#1D2832] hover:bg-[#222F3A] text-[#E4EBEF] border border-[#2B3944] hover:border-[#40515D]',
+    profit:
+      'bg-[#16A879] hover:bg-[#20BC8B] text-[#090D12] font-semibold border border-[#20BC8B]/30 shadow-xs',
+    danger:
+      'bg-[#EA5B65] hover:bg-[#F16D76] text-[#090D12] font-semibold border border-[#F16D76]/30 shadow-xs',
+    outline:
+      'bg-transparent hover:bg-[#17212B] text-[#E4EBEF] border border-[#2B3944] hover:border-[#40515D]',
+    ghost:
+      'bg-transparent hover:bg-[#17212B] text-[#A1AFB8] hover:text-[#E4EBEF] border border-transparent',
   };
 
   return (

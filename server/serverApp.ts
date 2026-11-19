@@ -25,11 +25,14 @@ import { marketsRouter } from './routes/markets.js';
 import { riskRouter } from './routes/risk.js';
 import { botRouter } from './routes/bot.js';
 import { mmConsoleRouter } from './routes/mmConsole.js';
+import { futuresRouter } from './routes/futures.js';
 import { observabilityRouter } from './routes/observability.js';
 import { marketWsService } from './websocket/MarketDataWs.js';
 import { fxConversionService } from './services/external/FxConversionService.js';
 import { db } from './db/database.js';
 import { priceAggregatorService } from './services/external/PriceAggregatorService.js';
+import { priceThresholdService } from './services/PriceThresholdService.js';
+import { futuresEngine } from './services/FuturesEngine.js';
 
 export async function startServer() {
   const app = express();
@@ -69,6 +72,7 @@ export async function startServer() {
   app.use('/api/bot', botRouter);
   app.use('/api/mm', mmConsoleRouter);
   app.use('/api/bot/mm', mmConsoleRouter);
+  app.use('/api/futures', futuresRouter);
   app.use('/', observabilityRouter); // /metrics, /health, /api/ledger/verify-invariants
 
   // Explicit JSON 404 for any unhandled /api/* routes so they never fall through into SPA HTML
@@ -160,6 +164,10 @@ export async function startServer() {
         }
       }
     }, 1500);
+
+    // Start Price Threshold Alert Engine & Real Perpetual Futures Engine
+    priceThresholdService.start();
+    futuresEngine.start();
 
     // Background periodic live rate sync every 60 seconds
     setInterval(() => {

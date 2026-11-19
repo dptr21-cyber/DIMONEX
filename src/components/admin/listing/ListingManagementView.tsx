@@ -40,11 +40,14 @@ import {
   Sliders,
   Sparkles,
   ArrowUpDown,
-  Edit
+  Edit,
+  Hash
 } from 'lucide-react';
 import { Button } from '../../ui/Button.js';
 import { Input } from '../../ui/Input.js';
 import { Modal } from '../../ui/Modal.js';
+import { ConfirmationDialog } from '../../ui/ConfirmationDialog.js';
+import { StatusBadge } from '../../ui/StatusBadge.js';
 import { useToast } from '../../ui/Toast.js';
 import { formatQuotePrice, parseDecimalToUnits, formatUnitsToDecimal } from '../../../lib/formatters.js';
 
@@ -101,6 +104,12 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [reviewReason, setReviewReason] = useState('');
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    mode: 'SUSPEND' | 'RESUME' | null;
+    listingId: string;
+  }>({ isOpen: false, mode: null, listingId: '' });
+  const [isConfirmSubmitting, setIsConfirmSubmitting] = useState(false);
 
   // Operations state
   const [auditVerification, setAuditVerification] = useState<any>(null);
@@ -416,42 +425,47 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
   };
 
   // Halt Market
-  const handleSuspend = async (listingId: string) => {
-    const reason = prompt('Masukkan alasan penghentian trading sementara:', 'Pemeriksaan compliance darurat');
-    if (!reason) return;
-    try {
-      const res = await fetch(`/api/admin/listings/${listingId}/suspend`, {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ reason })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal menunda market');
-      showToast('warning', 'Market berhasil dihentikan sementara (HALTED)');
-      loadData();
-      if (onRefreshMarkets) onRefreshMarkets();
-    } catch (e: any) {
-      showToast('error', e.message);
-    }
+  const handleSuspend = (listingId: string) => {
+    setConfirmDialog({ isOpen: true, mode: 'SUSPEND', listingId });
   };
 
   // Resume Market
-  const handleResume = async (listingId: string) => {
-    const reason = prompt('Masukkan alasan pembukaan kembali trading:', 'Inspeksi selesai, parameter normal');
-    if (!reason) return;
+  const handleResume = (listingId: string) => {
+    setConfirmDialog({ isOpen: true, mode: 'RESUME', listingId });
+  };
+
+  const handleConfirmStatusChange = async (values: Record<string, string>) => {
+    const reason = (values.reason || '').trim();
+    if (!reason || !confirmDialog.mode || !confirmDialog.listingId) {
+      showToast('warning', 'Alasan wajib diisi');
+      return;
+    }
+    setIsConfirmSubmitting(true);
     try {
-      const res = await fetch(`/api/admin/listings/${listingId}/resume`, {
+      const endpoint = confirmDialog.mode === 'SUSPEND' ? 'suspend' : 'resume';
+      const res = await fetch(`/api/admin/listings/${confirmDialog.listingId}/${endpoint}`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ reason })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Gagal melanjutkan market');
-      showToast('success', 'Market kembali aktif diperdagangkan (ACTIVE)');
+      if (!res.ok) {
+        throw new Error(
+          data.error || (confirmDialog.mode === 'SUSPEND' ? 'Gagal menunda market' : 'Gagal melanjutkan market')
+        );
+      }
+      if (confirmDialog.mode === 'SUSPEND') {
+        showToast('warning', 'Market berhasil dihentikan sementara (HALTED)');
+      } else {
+        showToast('success', 'Market kembali aktif diperdagangkan (ACTIVE)');
+      }
+      setConfirmDialog({ isOpen: false, mode: null, listingId: '' });
       loadData();
       if (onRefreshMarkets) onRefreshMarkets();
     } catch (e: any) {
       showToast('error', e.message);
+    } finally {
+      setIsConfirmSubmitting(false);
     }
   };
 
@@ -592,22 +606,22 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
   const renderStatusBadge = (status: string) => {
     switch (status) {
       case 'DRAFT':
-        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#686D7A]/20 text-[#969BA8] border border-[#686D7A]/40 font-mono">DRAFT</span>;
+        return <StatusBadge tone="neutral">DRAFT</StatusBadge>;
       case 'PENDING_REVIEW':
-        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#F5B942]/15 text-[#F5B942] border border-[#F5B942]/40 font-mono flex items-center gap-1 w-fit"><Clock className="w-3 h-3" /> PENDING REVIEW</span>;
+        return <StatusBadge tone="warning">PENDING REVIEW</StatusBadge>;
       case 'APPROVED':
-        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#5B9DFF]/15 text-[#5B9DFF] border border-[#5B9DFF]/40 font-mono flex items-center gap-1 w-fit"><CheckCircle2 className="w-3 h-3" /> APPROVED</span>;
+        return <StatusBadge tone="info">APPROVED</StatusBadge>;
       case 'SCHEDULED':
-        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#F5B942]/15 text-[#F5B942] border border-[#F5B942]/40 font-mono flex items-center gap-1 w-fit"><Calendar className="w-3 h-3" /> SCHEDULED</span>;
+        return <StatusBadge tone="warning">SCHEDULED</StatusBadge>;
       case 'ACTIVE':
-        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#00C087]/15 text-[#00C087] border border-[#00C087]/40 font-mono flex items-center gap-1 w-fit"><Check className="w-3 h-3" /> ACTIVE</span>;
+        return <StatusBadge tone="success" dot>ACTIVE</StatusBadge>;
       case 'SUSPENDED':
       case 'HALTED':
-        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#EB3458]/15 text-[#EB3458] border border-[#EB3458]/40 font-mono flex items-center gap-1 w-fit"><Pause className="w-3 h-3" /> SUSPENDED</span>;
+        return <StatusBadge tone="danger">SUSPENDED</StatusBadge>;
       case 'REJECTED':
-        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#EB3458]/15 text-[#EB3458] border border-[#EB3458]/40 font-mono flex items-center gap-1 w-fit"><XCircle className="w-3 h-3" /> REJECTED</span>;
+        return <StatusBadge tone="danger">REJECTED</StatusBadge>;
       default:
-        return <span className="px-2 py-0.5 rounded text-[10px] font-mono text-[#969BA8]">{status}</span>;
+        return <StatusBadge tone="neutral">{status}</StatusBadge>;
     }
   };
 
@@ -623,32 +637,32 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
   return (
     <div className="space-y-6">
       {/* 1. Header & Cryptographic Integrity Banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-5 rounded-xl bg-[#15171F] border border-[#292C38]">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-5 rounded-[10px] bg-[#141C24] border border-[#202B34]">
         <div>
-          <div className="flex items-center gap-2 mb-1">
-            <h2 className="text-lg font-bold text-[#F5F5F7]">Initial Token Listing Management</h2>
-            <span className="text-[10px] px-2 py-0.5 rounded bg-[#EB3458]/15 text-[#EB3458] border border-[#EB3458]/30 font-mono font-bold">
-              MAKER-CHECKER ENFORCED
-            </span>
+          <div className="flex flex-wrap items-center gap-2 mb-1">
+            <h2 className="text-lg font-semibold text-[#E4EBEF]">Initial Token Listing Management</h2>
+            <StatusBadge tone="brand">MAKER-CHECKER ENFORCED</StatusBadge>
           </div>
-          <p className="text-xs text-[#969BA8]">
+          <p className="text-xs text-[#A1AFB8]">
             Kelola lifecycle listing token baru dengan verifikasi multi-admin, integritas zero-float math, dan outbox activation idempoten.
           </p>
         </div>
 
         {/* Cryptographic Hash Chain Badge */}
-        <div className="flex items-center gap-3">
-          <div className={`p-2.5 rounded-lg border flex items-center gap-2 ${
-            auditVerification?.isValid 
-              ? 'bg-[#00C087]/10 border-[#00C087]/30 text-[#00C087]'
-              : 'bg-[#EB3458]/10 border-[#EB3458]/30 text-[#EB3458]'
-          }`}>
+        <div className="flex flex-wrap items-center gap-3">
+          <div
+            className={`p-2.5 rounded-[7px] border flex items-center gap-2 ${
+              auditVerification?.isValid
+                ? 'bg-[#12392F]/50 border-[#16A879]/40 text-[#35B887]'
+                : 'bg-[#401F27]/50 border-[#EA5B65]/40 text-[#EA5B65]'
+            }`}
+          >
             {auditVerification?.isValid ? <ShieldCheck className="w-5 h-5" /> : <ShieldAlert className="w-5 h-5" />}
             <div>
-              <span className="text-xs font-bold font-mono block">
+              <span className="text-xs font-semibold font-mono block">
                 {auditVerification?.isValid ? 'Audit Chain Verified' : 'Audit Chain Alert'}
               </span>
-              <span className="text-[10px] text-[#969BA8] font-mono">
+              <span className="text-[10px] text-[#A1AFB8] font-mono tabular-nums">
                 {auditVerification?.totalEvents || 0} events · SHA-256 Chained
               </span>
             </div>
@@ -669,60 +683,65 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
       </div>
 
       {/* 2. Subtabs Navigation */}
-      <div className="flex border-b border-[#292C38] gap-6 text-xs font-semibold overflow-x-auto">
+      <div className="flex border-b border-[#202B34] gap-6 text-xs font-semibold overflow-x-auto">
         <button
+          type="button"
           onClick={() => setSubTab('OVERVIEW')}
-          className={`pb-3 transition-colors flex items-center gap-2 whitespace-nowrap ${
-            subTab === 'OVERVIEW' ? 'text-[#EB3458] border-b-2 border-[#EB3458]' : 'text-[#969BA8] hover:text-[#F5F5F7]'
+          className={`pb-3 transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+            subTab === 'OVERVIEW' ? 'text-[#E4EBEF] border-b-2 border-[#8DA5B1]' : 'text-[#A1AFB8] hover:text-[#E4EBEF]'
           }`}
         >
           <Layers className="w-4 h-4" />
           <span>Listing Overview</span>
-          <span className="px-1.5 py-0.2 rounded bg-[#1C1F29] text-[10px] font-mono">{metrics.total}</span>
+          <span className="px-1.5 py-0.5 rounded bg-[#17212B] border border-[#2B3944] text-[10px] font-mono">{metrics.total}</span>
         </button>
 
         <button
+          type="button"
           onClick={() => setSubTab('TOKEN_MANAGEMENT')}
-          className={`pb-3 transition-colors flex items-center gap-2 whitespace-nowrap ${
-            subTab === 'TOKEN_MANAGEMENT' ? 'text-[#EB3458] border-b-2 border-[#EB3458]' : 'text-[#969BA8] hover:text-[#F5F5F7]'
+          className={`pb-3 transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+            subTab === 'TOKEN_MANAGEMENT' ? 'text-[#E4EBEF] border-b-2 border-[#8DA5B1]' : 'text-[#A1AFB8] hover:text-[#E4EBEF]'
           }`}
         >
           <Coins className="w-4 h-4" />
-          <span>Token & Limit Management</span>
-          <span className="px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-400 font-bold text-[10px] font-mono">
+          <span>Token &amp; Limit Management</span>
+          <span className="px-1.5 py-0.5 rounded bg-[#17212B] border border-[#2B3944] text-[#6D9FE8] font-semibold text-[10px] font-mono">
             {tokenPairs.length}
           </span>
         </button>
 
         <button
+          type="button"
           onClick={() => setSubTab('APPROVAL_QUEUE')}
-          className={`pb-3 transition-colors flex items-center gap-2 whitespace-nowrap ${
-            subTab === 'APPROVAL_QUEUE' ? 'text-[#EB3458] border-b-2 border-[#EB3458]' : 'text-[#969BA8] hover:text-[#F5F5F7]'
+          className={`pb-3 transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+            subTab === 'APPROVAL_QUEUE' ? 'text-[#E4EBEF] border-b-2 border-[#8DA5B1]' : 'text-[#A1AFB8] hover:text-[#E4EBEF]'
           }`}
         >
           <CheckCircle2 className="w-4 h-4" />
           <span>Approval Queue (Maker-Checker)</span>
           {metrics.pending > 0 && (
-            <span className="px-1.5 py-0.2 rounded bg-[#F5B942] text-black font-bold text-[10px] font-mono">
+            <span className="px-1.5 py-0.5 rounded bg-[#D6A85C] text-[#090D12] font-bold text-[10px] font-mono">
               {metrics.pending}
             </span>
           )}
         </button>
 
         <button
+          type="button"
           onClick={() => setSubTab('OPERATIONS')}
-          className={`pb-3 transition-colors flex items-center gap-2 whitespace-nowrap ${
-            subTab === 'OPERATIONS' ? 'text-[#EB3458] border-b-2 border-[#EB3458]' : 'text-[#969BA8] hover:text-[#F5F5F7]'
+          className={`pb-3 transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+            subTab === 'OPERATIONS' ? 'text-[#E4EBEF] border-b-2 border-[#8DA5B1]' : 'text-[#A1AFB8] hover:text-[#E4EBEF]'
           }`}
         >
           <Activity className="w-4 h-4" />
-          <span>Market Operations & Engine</span>
+          <span>Market Operations &amp; Engine</span>
         </button>
 
         <button
+          type="button"
           onClick={() => setSubTab('WIZARD')}
-          className={`pb-3 transition-colors flex items-center gap-2 whitespace-nowrap ${
-            subTab === 'WIZARD' ? 'text-[#EB3458] border-b-2 border-[#EB3458]' : 'text-[#969BA8] hover:text-[#F5F5F7]'
+          className={`pb-3 transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+            subTab === 'WIZARD' ? 'text-[#E4EBEF] border-b-2 border-[#8DA5B1]' : 'text-[#A1AFB8] hover:text-[#E4EBEF]'
           }`}
         >
           <PlusCircle className="w-4 h-4" />
@@ -735,47 +754,47 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
         <div className="space-y-6">
           {/* KPI Strip */}
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-            <div className="p-3 rounded-lg bg-[#15171F] border border-[#292C38]">
-              <span className="text-[11px] text-[#686D7A] block">Drafts</span>
-              <span className="text-lg font-bold text-[#F5F5F7] font-mono">{metrics.draft}</span>
+            <div className="p-3 rounded-[7px] bg-[#141C24] border border-[#202B34]">
+              <span className="text-[11px] text-[#71818B] block">Drafts</span>
+              <span className="text-lg font-bold text-[#E4EBEF] font-mono">{metrics.draft}</span>
             </div>
-            <div className="p-3 rounded-lg bg-[#15171F] border border-[#292C38]">
-              <span className="text-[11px] text-[#F5B942] block">Pending Review</span>
-              <span className="text-lg font-bold text-[#F5B942] font-mono">{metrics.pending}</span>
+            <div className="p-3 rounded-[7px] bg-[#141C24] border border-[#202B34]">
+              <span className="text-[11px] text-[#D6A85C] block">Pending Review</span>
+              <span className="text-lg font-bold text-[#D6A85C] font-mono">{metrics.pending}</span>
             </div>
-            <div className="p-3 rounded-lg bg-[#15171F] border border-[#292C38]">
-              <span className="text-[11px] text-[#5B9DFF] block">Approved</span>
-              <span className="text-lg font-bold text-[#5B9DFF] font-mono">{metrics.approved}</span>
+            <div className="p-3 rounded-[7px] bg-[#141C24] border border-[#202B34]">
+              <span className="text-[11px] text-[#6D9FE8] block">Approved</span>
+              <span className="text-lg font-bold text-[#6D9FE8] font-mono">{metrics.approved}</span>
             </div>
-            <div className="p-3 rounded-lg bg-[#15171F] border border-[#292C38]">
-              <span className="text-[11px] text-[#F5B942] block">Scheduled</span>
-              <span className="text-lg font-bold text-[#F5B942] font-mono">{metrics.scheduled}</span>
+            <div className="p-3 rounded-[7px] bg-[#141C24] border border-[#202B34]">
+              <span className="text-[11px] text-[#D6A85C] block">Scheduled</span>
+              <span className="text-lg font-bold text-[#D6A85C] font-mono">{metrics.scheduled}</span>
             </div>
-            <div className="p-3 rounded-lg bg-[#15171F] border border-[#292C38]">
-              <span className="text-[11px] text-[#00C087] block">Active</span>
-              <span className="text-lg font-bold text-[#00C087] font-mono">{metrics.active}</span>
+            <div className="p-3 rounded-[7px] bg-[#141C24] border border-[#202B34]">
+              <span className="text-[11px] text-[#16A879] block">Active</span>
+              <span className="text-lg font-bold text-[#16A879] font-mono">{metrics.active}</span>
             </div>
-            <div className="p-3 rounded-lg bg-[#15171F] border border-[#292C38]">
-              <span className="text-[11px] text-[#EB3458] block">Suspended</span>
-              <span className="text-lg font-bold text-[#EB3458] font-mono">{metrics.suspended}</span>
+            <div className="p-3 rounded-[7px] bg-[#141C24] border border-[#202B34]">
+              <span className="text-[11px] text-[#8DA5B1] block">Suspended</span>
+              <span className="text-lg font-bold text-[#8DA5B1] font-mono">{metrics.suspended}</span>
             </div>
-            <div className="p-3 rounded-lg bg-[#15171F] border border-[#292C38]">
-              <span className="text-[11px] text-[#686D7A] block">Rejected</span>
-              <span className="text-lg font-bold text-[#686D7A] font-mono">{metrics.rejected}</span>
+            <div className="p-3 rounded-[7px] bg-[#141C24] border border-[#202B34]">
+              <span className="text-[11px] text-[#71818B] block">Rejected</span>
+              <span className="text-lg font-bold text-[#71818B] font-mono">{metrics.rejected}</span>
             </div>
           </div>
 
           {/* Filter Bar */}
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 rounded-lg bg-[#15171F] border border-[#292C38]">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 rounded-[7px] bg-[#141C24] border border-[#202B34]">
             <div className="flex items-center gap-2 w-full sm:w-72">
               <div className="relative w-full">
-                <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-[#686D7A]" />
+                <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-[#71818B]" />
                 <input
                   type="text"
                   placeholder="Cari pair / ID..."
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
-                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#0E1016] border border-[#292C38] rounded-lg text-[#F5F5F7] placeholder-[#686D7A] outline-none focus:border-[#EB3458]"
+                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#111820] border border-[#202B34] rounded-[7px] text-[#E4EBEF] placeholder-[#686D7A] outline-none focus:border-[#8DA5B1]"
                 />
               </div>
             </div>
@@ -787,8 +806,8 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                   onClick={() => setStatusFilter(st)}
                   className={`px-2.5 py-1 rounded text-xs font-mono font-semibold transition-colors ${
                     statusFilter === st
-                      ? 'bg-[#1C1F29] text-white border border-[#292C38]'
-                      : 'text-[#686D7A] hover:text-[#969BA8]'
+                      ? 'bg-[#17212B] text-white border border-[#202B34]'
+                      : 'text-[#71818B] hover:text-[#A1AFB8]'
                   }`}
                 >
                   {st}
@@ -796,7 +815,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
               ))}
               <button
                 onClick={loadData}
-                className="p-1.5 rounded bg-[#0E1016] border border-[#292C38] text-[#969BA8] hover:text-white"
+                className="p-1.5 rounded bg-[#111820] border border-[#202B34] text-[#A1AFB8] hover:text-white"
                 title="Refresh listings"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
@@ -805,9 +824,9 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
           </div>
 
           {/* Listings Table */}
-          <div className="overflow-x-auto rounded-xl border border-[#292C38] bg-[#15171F]">
+          <div className="overflow-x-auto rounded-[10px] border border-[#202B34] bg-[#141C24]">
             <table className="w-full text-left text-xs font-mono">
-              <thead className="bg-[#0E1016] text-[#686D7A] text-[11px] border-b border-[#292C38]">
+              <thead className="bg-[#111820] text-[#71818B] text-[11px] border-b border-[#202B34]">
                 <tr>
                   <th className="py-3 px-4 font-sans">Trading Pair</th>
                   <th className="py-3 px-4">Status</th>
@@ -819,28 +838,28 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                   <th className="py-3 px-4 text-right font-sans">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#292C38]/40">
+              <tbody className="divide-y divide-[#202B34]">
                 {filteredListings.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-[#686D7A]">
+                    <td colSpan={8} className="py-8 text-center text-[#71818B]">
                       Tidak ada listing request yang sesuai kriteria.
                     </td>
                   </tr>
                 ) : (
                   filteredListings.map(item => (
-                    <tr key={item.id} className="hover:bg-[#1C1F29]/60 transition-colors">
+                    <tr key={item.id} className="hover:bg-[#17212B]/60 transition-colors">
                       <td className="py-3 px-4">
                         <div className="font-sans">
-                          <span className="font-bold text-[#F5F5F7] font-mono text-sm block">{item.symbol}</span>
-                          <span className="text-[10px] text-[#686D7A] block truncate max-w-[140px]">ID: {item.id.slice(0, 14)}...</span>
+                          <span className="font-bold text-[#E4EBEF] font-mono text-sm block">{item.symbol}</span>
+                          <span className="text-[10px] text-[#71818B] block truncate max-w-[140px]">ID: {item.id.slice(0, 14)}...</span>
                           <div className="flex items-center gap-1.5 mt-1">
                             <span className={`text-[9px] px-1.5 py-0.2 rounded font-semibold font-mono ${
-                              item.depositStatus === 'OPEN' ? 'bg-[#00C087]/15 text-[#00C087] border border-[#00C087]/30' : 'bg-[#EB3458]/15 text-[#EB3458] border border-[#EB3458]/30'
+                              item.depositStatus === 'OPEN' ? 'bg-[#16A879]/15 text-[#16A879] border border-[#16A879]/30' : 'bg-[#401F27]/60 text-[#EA5B65] border border-[#8DA5B1]/30'
                             }`}>
                               Dep: {item.depositStatus || 'OPEN'}
                             </span>
                             <span className={`text-[9px] px-1.5 py-0.2 rounded font-semibold font-mono ${
-                              item.withdrawalStatus === 'OPEN' ? 'bg-[#00C087]/15 text-[#00C087] border border-[#00C087]/30' : 'bg-[#EB3458]/15 text-[#EB3458] border border-[#EB3458]/30'
+                              item.withdrawalStatus === 'OPEN' ? 'bg-[#16A879]/15 text-[#16A879] border border-[#16A879]/30' : 'bg-[#401F27]/60 text-[#EA5B65] border border-[#8DA5B1]/30'
                             }`}>
                               Wth: {item.withdrawalStatus || 'OPEN'}
                             </span>
@@ -850,29 +869,29 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                       <td className="py-3 px-4">
                         {renderStatusBadge(item.status)}
                       </td>
-                      <td className="py-3 px-4 text-right font-bold text-[#F5F5F7]">
+                      <td className="py-3 px-4 text-right font-bold text-[#E4EBEF]">
                         <div>{formatListingQuoteUnits(item.tickSize, item)}</div>
-                        <span className="text-[10px] text-[#686D7A] font-normal">{item.tickSize} units</span>
+                        <span className="text-[10px] text-[#71818B] font-normal">{item.tickSize} units</span>
                       </td>
-                      <td className="py-3 px-4 text-right text-[#969BA8]">
+                      <td className="py-3 px-4 text-right text-[#A1AFB8]">
                         {formatUnitsToDecimal(item.lotSize || '0', item.baseAsset?.decimals ?? 8, true)} {item.baseAsset?.symbol || ''}
                       </td>
-                      <td className="py-3 px-4 text-right text-[#969BA8]">
+                      <td className="py-3 px-4 text-right text-[#A1AFB8]">
                         {item.makerFeeBps} / {item.takerFeeBps}
                       </td>
                       <td className="py-3 px-4 text-[11px]">
-                        <span className="text-[#969BA8] block truncate max-w-[120px]" title={item.creatorEmail || item.createdBy}>
+                        <span className="text-[#A1AFB8] block truncate max-w-[120px]" title={item.creatorEmail || item.createdBy}>
                           M: {item.creatorEmail || item.createdBy.slice(0, 8)}
                         </span>
-                        <span className="text-[#686D7A] block truncate max-w-[120px]" title={item.approval?.reviewerEmail || '-'}>
+                        <span className="text-[#71818B] block truncate max-w-[120px]" title={item.approval?.reviewerEmail || '-'}>
                           C: {item.approval ? item.approval.reviewerEmail : '-'}
                         </span>
-                        <span className="text-[#5B9DFF] block text-[10px] truncate max-w-[120px]" title={item.marketMakerEmail || item.marketMakerAccountId}>
+                        <span className="text-[#6D9FE8] block text-[10px] truncate max-w-[120px]" title={item.marketMakerEmail || item.marketMakerAccountId}>
                           MM: {item.marketMakerEmail ? item.marketMakerEmail.split('@')[0] : 'dimonex_mm'}
                         </span>
                       </td>
                       <td className="py-3 px-4 text-center">
-                        <span className="px-1.5 py-0.5 rounded bg-[#0E1016] text-[#EB3458] font-bold border border-[#292C38]">
+                        <span className="px-1.5 py-0.5 rounded bg-[#111820] text-[#8DA5B1] font-bold border border-[#202B34]">
                           v{item.version}
                         </span>
                       </td>
@@ -881,7 +900,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                           {item.status === 'DRAFT' && (
                             <button
                               onClick={() => handleSubmitForReview(item.id)}
-                              className="px-2 py-1 rounded bg-[#EB3458]/15 hover:bg-[#EB3458]/25 text-[#EB3458] text-[11px] font-semibold border border-[#EB3458]/30 transition-colors"
+                              className="px-2 py-1 rounded bg-[#401F27] hover:bg-[#401F27]/80 text-[#EA5B65] text-[11px] font-semibold border border-[#EA5B65]/40 transition-colors"
                             >
                               Submit
                             </button>
@@ -891,7 +910,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                             <button
                               onClick={() => handleActivate(item.id)}
                               disabled={isActivating}
-                              className="px-2 py-1 rounded bg-[#00C087]/15 hover:bg-[#00C087]/25 text-[#00C087] text-[11px] font-semibold border border-[#00C087]/30 transition-colors"
+                              className="px-2 py-1 rounded bg-[#16A879]/15 hover:bg-[#16A879]/25 text-[#16A879] text-[11px] font-semibold border border-[#16A879]/30 transition-colors"
                             >
                               Activate
                             </button>
@@ -900,7 +919,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                           {item.status === 'ACTIVE' && (
                             <button
                               onClick={() => handleSuspend(item.id)}
-                              className="px-2 py-1 rounded bg-[#EB3458]/15 hover:bg-[#EB3458]/25 text-[#EB3458] text-[11px] font-semibold border border-[#EB3458]/30 transition-colors"
+                              className="px-2 py-1 rounded bg-[#401F27] hover:bg-[#401F27]/80 text-[#EA5B65] text-[11px] font-semibold border border-[#EA5B65]/40 transition-colors"
                             >
                               Halt
                             </button>
@@ -909,7 +928,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                           {item.status === 'SUSPENDED' && (
                             <button
                               onClick={() => handleResume(item.id)}
-                              className="px-2 py-1 rounded bg-[#00C087]/15 hover:bg-[#00C087]/25 text-[#00C087] text-[11px] font-semibold border border-[#00C087]/30 transition-colors"
+                              className="px-2 py-1 rounded bg-[#16A879]/15 hover:bg-[#16A879]/25 text-[#16A879] text-[11px] font-semibold border border-[#16A879]/30 transition-colors"
                             >
                               Resume
                             </button>
@@ -920,7 +939,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                               setSelectedListing(item);
                               setShowDetailModal(true);
                             }}
-                            className="px-2 py-1 rounded bg-[#0E1016] hover:bg-[#1C1F29] text-[#969BA8] hover:text-white text-[11px] border border-[#292C38] transition-colors"
+                            className="px-2 py-1 rounded bg-[#111820] hover:bg-[#17212B] text-[#A1AFB8] hover:text-white text-[11px] border border-[#202B34] transition-colors"
                           >
                             Detail
                           </button>
@@ -938,18 +957,18 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
       {/* 4. SUBTAB: APPROVAL QUEUE (MAKER-CHECKER) */}
       {subTab === 'APPROVAL_QUEUE' && (
         <div className="space-y-4">
-          <div className="p-4 rounded-xl bg-[#15171F] border border-[#292C38]">
-            <h3 className="text-sm font-bold text-[#F5F5F7] mb-1">Maker-Checker Approval Workflow</h3>
-            <p className="text-xs text-[#969BA8]">
+          <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+            <h3 className="text-sm font-bold text-[#E4EBEF] mb-1">Maker-Checker Approval Workflow</h3>
+            <p className="text-xs text-[#A1AFB8]">
               Setiap listing yang diajukan oleh Maker wajib ditelaah secara independen oleh Checker admin berbeda sebelum trading dapat disiapkan dan diaktifkan.
             </p>
           </div>
 
           <div className="grid grid-cols-1 gap-4">
             {listings.filter(l => l.status === 'PENDING_REVIEW').length === 0 ? (
-              <div className="p-8 text-center rounded-xl bg-[#15171F] border border-[#292C38] text-[#686D7A]">
-                <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-[#00C087]/60" />
-                <span className="text-sm font-bold block text-[#F5F5F7]">Antrean Review Kosong</span>
+              <div className="p-8 text-center rounded-[10px] bg-[#141C24] border border-[#202B34] text-[#71818B]">
+                <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-[#16A879]/60" />
+                <span className="text-sm font-bold block text-[#E4EBEF]">Antrean Review Kosong</span>
                 <span className="text-xs mt-1 block">Semua listing yang diajukan sudah disetujui atau diproses.</span>
               </div>
             ) : (
@@ -957,23 +976,23 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 const isCreator = currentUser && item.createdBy === currentUser.id;
 
                 return (
-                  <div key={item.id} className="p-5 rounded-xl bg-[#15171F] border border-[#292C38] space-y-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-[#292C38]">
+                  <div key={item.id} className="p-5 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-[#202B34]">
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="text-base font-bold text-[#F5F5F7] font-mono">{item.symbol}</span>
-                          <span className="text-xs px-2 py-0.5 rounded bg-[#F5B942]/15 text-[#F5B942] border border-[#F5B942]/30 font-mono">
+                          <span className="text-base font-bold text-[#E4EBEF] font-mono">{item.symbol}</span>
+                          <span className="text-xs px-2 py-0.5 rounded bg-[#D6A85C]/15 text-[#D6A85C] border border-[#D6A85C]/30 font-mono">
                             PENDING REVIEW v{item.version}
                           </span>
                         </div>
-                        <span className="text-xs text-[#686D7A] font-mono">
-                          Diajukan oleh: <strong className="text-[#969BA8]">{item.creatorEmail || item.createdBy}</strong>
+                        <span className="text-xs text-[#71818B] font-mono">
+                          Diajukan oleh: <strong className="text-[#A1AFB8]">{item.creatorEmail || item.createdBy}</strong>
                         </span>
                       </div>
 
                       {/* Maker-Checker Warning if current user is Maker */}
                       {isCreator && (
-                        <div className="px-3 py-1.5 rounded-lg bg-[#EB3458]/10 border border-[#EB3458]/30 text-[#EB3458] text-xs flex items-center gap-1.5 font-medium">
+                        <div className="px-3 py-1.5 rounded-[7px] bg-[#8DA5B1]/10 border border-[#8DA5B1]/30 text-[#8DA5B1] text-xs flex items-center gap-1.5 font-medium">
                           <AlertTriangle className="w-4 h-4 shrink-0" />
                           <span>Anda adalah Maker listing ini (Self-approval ditolak).</span>
                         </div>
@@ -982,22 +1001,22 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
 
                     {/* Parameters Grid */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs font-mono">
-                      <div className="p-2.5 rounded bg-[#0E1016] border border-[#292C38]">
-                        <span className="text-[#686D7A] block">Tick Size:</span>
-                        <span className="text-[#F5F5F7] font-bold">{formatListingQuoteUnits(item.tickSize, item)}</span>
-                        <span className="text-[10px] text-[#686D7A] block">{item.tickSize} units</span>
+                      <div className="p-2.5 rounded bg-[#111820] border border-[#202B34]">
+                        <span className="text-[#71818B] block">Tick Size:</span>
+                        <span className="text-[#E4EBEF] font-bold">{formatListingQuoteUnits(item.tickSize, item)}</span>
+                        <span className="text-[10px] text-[#71818B] block">{item.tickSize} units</span>
                       </div>
-                      <div className="p-2.5 rounded bg-[#0E1016] border border-[#292C38]">
-                        <span className="text-[#686D7A] block">Lot Size:</span>
-                        <span className="text-[#F5F5F7] font-bold">{formatUnitsToDecimal(item.lotSize || '0', item.baseAsset?.decimals ?? 8, true)} {item.baseAsset?.symbol || ''}</span>
+                      <div className="p-2.5 rounded bg-[#111820] border border-[#202B34]">
+                        <span className="text-[#71818B] block">Lot Size:</span>
+                        <span className="text-[#E4EBEF] font-bold">{formatUnitsToDecimal(item.lotSize || '0', item.baseAsset?.decimals ?? 8, true)} {item.baseAsset?.symbol || ''}</span>
                       </div>
-                      <div className="p-2.5 rounded bg-[#0E1016] border border-[#292C38]">
-                        <span className="text-[#686D7A] block">Min Order / Notional:</span>
-                        <span className="text-[#F5F5F7] font-bold">{formatUnitsToDecimal(item.minQuantity || '0', item.baseAsset?.decimals ?? 8, true)} / {formatListingQuoteUnits(item.minNotional, item)}</span>
+                      <div className="p-2.5 rounded bg-[#111820] border border-[#202B34]">
+                        <span className="text-[#71818B] block">Min Order / Notional:</span>
+                        <span className="text-[#E4EBEF] font-bold">{formatUnitsToDecimal(item.minQuantity || '0', item.baseAsset?.decimals ?? 8, true)} / {formatListingQuoteUnits(item.minNotional, item)}</span>
                       </div>
-                      <div className="p-2.5 rounded bg-[#0E1016] border border-[#292C38]">
-                        <span className="text-[#686D7A] block">Fee Structure:</span>
-                        <span className="text-[#F5F5F7] font-bold">M: {item.makerFeeBps} bps | T: {item.takerFeeBps} bps</span>
+                      <div className="p-2.5 rounded bg-[#111820] border border-[#202B34]">
+                        <span className="text-[#71818B] block">Fee Structure:</span>
+                        <span className="text-[#E4EBEF] font-bold">M: {item.makerFeeBps} bps | T: {item.takerFeeBps} bps</span>
                       </div>
                     </div>
 
@@ -1038,10 +1057,10 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
       {/* 5. SUBTAB: OPERATIONS & ENGINE SYNC */}
       {subTab === 'OPERATIONS' && (
         <div className="space-y-6">
-          <div className="p-4 rounded-xl bg-[#15171F] border border-[#292C38] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <h3 className="text-sm font-bold text-[#F5F5F7]">Matching Engine Market Status</h3>
-              <p className="text-xs text-[#969BA8]">
+              <h3 className="text-sm font-bold text-[#E4EBEF]">Matching Engine Market Status</h3>
+              <p className="text-xs text-[#A1AFB8]">
                 Sinkronisasi status antara database relasional dan memory single-threaded matching engine.
               </p>
             </div>
@@ -1057,22 +1076,22 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {listings.filter(l => l.status === 'ACTIVE' || l.status === 'SUSPENDED').map(item => (
-              <div key={item.id} className="p-4 rounded-xl bg-[#15171F] border border-[#292C38] space-y-3">
+              <div key={item.id} className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-base font-bold font-mono text-[#F5F5F7]">{item.symbol}</span>
+                  <span className="text-base font-bold font-mono text-[#E4EBEF]">{item.symbol}</span>
                   {renderStatusBadge(item.status)}
                 </div>
 
-                <div className="text-xs font-mono space-y-1 text-[#969BA8]">
+                <div className="text-xs font-mono space-y-1 text-[#A1AFB8]">
                   <div>Engine Pair ID: <strong className="text-white">{item.symbol}</strong></div>
                   <div>Tick Size: {formatListingQuoteUnits(item.tickSize, item)} ({item.tickSize} units) | Lot: {formatUnitsToDecimal(item.lotSize || '0', item.baseAsset?.decimals ?? 8, true)}</div>
                   <div>Base Decimals: {item.baseAsset?.decimals ?? 8} | Quote Decimals: {item.quoteAsset?.decimals ?? (String(item.symbol || '').includes('USDT') ? 6 : 2)}</div>
                 </div>
 
-                <div className="flex items-center justify-between pt-2 border-t border-[#292C38]">
+                <div className="flex items-center justify-between pt-2 border-t border-[#202B34]">
                   <button
                     onClick={() => handleReconcile(item.id)}
-                    className="text-xs text-[#5B9DFF] hover:underline flex items-center gap-1"
+                    className="text-xs text-[#6D9FE8] hover:underline flex items-center gap-1"
                   >
                     <RefreshCw className="w-3 h-3" /> Verifikasi Engine Sync
                   </button>
@@ -1081,14 +1100,14 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                     {item.status === 'ACTIVE' ? (
                       <button
                         onClick={() => handleSuspend(item.id)}
-                        className="px-2.5 py-1 rounded bg-[#EB3458]/15 text-[#EB3458] text-xs font-bold border border-[#EB3458]/30"
+                        className="px-2.5 py-1 rounded bg-[#8DA5B1]/15 text-[#EA5B65] text-xs font-semibold border border-[#EA5B65]/40"
                       >
                         Halt Market
                       </button>
                     ) : (
                       <button
                         onClick={() => handleResume(item.id)}
-                        className="px-2.5 py-1 rounded bg-[#00C087]/15 text-[#00C087] text-xs font-bold border border-[#00C087]/30"
+                        className="px-2.5 py-1 rounded bg-[#16A879]/15 text-[#16A879] text-xs font-bold border border-[#16A879]/30"
                       >
                         Resume Market
                       </button>
@@ -1105,9 +1124,9 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
       {subTab === 'TOKEN_MANAGEMENT' && (
         <div className="space-y-6">
           {/* Header Explanation Banner */}
-          <div className="p-4 rounded-xl bg-gradient-to-r from-blue-900/30 via-slate-900/60 to-purple-900/30 border border-blue-500/30">
+          <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
             <div className="flex items-start gap-3">
-              <div className="p-2.5 rounded-lg bg-blue-500/20 text-blue-400 shrink-0">
+              <div className="p-2.5 rounded-[7px] bg-blue-500/20 text-blue-400 shrink-0">
                 <Coins className="w-6 h-6" />
               </div>
               <div className="space-y-1">
@@ -1117,7 +1136,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                     Zero-Float Precision · Anti-Integer Confusion
                   </span>
                 </h3>
-                <p className="text-xs text-slate-300 leading-relaxed">
+                <p className="text-xs text-[#E4EBEF] leading-relaxed">
                   Semua token di DIMONEX beroperasi dengan presisi integer eksak (BigInt). Token dengan 8 desimal (seperti DOGE, SOL, BTC) memiliki faktor 1 Token = 100.000.000 unit atomik.
                   Jika batas maksimum order diset terlalu rendah (misal 5.000.000.000 unit atomik yang hanya bernilai 50 DOGE), bot market maker atau ladder likuiditas akan gagal memasang order dan mengeluarkan galat <em>"Kuantitas order melebihi batas maksimum"</em>.
                   Gunakan konsol ini untuk mengatur batas order secara aman dalam satuan Token Riil (Human) dengan kalkulasi atomik otomatis.
@@ -1129,24 +1148,24 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
           {/* Search & Filter Bar */}
           <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
             <div className="relative w-full sm:w-80">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#686D7A]" />
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#71818B]" />
               <input
                 type="text"
                 placeholder="Cari pair atau token (misal DOGE, USDT, BTC)..."
                 value={tokenSearchQuery}
                 onChange={e => setTokenSearchQuery(e.target.value)}
-                className="w-full bg-[#15171F] border border-[#292C38] rounded-lg pl-9 pr-3 py-2 text-xs text-[#F5F5F7] placeholder-[#686D7A] outline-none focus:border-[#EB3458]"
+                className="w-full bg-[#141C24] border border-[#202B34] rounded-[7px] pl-9 pr-3 py-2 text-xs text-[#E4EBEF] placeholder-[#686D7A] outline-none focus:border-[#8DA5B1]"
               />
             </div>
 
             <div className="flex items-center gap-2 self-start sm:self-auto">
-              <div className="flex bg-[#15171F] p-1 rounded-lg border border-[#292C38] text-xs">
+              <div className="flex bg-[#141C24] p-1 rounded-[7px] border border-[#202B34] text-xs">
                 {(['ALL', 'ACTIVE', 'HALTED'] as const).map(st => (
                   <button
                     key={st}
                     onClick={() => setTokenStatusFilter(st)}
                     className={`px-3 py-1 rounded font-medium transition-colors ${
-                      tokenStatusFilter === st ? 'bg-[#292C38] text-white font-bold' : 'text-[#969BA8] hover:text-white'
+                      tokenStatusFilter === st ? 'bg-[#1D2832] text-white font-bold' : 'text-[#A1AFB8] hover:text-white'
                     }`}
                   >
                     {st === 'ALL' ? 'Semua Status' : st === 'ACTIVE' ? 'Aktif' : 'Halted'}
@@ -1188,17 +1207,17 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 return (
                   <div
                     key={pair.id}
-                    className="p-5 rounded-xl bg-[#15171F] border border-[#292C38] hover:border-slate-700 transition-all space-y-4"
+                    className="p-5 rounded-[10px] bg-[#141C24] border border-[#202B34] hover:border-[#2B3944] transition-all space-y-4"
                   >
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#292C38]/60 pb-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#202B34] pb-3">
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#1E2230] to-[#0E1016] border border-[#292C38] flex items-center justify-center font-bold text-sm text-[#F5F5F7]">
+                        <div className="w-10 h-10 rounded-[10px] bg-[#17212B] border border-[#202B34] flex items-center justify-center font-bold text-sm text-[#E4EBEF]">
                           {pair.baseCurrency?.slice(0, 3)}
                         </div>
                         <div>
                           <div className="flex items-center gap-2">
                             <span className="text-base font-bold text-white font-mono">{pair.id}</span>
-                            <span className="text-[11px] px-2 py-0.5 rounded bg-[#1C1F29] border border-[#292C38] text-slate-300 font-mono">
+                            <span className="text-[11px] px-2 py-0.5 rounded bg-[#17212B] border border-[#202B34] text-[#E4EBEF] font-mono">
                               {dec} Desimal
                             </span>
                             <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-bold ${
@@ -1209,7 +1228,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                               {pair.isHalted ? 'TRADING HALTED' : 'AKTIF BERJALAN'}
                             </span>
                           </div>
-                          <span className="text-xs text-[#969BA8]">
+                          <span className="text-xs text-[#A1AFB8]">
                             Base: <strong className="text-white">{pair.baseCurrency}</strong> · Quote: <strong className="text-white">{pair.quoteCurrency}</strong> · 1 {pair.baseCurrency} = {factor.toLocaleString('id-ID')} unit atomik
                           </span>
                         </div>
@@ -1228,34 +1247,34 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                     {/* Detailed Limits & Specs */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                       {/* Min Order */}
-                      <div className="p-3 rounded-lg bg-[#0E1016] border border-[#292C38]">
-                        <span className="text-[11px] text-[#969BA8] block mb-1 flex items-center gap-1">
+                      <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34]">
+                        <span className="text-[11px] text-[#A1AFB8] block mb-1 flex items-center gap-1">
                           <span>Min Order (Batas Bawah)</span>
                         </span>
                         <div className="text-sm font-bold text-white font-mono">
-                          {humanMin} <span className="text-xs text-[#EB3458]">{pair.baseCurrency}</span>
+                          {humanMin} <span className="text-xs text-[#8DA5B1]">{pair.baseCurrency}</span>
                         </div>
-                        <span className="text-[10px] text-[#686D7A] font-mono block mt-0.5 truncate" title={`${pair.minOrderSize} unit atomik`}>
+                        <span className="text-[10px] text-[#71818B] font-mono block mt-0.5 truncate" title={`${pair.minOrderSize} unit atomik`}>
                           {pair.minOrderSize} unit
                         </span>
                       </div>
 
                       {/* Max Order */}
-                      <div className="p-3 rounded-lg bg-[#0E1016] border border-[#292C38]">
-                        <span className="text-[11px] text-[#969BA8] block mb-1 flex items-center gap-1">
+                      <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34]">
+                        <span className="text-[11px] text-[#A1AFB8] block mb-1 flex items-center gap-1">
                           <span>Max Order (Batas Atas)</span>
                         </span>
                         <div className="text-sm font-bold text-white font-mono">
-                          {humanMax} <span className="text-xs text-[#EB3458]">{pair.baseCurrency}</span>
+                          {humanMax} <span className="text-xs text-[#8DA5B1]">{pair.baseCurrency}</span>
                         </div>
-                        <span className="text-[10px] text-[#686D7A] font-mono block mt-0.5 truncate" title={`${pair.maxOrderSize} unit atomik`}>
+                        <span className="text-[10px] text-[#71818B] font-mono block mt-0.5 truncate" title={`${pair.maxOrderSize} unit atomik`}>
                           {pair.maxOrderSize} unit
                         </span>
                       </div>
 
                       {/* Tick & Lot Size */}
-                      <div className="p-3 rounded-lg bg-[#0E1016] border border-[#292C38]">
-                        <span className="text-[11px] text-[#969BA8] block mb-1">Tick & Lot Size</span>
+                      <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34]">
+                        <span className="text-[11px] text-[#A1AFB8] block mb-1">Tick & Lot Size</span>
                         <div className="text-sm font-bold text-white font-mono">
                           {formatQuotePrice(
                             pair.tickSize || (pair.quoteCurrency === 'USDT' ? '10000' : '100'),
@@ -1264,18 +1283,18 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                             true
                           )}
                         </div>
-                        <span className="text-[10px] text-[#686D7A] font-mono block mt-0.5">
+                        <span className="text-[10px] text-[#71818B] font-mono block mt-0.5">
                           Tick: {pair.tickSize || (pair.quoteCurrency === 'USDT' ? '10000' : '100')} · Lot: {humanMin} {pair.baseCurrency}
                         </span>
                       </div>
 
                       {/* Trading Fees */}
-                      <div className="p-3 rounded-lg bg-[#0E1016] border border-[#292C38]">
-                        <span className="text-[11px] text-[#969BA8] block mb-1">Biaya Transaksi (Fee)</span>
+                      <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34]">
+                        <span className="text-[11px] text-[#A1AFB8] block mb-1">Biaya Transaksi (Fee)</span>
                         <div className="text-sm font-bold text-white font-mono">
                           {((pair.makerFeeBps ?? 10) / 100).toFixed(2)}% / {((pair.takerFeeBps ?? 20) / 100).toFixed(2)}%
                         </div>
-                        <span className="text-[10px] text-[#686D7A] font-mono block mt-0.5">
+                        <span className="text-[10px] text-[#71818B] font-mono block mt-0.5">
                           Maker: {pair.makerFeeBps ?? 10} bps · Taker: {pair.takerFeeBps ?? 20} bps
                         </span>
                       </div>
@@ -1289,9 +1308,9 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
 
       {/* 6. SUBTAB: CREATE LISTING WIZARD (6 STEPS) */}
       {subTab === 'WIZARD' && (
-        <div className="p-6 rounded-xl bg-[#15171F] border border-[#292C38] space-y-6 max-w-3xl mx-auto">
+        <div className="p-6 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-6 max-w-3xl mx-auto">
           {/* Wizard Step Progress */}
-          <div className="flex items-center justify-between border-b border-[#292C38] pb-4 text-xs font-mono">
+          <div className="flex items-center justify-between border-b border-[#202B34] pb-4 text-xs font-mono">
             {[
               { num: 1, title: 'Asset Identity' },
               { num: 2, title: 'Network & Contract' },
@@ -1304,18 +1323,18 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 key={step.num}
                 className={`flex items-center gap-1.5 ${
                   wizardStep === step.num
-                    ? 'text-[#EB3458] font-bold'
+                    ? 'text-[#8DA5B1] font-bold'
                     : wizardStep > step.num
-                    ? 'text-[#00C087]'
-                    : 'text-[#686D7A]'
+                    ? 'text-[#16A879]'
+                    : 'text-[#71818B]'
                 }`}
               >
                 <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] ${
                   wizardStep === step.num
-                    ? 'bg-[#EB3458] text-white'
+                    ? 'bg-[#8DA5B1] text-white'
                     : wizardStep > step.num
-                    ? 'bg-[#00C087] text-black'
-                    : 'bg-[#0E1016] text-[#686D7A] border border-[#292C38]'
+                    ? 'bg-[#16A879] text-black'
+                    : 'bg-[#111820] text-[#71818B] border border-[#202B34]'
                 }`}>
                   {step.num}
                 </span>
@@ -1327,8 +1346,8 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
           {/* STEP 1: Asset Identity */}
           {wizardStep === 1 && (
             <div className="space-y-4">
-              <h3 className="text-base font-bold text-[#F5F5F7]">Step 1: Identitas Aset</h3>
-              <p className="text-xs text-[#969BA8]">
+              <h3 className="text-base font-bold text-[#E4EBEF]">Step 1: Identitas Aset</h3>
+              <p className="text-xs text-[#A1AFB8]">
                 Pilih aset yang sudah terdaftar di catalog atau daftarkan aset kripto baru.
               </p>
 
@@ -1336,10 +1355,10 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 <button
                   type="button"
                   onClick={() => setWizardData({ ...wizardData, isNewAsset: false })}
-                  className={`flex-1 p-3 rounded-lg border text-left text-xs ${
+                  className={`flex-1 p-3 rounded-[7px] border text-left text-xs ${
                     !wizardData.isNewAsset
-                      ? 'bg-[#1C1F29] border-[#EB3458] text-white font-bold'
-                      : 'bg-[#0E1016] border-[#292C38] text-[#969BA8]'
+                      ? 'bg-[#17212B] border-[#8DA5B1] text-white font-bold'
+                      : 'bg-[#111820] border-[#202B34] text-[#A1AFB8]'
                   }`}
                 >
                   Pilih Aset Terdaftar
@@ -1347,10 +1366,10 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 <button
                   type="button"
                   onClick={() => setWizardData({ ...wizardData, isNewAsset: true })}
-                  className={`flex-1 p-3 rounded-lg border text-left text-xs ${
+                  className={`flex-1 p-3 rounded-[7px] border text-left text-xs ${
                     wizardData.isNewAsset
-                      ? 'bg-[#1C1F29] border-[#EB3458] text-white font-bold'
-                      : 'bg-[#0E1016] border-[#292C38] text-[#969BA8]'
+                      ? 'bg-[#17212B] border-[#8DA5B1] text-white font-bold'
+                      : 'bg-[#111820] border-[#202B34] text-[#A1AFB8]'
                   }`}
                 >
                   Daftarkan Aset Kripto Baru
@@ -1359,7 +1378,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
 
               {!wizardData.isNewAsset ? (
                 <div>
-                  <label className="text-xs text-[#969BA8] block mb-1">Aset Terdaftar:</label>
+                  <label className="text-xs text-[#A1AFB8] block mb-1">Aset Terdaftar:</label>
                   <select
                     value={wizardData.selectedAssetId}
                     onChange={e => {
@@ -1380,7 +1399,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                         initialLiquidityBase: (10000n * unitScale).toString()
                       });
                     }}
-                    className="w-full bg-[#0E1016] border border-[#292C38] rounded-lg p-2.5 text-xs text-[#F5F5F7] font-mono outline-none"
+                    className="w-full bg-[#111820] border border-[#202B34] rounded-[7px] p-2.5 text-xs text-[#E4EBEF] font-mono outline-none"
                   >
                     <option value="">-- Pilih Aset --</option>
                     {assets.filter(a => a.symbol !== 'IDR').map(a => (
@@ -1393,7 +1412,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
               ) : (
                 <div className="space-y-3">
                   <div>
-                    <label className="text-xs text-[#969BA8] block mb-1">Simbol Token (2-12 Karakter Alfanumerik):</label>
+                    <label className="text-xs text-[#A1AFB8] block mb-1">Simbol Token (2-12 Karakter Alfanumerik):</label>
                     <Input
                       placeholder="e.g. SOL, UNI, AVAX"
                       value={wizardData.symbol}
@@ -1401,7 +1420,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-[#969BA8] block mb-1">Nama Lengkap Aset:</label>
+                    <label className="text-xs text-[#A1AFB8] block mb-1">Nama Lengkap Aset:</label>
                     <Input
                       placeholder="e.g. Solana, Uniswap"
                       value={wizardData.name}
@@ -1410,18 +1429,18 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="text-xs text-[#969BA8] block mb-1">Tipe Aset:</label>
+                      <label className="text-xs text-[#A1AFB8] block mb-1">Tipe Aset:</label>
                       <select
                         value={wizardData.assetType}
                         onChange={e => setWizardData({ ...wizardData, assetType: e.target.value as any })}
-                        className="w-full bg-[#0E1016] border border-[#292C38] rounded-lg p-2 text-xs text-[#F5F5F7] outline-none"
+                        className="w-full bg-[#111820] border border-[#202B34] rounded-[7px] p-2 text-xs text-[#E4EBEF] outline-none"
                       >
                         <option value="TOKEN">TOKEN (Smart Contract)</option>
                         <option value="NATIVE">NATIVE (L1 Coin)</option>
                       </select>
                     </div>
                     <div>
-                      <label className="text-xs text-[#969BA8] block mb-1">Presisi Desimal (0-18):</label>
+                      <label className="text-xs text-[#A1AFB8] block mb-1">Presisi Desimal (0-18):</label>
                       <Input
                         type="number"
                         value={wizardData.decimals.toString()}
@@ -1449,17 +1468,17 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
           {/* STEP 2: Network & Contract Validation */}
           {wizardStep === 2 && (
             <div className="space-y-4">
-              <h3 className="text-base font-bold text-[#F5F5F7]">Step 2: Jaringan & Validasi Kontrak</h3>
-              <p className="text-xs text-[#969BA8]">
+              <h3 className="text-base font-bold text-[#E4EBEF]">Step 2: Jaringan & Validasi Kontrak</h3>
+              <p className="text-xs text-[#A1AFB8]">
                 Tentukan blockchain network dan contract address token. Sistem memvalidasi checksum dan format alamat.
               </p>
 
               <div>
-                <label className="text-xs text-[#969BA8] block mb-1">Blockchain Network:</label>
+                <label className="text-xs text-[#A1AFB8] block mb-1">Blockchain Network:</label>
                 <select
                   value={wizardData.network}
                   onChange={e => setWizardData({ ...wizardData, network: e.target.value })}
-                  className="w-full bg-[#0E1016] border border-[#292C38] rounded-lg p-2.5 text-xs text-[#F5F5F7] outline-none"
+                  className="w-full bg-[#111820] border border-[#202B34] rounded-[7px] p-2.5 text-xs text-[#E4EBEF] outline-none"
                 >
                   <option value="ETHEREUM">Ethereum (ERC-20)</option>
                   <option value="SOLANA">Solana (SPL)</option>
@@ -1472,7 +1491,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
 
               {wizardData.assetType === 'TOKEN' && (
                 <div>
-                  <label className="text-xs text-[#969BA8] block mb-1">Smart Contract Address:</label>
+                  <label className="text-xs text-[#A1AFB8] block mb-1">Smart Contract Address:</label>
                   <Input
                     placeholder={
                       wizardData.network === 'SOLANA' 
@@ -1488,50 +1507,50 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
               )}
 
               {/* Deposit & Withdrawal Open Configuration */}
-              <div className="pt-2 border-t border-[#292C38] space-y-4">
-                <h4 className="text-xs font-bold text-[#F5F5F7] uppercase tracking-wider text-[#EB3458]">
+              <div className="pt-2 border-t border-[#202B34] space-y-4">
+                <h4 className="text-xs font-bold text-[#E4EBEF] uppercase tracking-wider text-[#8DA5B1]">
                   Konfigurasi Jadwal Deposit & Withdrawal
                 </h4>
 
                 {/* Deposit Configuration */}
-                <div className="p-3.5 rounded-lg bg-[#0E1016] border border-[#292C38] space-y-3">
+                <div className="p-3.5 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-3">
                   <div className="flex items-center justify-between">
-                    <label className="flex items-center gap-2 text-xs font-semibold text-[#F5F5F7] cursor-pointer">
+                    <label className="flex items-center gap-2 text-xs font-semibold text-[#E4EBEF] cursor-pointer">
                       <input
                         type="checkbox"
                         checked={wizardData.depositEnabled}
                         onChange={e => setWizardData({ ...wizardData, depositEnabled: e.target.checked })}
-                        className="accent-[#EB3458] w-4 h-4"
+                        className="accent-[#8DA5B1] w-4 h-4"
                       />
                       <span>Buka Jalur Deposit (Deposit Enabled)</span>
                     </label>
                     <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-bold ${
-                      wizardData.depositEnabled ? 'bg-[#00C087]/20 text-[#00C087]' : 'bg-[#EB3458]/20 text-[#EB3458]'
+                      wizardData.depositEnabled ? 'bg-[#16A879]/20 text-[#16A879]' : 'bg-[#401F27] text-[#EA5B65]'
                     }`}>
                       {wizardData.depositEnabled ? 'DEPOSIT AKTIF' : 'DEPOSIT DITUTUP'}
                     </span>
                   </div>
 
                   {wizardData.depositEnabled && (
-                    <div className="pl-6 space-y-2 pt-1 border-t border-[#292C38]/60">
+                    <div className="pl-6 space-y-2 pt-1 border-t border-[#202B34]">
                       <div className="flex gap-3 text-xs">
-                        <label className="flex items-center gap-1.5 cursor-pointer text-[#969BA8]">
+                        <label className="flex items-center gap-1.5 cursor-pointer text-[#A1AFB8]">
                           <input
                             type="radio"
                             name="depMode"
                             checked={wizardData.depositOpenMode === 'IMMEDIATE'}
                             onChange={() => setWizardData({ ...wizardData, depositOpenMode: 'IMMEDIATE' })}
-                            className="accent-[#EB3458]"
+                            className="accent-[#8DA5B1]"
                           />
                           <span>Buka Sekarang (Immediate saat Listing Aktif)</span>
                         </label>
-                        <label className="flex items-center gap-1.5 cursor-pointer text-[#969BA8]">
+                        <label className="flex items-center gap-1.5 cursor-pointer text-[#A1AFB8]">
                           <input
                             type="radio"
                             name="depMode"
                             checked={wizardData.depositOpenMode === 'SCHEDULED'}
                             onChange={() => setWizardData({ ...wizardData, depositOpenMode: 'SCHEDULED' })}
-                            className="accent-[#EB3458]"
+                            className="accent-[#8DA5B1]"
                           />
                           <span>Jadwalkan Waktu Buka Deposit</span>
                         </label>
@@ -1539,7 +1558,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
 
                       {wizardData.depositOpenMode === 'SCHEDULED' && (
                         <div>
-                          <label className="text-[11px] text-[#686D7A] block mb-1">Tanggal & Jam Pembukaan Deposit:</label>
+                          <label className="text-[11px] text-[#71818B] block mb-1">Tanggal & Jam Pembukaan Deposit:</label>
                           <Input
                             type="datetime-local"
                             value={wizardData.depositOpenedAt}
@@ -1552,44 +1571,44 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 </div>
 
                 {/* Withdrawal Configuration */}
-                <div className="p-3.5 rounded-lg bg-[#0E1016] border border-[#292C38] space-y-3">
+                <div className="p-3.5 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-3">
                   <div className="flex items-center justify-between">
-                    <label className="flex items-center gap-2 text-xs font-semibold text-[#F5F5F7] cursor-pointer">
+                    <label className="flex items-center gap-2 text-xs font-semibold text-[#E4EBEF] cursor-pointer">
                       <input
                         type="checkbox"
                         checked={wizardData.withdrawalEnabled}
                         onChange={e => setWizardData({ ...wizardData, withdrawalEnabled: e.target.checked })}
-                        className="accent-[#EB3458] w-4 h-4"
+                        className="accent-[#8DA5B1] w-4 h-4"
                       />
                       <span>Buka Jalur Penarikan (Withdrawal Enabled)</span>
                     </label>
                     <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-bold ${
-                      wizardData.withdrawalEnabled ? 'bg-[#00C087]/20 text-[#00C087]' : 'bg-[#EB3458]/20 text-[#EB3458]'
+                      wizardData.withdrawalEnabled ? 'bg-[#16A879]/20 text-[#16A879]' : 'bg-[#401F27] text-[#EA5B65]'
                     }`}>
                       {wizardData.withdrawalEnabled ? 'WITHDRAWAL AKTIF' : 'WITHDRAWAL DITUTUP'}
                     </span>
                   </div>
 
                   {wizardData.withdrawalEnabled && (
-                    <div className="pl-6 space-y-2 pt-1 border-t border-[#292C38]/60">
+                    <div className="pl-6 space-y-2 pt-1 border-t border-[#202B34]">
                       <div className="flex gap-3 text-xs">
-                        <label className="flex items-center gap-1.5 cursor-pointer text-[#969BA8]">
+                        <label className="flex items-center gap-1.5 cursor-pointer text-[#A1AFB8]">
                           <input
                             type="radio"
                             name="wthMode"
                             checked={wizardData.withdrawalOpenMode === 'IMMEDIATE'}
                             onChange={() => setWizardData({ ...wizardData, withdrawalOpenMode: 'IMMEDIATE' })}
-                            className="accent-[#EB3458]"
+                            className="accent-[#8DA5B1]"
                           />
                           <span>Buka Sekarang (Immediate saat Listing Aktif)</span>
                         </label>
-                        <label className="flex items-center gap-1.5 cursor-pointer text-[#969BA8]">
+                        <label className="flex items-center gap-1.5 cursor-pointer text-[#A1AFB8]">
                           <input
                             type="radio"
                             name="wthMode"
                             checked={wizardData.withdrawalOpenMode === 'SCHEDULED'}
                             onChange={() => setWizardData({ ...wizardData, withdrawalOpenMode: 'SCHEDULED' })}
-                            className="accent-[#EB3458]"
+                            className="accent-[#8DA5B1]"
                           />
                           <span>Jadwalkan Waktu Buka Withdrawal</span>
                         </label>
@@ -1597,7 +1616,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
 
                       {wizardData.withdrawalOpenMode === 'SCHEDULED' && (
                         <div>
-                          <label className="text-[11px] text-[#686D7A] block mb-1">Tanggal & Jam Pembukaan Withdrawal:</label>
+                          <label className="text-[11px] text-[#71818B] block mb-1">Tanggal & Jam Pembukaan Withdrawal:</label>
                           <Input
                             type="datetime-local"
                             value={wizardData.withdrawalOpenedAt}
@@ -1615,18 +1634,18 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
           {/* STEP 3: Trading Pair Configuration */}
           {wizardStep === 3 && (
             <div className="space-y-4">
-              <h3 className="text-base font-bold text-[#F5F5F7]">Step 3: Konfigurasi Pasangan Perdagangan (Quote Currency)</h3>
-              <p className="text-xs text-[#969BA8]">
+              <h3 className="text-base font-bold text-[#E4EBEF]">Step 3: Konfigurasi Pasangan Perdagangan (Quote Currency)</h3>
+              <p className="text-xs text-[#A1AFB8]">
                 Konfigurasi parameter pasar spot dengan mata uang quote USDT (Tether) atau Rupiah (IDR).
               </p>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs text-[#969BA8] block mb-1">Base Currency:</label>
+                  <label className="text-xs text-[#A1AFB8] block mb-1">Base Currency:</label>
                   <Input value={wizardData.symbol} disabled />
                 </div>
                 <div>
-                  <label className="text-xs text-[#969BA8] block mb-1">Quote Currency (Pilih Pasar):</label>
+                  <label className="text-xs text-[#A1AFB8] block mb-1">Quote Currency (Pilih Pasar):</label>
                   <select
                     value={wizardData.quoteCurrency}
                     onChange={e => {
@@ -1639,7 +1658,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                         initialLiquidityQuoteIdr: q === 'USDT' ? '50000000000' : '5000000000'
                       });
                     }}
-                    className="w-full bg-[#0E1016] border border-[#292C38] rounded-lg p-2.5 text-xs text-[#F5F5F7] font-mono outline-none focus:border-[#EB3458]"
+                    className="w-full bg-[#111820] border border-[#202B34] rounded-[7px] p-2.5 text-xs text-[#E4EBEF] font-mono outline-none focus:border-[#8DA5B1]"
                   >
                     <option value="USDT">USDT (Tether USD — Stablecoin Global)</option>
                     <option value="IDR">IDR (Indonesian Rupiah — Fiat Lokal)</option>
@@ -1650,7 +1669,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
               {/* Tick Size */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs text-[#969BA8]">
+                  <label className="text-xs text-[#A1AFB8]">
                     Tick Size ({wizardData.quoteCurrency === 'USDT' ? 'USDT Units (6 Desimal)' : 'IDR Sen (2 Desimal)'}):
                   </label>
                   <span className="text-[11px] font-mono font-bold text-blue-400">
@@ -1663,37 +1682,37 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                   placeholder={wizardData.quoteCurrency === 'USDT' ? '10000' : '100'}
                 />
                 <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                  <span className="text-[10px] text-[#686D7A]">Preset:</span>
+                  <span className="text-[10px] text-[#71818B]">Preset:</span>
                   {wizardData.quoteCurrency === 'USDT' ? (
                     <>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '100' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '100' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         $0.0001 (100)
                       </button>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '1000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '1000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         $0.001 (1.000)
                       </button>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '10000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '10000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         $0.01 (10.000)
                       </button>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '50000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '50000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         $0.05 (50.000)
                       </button>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '100000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '100000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         $0.10 (100.000)
                       </button>
                     </>
                   ) : (
                     <>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '100' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '100' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         Rp 1 (100 sen)
                       </button>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '1000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '1000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         Rp 10 (1.000 sen)
                       </button>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '5000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '5000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         Rp 50 (5.000 sen)
                       </button>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '10000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, tickSize: '10000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         Rp 100 (10.000 sen)
                       </button>
                     </>
@@ -1704,7 +1723,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
               {/* Lot Size */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs text-[#969BA8]">Lot Size (Base units integer eksak):</label>
+                  <label className="text-xs text-[#A1AFB8]">Lot Size (Base units integer eksak):</label>
                   <span className="text-[11px] font-mono font-bold text-blue-400">
                     Setara: {formatUnitsToDecimal(wizardData.lotSize || '0', wizardData.decimals ?? 8, true)} {wizardData.symbol || 'TOKEN'}
                   </span>
@@ -1715,14 +1734,14 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                   placeholder="100000000"
                 />
                 <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                  <span className="text-[10px] text-[#686D7A]">Preset:</span>
-                  <button type="button" onClick={() => setWizardData({ ...wizardData, lotSize: (10n ** BigInt(wizardData.decimals ?? 8)).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                  <span className="text-[10px] text-[#71818B]">Preset:</span>
+                  <button type="button" onClick={() => setWizardData({ ...wizardData, lotSize: (10n ** BigInt(wizardData.decimals ?? 8)).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                     1 {wizardData.symbol || 'Token'}
                   </button>
-                  <button type="button" onClick={() => setWizardData({ ...wizardData, lotSize: ((wizardData.decimals ?? 8) >= 2 ? (10n ** BigInt((wizardData.decimals ?? 8) - 2)) : 1n).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                  <button type="button" onClick={() => setWizardData({ ...wizardData, lotSize: ((wizardData.decimals ?? 8) >= 2 ? (10n ** BigInt((wizardData.decimals ?? 8) - 2)) : 1n).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                     0.01 {wizardData.symbol || 'Token'}
                   </button>
-                  <button type="button" onClick={() => setWizardData({ ...wizardData, lotSize: ((wizardData.decimals ?? 8) >= 4 ? (10n ** BigInt((wizardData.decimals ?? 8) - 4)) : 1n).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                  <button type="button" onClick={() => setWizardData({ ...wizardData, lotSize: ((wizardData.decimals ?? 8) >= 4 ? (10n ** BigInt((wizardData.decimals ?? 8) - 4)) : 1n).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                     0.0001 {wizardData.symbol || 'Token'}
                   </button>
                 </div>
@@ -1731,7 +1750,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
               {/* Min Notional */}
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs text-[#969BA8]">
+                  <label className="text-xs text-[#A1AFB8]">
                     Min Notional Value ({wizardData.quoteCurrency === 'USDT' ? 'USDT Units (6 Desimal)' : 'IDR Sen (2 Desimal)'}):
                   </label>
                   <span className="text-[11px] font-mono font-bold text-blue-400">
@@ -1744,28 +1763,28 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                   placeholder={wizardData.quoteCurrency === 'USDT' ? '5000000' : '1000000'}
                 />
                 <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                  <span className="text-[10px] text-[#686D7A]">Preset:</span>
+                  <span className="text-[10px] text-[#71818B]">Preset:</span>
                   {wizardData.quoteCurrency === 'USDT' ? (
                     <>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, minNotional: '1000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, minNotional: '1000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         $1.00 USDT
                       </button>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, minNotional: '5000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, minNotional: '5000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         $5.00 USDT
                       </button>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, minNotional: '10000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, minNotional: '10000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         $10.00 USDT
                       </button>
                     </>
                   ) : (
                     <>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, minNotional: '1000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, minNotional: '1000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         Rp 10.000 (1M sen)
                       </button>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, minNotional: '2500000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, minNotional: '2500000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         Rp 25.000 (2.5M sen)
                       </button>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, minNotional: '5000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, minNotional: '5000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         Rp 50.000 (5M sen)
                       </button>
                     </>
@@ -1778,23 +1797,23 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
           {/* STEP 4: Fee, Market Maker & Project Trader Accounts */}
           {wizardStep === 4 && (
             <div className="space-y-5">
-              <h3 className="text-base font-bold text-[#F5F5F7]">Step 4: Fee, Likuiditas & Akun Trader Project</h3>
-              <p className="text-xs text-[#969BA8]">
+              <h3 className="text-base font-bold text-[#E4EBEF]">Step 4: Fee, Likuiditas & Akun Trader Project</h3>
+              <p className="text-xs text-[#A1AFB8]">
                 Tentukan akun ID yang ditugaskan sebagai Market Maker (MM) dan akun Trader milik project owner untuk injeksi likuiditas awal.
               </p>
 
               {/* Designated MM Account Selection */}
-              <div className="p-4 rounded-xl bg-[#0E1016] border border-[#292C38] space-y-3">
+              <div className="p-4 rounded-[10px] bg-[#111820] border border-[#202B34] space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <label className="text-xs font-bold text-[#F5F5F7] block">
+                    <label className="text-xs font-bold text-[#E4EBEF] block">
                       Akun Market Maker (MM) Resmi DIMONEX *
                     </label>
-                    <span className="text-[11px] text-[#969BA8]">
+                    <span className="text-[11px] text-[#A1AFB8]">
                       Akun yang akan memasang spread likuiditas awal order book (Bids & Asks).
                     </span>
                   </div>
-                  <span className="text-[10px] px-2 py-0.5 rounded bg-[#5B9DFF]/20 text-[#5B9DFF] font-mono font-bold">
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-[#6D9FE8]/20 text-[#6D9FE8] font-mono font-bold">
                     DESIGNATED MM
                   </span>
                 </div>
@@ -1802,7 +1821,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 <select
                   value={wizardData.marketMakerAccountId}
                   onChange={e => setWizardData({ ...wizardData, marketMakerAccountId: e.target.value })}
-                  className="w-full bg-[#15171F] border border-[#292C38] rounded-lg p-2.5 text-xs text-[#F5F5F7] font-mono outline-none focus:border-[#EB3458]"
+                  className="w-full bg-[#141C24] border border-[#202B34] rounded-[7px] p-2.5 text-xs text-[#E4EBEF] font-mono outline-none focus:border-[#8DA5B1]"
                 >
                   <option value="usr-mm-0000-0000-000000000001">
                     mm@dimonex.id — Market Maker Operator DIMONEX (ID: usr-mm-0000-0000-000000000001)
@@ -1816,17 +1835,17 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
               </div>
 
               {/* Project Owner / Issuer Trader Account */}
-              <div className="p-4 rounded-xl bg-[#0E1016] border border-[#292C38] space-y-3">
+              <div className="p-4 rounded-[10px] bg-[#111820] border border-[#202B34] space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <label className="text-xs font-bold text-[#F5F5F7] block">
+                    <label className="text-xs font-bold text-[#E4EBEF] block">
                       Akun Trader Pemilik Project / Token Issuer
                     </label>
-                    <span className="text-[11px] text-[#969BA8]">
+                    <span className="text-[11px] text-[#A1AFB8]">
                       Akun pengembang / founder proyek yang memegang alokasi token listing dan komitmen dana IDR.
                     </span>
                   </div>
-                  <span className="text-[10px] px-2 py-0.5 rounded bg-[#00C087]/20 text-[#00C087] font-mono font-bold">
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-[#16A879]/20 text-[#16A879] font-mono font-bold">
                     PROJECT OWNER
                   </span>
                 </div>
@@ -1834,7 +1853,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 <select
                   value={wizardData.projectOwnerAccountId}
                   onChange={e => setWizardData({ ...wizardData, projectOwnerAccountId: e.target.value })}
-                  className="w-full bg-[#15171F] border border-[#292C38] rounded-lg p-2.5 text-xs text-[#F5F5F7] font-mono outline-none focus:border-[#EB3458]"
+                  className="w-full bg-[#141C24] border border-[#202B34] rounded-[7px] p-2.5 text-xs text-[#E4EBEF] font-mono outline-none focus:border-[#8DA5B1]"
                 >
                   <option value="">-- Pilih Akun Trader Pemilik Project (Opsional) --</option>
                   {eligibleAccounts.map(a => (
@@ -1846,13 +1865,13 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
               </div>
 
               {/* Initial Pre-seed Liquidity */}
-              <div className="p-4 rounded-xl bg-[#0E1016] border border-[#292C38] space-y-3">
+              <div className="p-4 rounded-[10px] bg-[#111820] border border-[#202B34] space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <label className="text-xs font-bold text-[#F5F5F7] block">
+                    <label className="text-xs font-bold text-[#E4EBEF] block">
                       Injeksi Likuiditas Pre-Seed Awal ke Akun MM
                     </label>
-                    <span className="text-[11px] text-[#969BA8]">
+                    <span className="text-[11px] text-[#A1AFB8]">
                       Alokasi token dan modal quote untuk meletakkan order depth awal di order book.
                     </span>
                   </div>
@@ -1865,7 +1884,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                   {/* Base Token Injection */}
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs text-[#969BA8]">
+                      <label className="text-xs text-[#A1AFB8]">
                         Injeksi Token ({wizardData.symbol || 'Base'} Units):
                       </label>
                       <span className="text-[11px] font-mono font-bold text-blue-400">
@@ -1878,14 +1897,14 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                       placeholder="1000000000"
                     />
                     <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                      <span className="text-[10px] text-[#686D7A]">Preset:</span>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityBase: (100n * (10n ** BigInt(wizardData.decimals ?? 8))).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <span className="text-[10px] text-[#71818B]">Preset:</span>
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityBase: (100n * (10n ** BigInt(wizardData.decimals ?? 8))).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         100 {wizardData.symbol || 'Token'}
                       </button>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityBase: (1000n * (10n ** BigInt(wizardData.decimals ?? 8))).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityBase: (1000n * (10n ** BigInt(wizardData.decimals ?? 8))).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         1.000 {wizardData.symbol || 'Token'}
                       </button>
-                      <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityBase: (100000n * (10n ** BigInt(wizardData.decimals ?? 8))).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                      <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityBase: (100000n * (10n ** BigInt(wizardData.decimals ?? 8))).toString() })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                         100.000 {wizardData.symbol || 'Token'}
                       </button>
                     </div>
@@ -1894,7 +1913,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                   {/* Quote Currency Injection */}
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs text-[#969BA8]">
+                      <label className="text-xs text-[#A1AFB8]">
                         Injeksi Modal {wizardData.quoteCurrency} ({wizardData.quoteCurrency === 'USDT' ? 'Units' : 'Sen'}):
                       </label>
                       <span className="text-[11px] font-mono font-bold text-blue-400">
@@ -1907,28 +1926,28 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                       placeholder={wizardData.quoteCurrency === 'USDT' ? '50000000000' : '5000000000'}
                     />
                     <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                      <span className="text-[10px] text-[#686D7A]">Preset:</span>
+                      <span className="text-[10px] text-[#71818B]">Preset:</span>
                       {wizardData.quoteCurrency === 'USDT' ? (
                         <>
-                          <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityQuoteIdr: '5000000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                          <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityQuoteIdr: '5000000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                             $5,000 USDT
                           </button>
-                          <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityQuoteIdr: '25000000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                          <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityQuoteIdr: '25000000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                             $25,000 USDT
                           </button>
-                          <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityQuoteIdr: '50000000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                          <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityQuoteIdr: '50000000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                             $50,000 USDT
                           </button>
                         </>
                       ) : (
                         <>
-                          <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityQuoteIdr: '1000000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                          <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityQuoteIdr: '1000000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                             Rp 10 Juta
                           </button>
-                          <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityQuoteIdr: '5000000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                          <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityQuoteIdr: '5000000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                             Rp 50 Juta
                           </button>
-                          <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityQuoteIdr: '10000000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#1E2230] hover:bg-[#2A2E3D] text-[#969BA8] hover:text-white">
+                          <button type="button" onClick={() => setWizardData({ ...wizardData, initialLiquidityQuoteIdr: '10000000000' })} className="px-2 py-0.5 rounded text-[10px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] hover:text-white">
                             Rp 100 Juta
                           </button>
                         </>
@@ -1939,34 +1958,34 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
               </div>
 
               {/* Fee & Limits with Real-Time Token Converter */}
-              <div className="pt-2 border-t border-[#292C38] space-y-3">
-                <div className="p-3 rounded-lg bg-[#0E1016] border border-blue-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="pt-2 border-t border-[#202B34] space-y-3">
+                <div className="p-3 rounded-[7px] bg-[#111820] border border-blue-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div>
                     <span className="text-xs font-bold text-white flex items-center gap-1.5">
-                      <span>💡</span> Konverter Kuantitas Order (Bebas Bingung Angka Integer / Nol)
+                      Konverter Kuantitas Order (Bebas Bingung Angka Integer / Nol)
                     </span>
-                    <span className="text-[11px] text-[#969BA8] block">
+                    <span className="text-[11px] text-[#A1AFB8] block">
                       Token ini memiliki <strong>{wizardData.decimals} desimal</strong> (1 {wizardData.symbol || 'TOKEN'} = {(10n ** BigInt(wizardData.decimals ?? 8)).toLocaleString('id-ID')} unit atomik).
                     </span>
                   </div>
-                  <div className="flex gap-1.5 bg-[#171923] p-1 rounded border border-[#292C38] self-start sm:self-auto">
+                  <div className="flex gap-1.5 bg-[#111820] p-1 rounded border border-[#202B34] self-start sm:self-auto">
                     <button
                       type="button"
                       onClick={() => setWizardData({ ...wizardData, limitInputMode: 'TOKENS' })}
                       className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${
-                        wizardData.limitInputMode === 'TOKENS' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                        wizardData.limitInputMode === 'TOKENS' ? 'bg-[#8DA5B1] text-[#090D12]' : 'text-[#A1AFB8] hover:text-white'
                       }`}
                     >
-                      🪙 Jumlah Token
+                      Jumlah Token
                     </button>
                     <button
                       type="button"
                       onClick={() => setWizardData({ ...wizardData, limitInputMode: 'ATOMIC' })}
                       className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors ${
-                        wizardData.limitInputMode === 'ATOMIC' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                        wizardData.limitInputMode === 'ATOMIC' ? 'bg-[#8DA5B1] text-[#090D12]' : 'text-[#A1AFB8] hover:text-white'
                       }`}
                     >
-                      🔢 Integer BigInt
+                      Integer BigInt
                     </button>
                   </div>
                 </div>
@@ -1974,7 +1993,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {/* Min Order */}
                   <div>
-                    <label className="text-xs text-[#969BA8] block mb-1">
+                    <label className="text-xs text-[#A1AFB8] block mb-1">
                       Min Order Quantity {wizardData.limitInputMode === 'TOKENS' ? `(${wizardData.symbol || 'Tokens'})` : '(Satuan Atomik BigInt)'}:
                     </label>
                     {wizardData.limitInputMode === 'TOKENS' ? (
@@ -2015,7 +2034,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
 
                   {/* Max Order */}
                   <div>
-                    <label className="text-xs text-[#969BA8] block mb-1">
+                    <label className="text-xs text-[#A1AFB8] block mb-1">
                       Max Order Quantity {wizardData.limitInputMode === 'TOKENS' ? `(${wizardData.symbol || 'Tokens'})` : '(Satuan Atomik BigInt)'}:
                     </label>
                     {wizardData.limitInputMode === 'TOKENS' ? (
@@ -2056,7 +2075,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 </div>
 
                 <div>
-                  <label className="text-xs text-[#969BA8] block mb-1">
+                  <label className="text-xs text-[#A1AFB8] block mb-1">
                     Min Notional ({wizardData.quoteCurrency} Units, {wizardData.quoteCurrency === 'USDT' ? '5000000 = 5 USDT' : '1000000 = Rp 10.000'}):
                   </label>
                   <Input
@@ -2068,7 +2087,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs text-[#969BA8] block mb-1">Maker Fee (bps, 10 = 0.10%):</label>
+                  <label className="text-xs text-[#A1AFB8] block mb-1">Maker Fee (bps, 10 = 0.10%):</label>
                   <Input
                     type="number"
                     value={wizardData.makerFeeBps.toString()}
@@ -2076,7 +2095,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                   />
                 </div>
                 <div>
-                  <label className="text-xs text-[#969BA8] block mb-1">Taker Fee (bps, 20 = 0.20%):</label>
+                  <label className="text-xs text-[#A1AFB8] block mb-1">Taker Fee (bps, 20 = 0.20%):</label>
                   <Input
                     type="number"
                     value={wizardData.takerFeeBps.toString()}
@@ -2086,7 +2105,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
               </div>
 
               <div>
-                <label className="text-xs text-[#969BA8] block mb-1">Waktu Aktivasi Terjadwal (Opsional):</label>
+                <label className="text-xs text-[#A1AFB8] block mb-1">Waktu Aktivasi Terjadwal (Opsional):</label>
                 <Input
                   type="datetime-local"
                   value={wizardData.scheduledAt}
@@ -2099,78 +2118,78 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
           {/* STEP 5: Review Summary */}
           {wizardStep === 5 && (
             <div className="space-y-4">
-              <h3 className="text-base font-bold text-[#F5F5F7]">Step 5: Ringkasan & Verifikasi Invariant</h3>
-              <div className="p-4 rounded-lg bg-[#0E1016] border border-[#292C38] space-y-2 text-xs font-mono">
+              <h3 className="text-base font-bold text-[#E4EBEF]">Step 5: Ringkasan & Verifikasi Invariant</h3>
+              <div className="p-4 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-2 text-xs font-mono">
                 <div className="flex justify-between">
-                  <span className="text-[#686D7A]">Trading Pair:</span>
-                  <span className="text-[#F5F5F7] font-bold">{wizardData.symbol}-{wizardData.quoteCurrency}</span>
+                  <span className="text-[#71818B]">Trading Pair:</span>
+                  <span className="text-[#E4EBEF] font-bold">{wizardData.symbol}-{wizardData.quoteCurrency}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#686D7A]">Quote Currency:</span>
-                  <span className="text-[#00C087] font-bold">{wizardData.quoteCurrency}</span>
+                  <span className="text-[#71818B]">Quote Currency:</span>
+                  <span className="text-[#16A879] font-bold">{wizardData.quoteCurrency}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#686D7A]">Aset / Jaringan:</span>
-                  <span className="text-[#F5F5F7]">{wizardData.name} ({wizardData.network})</span>
+                  <span className="text-[#71818B]">Aset / Jaringan:</span>
+                  <span className="text-[#E4EBEF]">{wizardData.name} ({wizardData.network})</span>
                 </div>
                 {wizardData.contractAddress && (
                   <div className="flex justify-between">
-                    <span className="text-[#686D7A]">Kontrak:</span>
-                    <span className="text-[#F5F5F7] truncate max-w-xs">{wizardData.contractAddress}</span>
+                    <span className="text-[#71818B]">Kontrak:</span>
+                    <span className="text-[#E4EBEF] truncate max-w-xs">{wizardData.contractAddress}</span>
                   </div>
                 )}
                 <div className="flex justify-between">
-                  <span className="text-[#686D7A]">Jadwal Deposit:</span>
-                  <span className={wizardData.depositEnabled ? "text-[#00C087] font-bold" : "text-[#EB3458]"}>
+                  <span className="text-[#71818B]">Jadwal Deposit:</span>
+                  <span className={wizardData.depositEnabled ? "text-[#16A879] font-bold" : "text-[#8DA5B1]"}>
                     {wizardData.depositEnabled 
                       ? (wizardData.depositOpenMode === 'SCHEDULED' && wizardData.depositOpenedAt ? `Terjadwal (${wizardData.depositOpenedAt})` : 'Buka Langsung (Immediate)')
                       : 'Ditutup'}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#686D7A]">Jadwal Withdrawal:</span>
-                  <span className={wizardData.withdrawalEnabled ? "text-[#00C087] font-bold" : "text-[#EB3458]"}>
+                  <span className="text-[#71818B]">Jadwal Withdrawal:</span>
+                  <span className={wizardData.withdrawalEnabled ? "text-[#16A879] font-bold" : "text-[#8DA5B1]"}>
                     {wizardData.withdrawalEnabled 
                       ? (wizardData.withdrawalOpenMode === 'SCHEDULED' && wizardData.withdrawalOpenedAt ? `Terjadwal (${wizardData.withdrawalOpenedAt})` : 'Buka Langsung (Immediate)')
                       : 'Ditutup'}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#686D7A]">Akun Market Maker (MM):</span>
-                  <span className="text-[#5B9DFF] font-bold">
+                  <span className="text-[#71818B]">Akun Market Maker (MM):</span>
+                  <span className="text-[#6D9FE8] font-bold">
                     {eligibleAccounts.find(a => a.id === wizardData.marketMakerAccountId)?.email || wizardData.marketMakerAccountId}
                   </span>
                 </div>
                 {wizardData.projectOwnerAccountId && (
                   <div className="flex justify-between">
-                    <span className="text-[#686D7A]">Akun Trader Project:</span>
-                    <span className="text-[#00C087] font-bold">
+                    <span className="text-[#71818B]">Akun Trader Project:</span>
+                    <span className="text-[#16A879] font-bold">
                       {eligibleAccounts.find(a => a.id === wizardData.projectOwnerAccountId)?.email || wizardData.projectOwnerAccountId}
                     </span>
                   </div>
                 )}
                 <div className="flex justify-between">
-                  <span className="text-[#686D7A]">Tick Size:</span>
-                  <span className="text-[#00C087] font-bold">
+                  <span className="text-[#71818B]">Tick Size:</span>
+                  <span className="text-[#16A879] font-bold">
                     {formatQuotePrice(wizardData.tickSize, wizardData.quoteCurrency, wizardData.quoteCurrency === 'USDT' ? 6 : 2, true)} ({wizardData.tickSize} units)
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#686D7A]">Lot Size:</span>
-                  <span className="text-[#F5F5F7]">
+                  <span className="text-[#71818B]">Lot Size:</span>
+                  <span className="text-[#E4EBEF]">
                     {formatUnitsToDecimal(wizardData.lotSize || '0', wizardData.decimals ?? 8, true)} {wizardData.symbol} ({wizardData.lotSize} base units)
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#686D7A]">Fee Structure:</span>
-                  <span className="text-[#F5F5F7]">Maker: {wizardData.makerFeeBps} bps | Taker: {wizardData.takerFeeBps} bps</span>
+                  <span className="text-[#71818B]">Fee Structure:</span>
+                  <span className="text-[#E4EBEF]">Maker: {wizardData.makerFeeBps} bps | Taker: {wizardData.takerFeeBps} bps</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-[#686D7A]">Maker Admin Identity:</span>
-                  <span className="text-[#EB3458] font-bold">{currentUser?.email}</span>
+                  <span className="text-[#71818B]">Maker Admin Identity:</span>
+                  <span className="text-[#8DA5B1] font-bold">{currentUser?.email}</span>
                 </div>
               </div>
-              <div className="p-3 rounded-lg bg-[#5B9DFF]/10 border border-[#5B9DFF]/30 text-xs text-[#5B9DFF]">
+              <div className="p-3 rounded-[7px] bg-[#6D9FE8]/10 border border-[#6D9FE8]/30 text-xs text-[#6D9FE8]">
                 <strong>Prinsip Maker-Checker:</strong> Setelah draft dibuat dan diajukan, Checker admin lain harus memverifikasi parameter deposit, withdrawal, dan akun MM sebelum persetujuan final.
               </div>
             </div>
@@ -2179,9 +2198,9 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
           {/* STEP 6: Submit */}
           {wizardStep === 6 && (
             <div className="space-y-4 text-center py-4">
-              <CheckCircle2 className="w-12 h-12 text-[#00C087] mx-auto mb-2" />
-              <h3 className="text-lg font-bold text-[#F5F5F7]">Konfirmasi Pembuatan Listing</h3>
-              <p className="text-xs text-[#969BA8] max-w-md mx-auto">
+              <CheckCircle2 className="w-12 h-12 text-[#16A879] mx-auto mb-2" />
+              <h3 className="text-lg font-bold text-[#E4EBEF]">Konfirmasi Pembuatan Listing</h3>
+              <p className="text-xs text-[#A1AFB8] max-w-md mx-auto">
                 Sistem akan memvalidasi parameter dan menyimpannya sebagai DRAFT. Semua perubahan akan dicatat dalam audit trail kriptografis.
               </p>
               <div className="pt-4">
@@ -2197,7 +2216,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
           )}
 
           {/* Wizard Controls */}
-          <div className="flex items-center justify-between pt-4 border-t border-[#292C38]">
+          <div className="flex items-center justify-between pt-4 border-t border-[#202B34]">
             <Button
               variant="outline"
               size="sm"
@@ -2236,37 +2255,37 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
           title={`Persetujuan Listing: ${selectedListing.symbol}`}
         >
           <div className="space-y-4">
-            <div className="p-3 rounded-lg bg-[#5B9DFF]/10 border border-[#5B9DFF]/30 text-xs text-[#5B9DFF]">
+            <div className="p-3 rounded-[7px] bg-[#6D9FE8]/10 border border-[#6D9FE8]/30 text-xs text-[#6D9FE8]">
               Anda bertindak sebagai <strong>Checker</strong> untuk listing versi <strong>v{selectedListing.version}</strong> yang dibuat oleh <strong>{selectedListing.creatorEmail}</strong>.
             </div>
 
             {/* Checker Parameter Verification Card */}
-            <div className="p-3 rounded-lg bg-[#0E1016] border border-[#292C38] text-xs font-mono space-y-1.5">
-              <span className="text-[10px] text-[#686D7A] uppercase font-bold block mb-1">Verifikasi Parameter Likuiditas & Akun:</span>
+            <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34] text-xs font-mono space-y-1.5">
+              <span className="text-[10px] text-[#71818B] uppercase font-bold block mb-1">Verifikasi Parameter Likuiditas & Akun:</span>
               <div className="flex justify-between">
-                <span className="text-[#969BA8]">Akun Market Maker (MM):</span>
-                <span className="text-[#5B9DFF] font-bold">{selectedListing.marketMakerEmail || selectedListing.marketMakerAccountId || 'mm@dimonex.id'}</span>
+                <span className="text-[#A1AFB8]">Akun Market Maker (MM):</span>
+                <span className="text-[#6D9FE8] font-bold">{selectedListing.marketMakerEmail || selectedListing.marketMakerAccountId || 'mm@dimonex.id'}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-[#969BA8]">Akun Trader Project:</span>
-                <span className="text-[#00C087] font-bold">{selectedListing.projectOwnerEmail || selectedListing.projectOwnerAccountId || '-'}</span>
+                <span className="text-[#A1AFB8]">Akun Trader Project:</span>
+                <span className="text-[#16A879] font-bold">{selectedListing.projectOwnerEmail || selectedListing.projectOwnerAccountId || '-'}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-[#969BA8]">Jalur Deposit:</span>
-                <span className={selectedListing.depositStatus === 'OPEN' ? "text-[#00C087] font-bold" : "text-[#EB3458]"}>
+                <span className="text-[#A1AFB8]">Jalur Deposit:</span>
+                <span className={selectedListing.depositStatus === 'OPEN' ? "text-[#16A879] font-bold" : "text-[#8DA5B1]"}>
                   {selectedListing.depositStatus || 'OPEN'}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-[#969BA8]">Jalur Withdrawal:</span>
-                <span className={selectedListing.withdrawalStatus === 'OPEN' ? "text-[#00C087] font-bold" : "text-[#EB3458]"}>
+                <span className="text-[#A1AFB8]">Jalur Withdrawal:</span>
+                <span className={selectedListing.withdrawalStatus === 'OPEN' ? "text-[#16A879] font-bold" : "text-[#8DA5B1]"}>
                   {selectedListing.withdrawalStatus || 'OPEN'}
                 </span>
               </div>
             </div>
 
             <div>
-              <label className="text-xs text-[#969BA8] block mb-1">
+              <label className="text-xs text-[#A1AFB8] block mb-1">
                 Alasan Persetujuan (Mandatori minimal 5 karakter):
               </label>
               <textarea
@@ -2274,7 +2293,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 onChange={e => setReviewReason(e.target.value)}
                 placeholder="Contoh: Audit kontrak terverifikasi, likuiditas awal siap, dan uji stres matching engine berhasil."
                 rows={3}
-                className="w-full bg-[#0E1016] border border-[#292C38] rounded-lg p-2.5 text-xs text-[#F5F5F7] outline-none focus:border-[#EB3458]"
+                className="w-full bg-[#111820] border border-[#202B34] rounded-[7px] p-2.5 text-xs text-[#E4EBEF] outline-none focus:border-[#8DA5B1]"
               />
             </div>
 
@@ -2303,12 +2322,12 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
           title={`Penolakan Listing: ${selectedListing.symbol}`}
         >
           <div className="space-y-4">
-            <div className="p-3 rounded-lg bg-[#EB3458]/10 border border-[#EB3458]/30 text-xs text-[#EB3458]">
+            <div className="p-3 rounded-[7px] bg-[#8DA5B1]/10 border border-[#8DA5B1]/30 text-xs text-[#8DA5B1]">
               Tindakan ini akan menolak listing dan mencatat alasan penolakan dalam audit trail permanen.
             </div>
 
             <div>
-              <label className="text-xs text-[#969BA8] block mb-1">
+              <label className="text-xs text-[#A1AFB8] block mb-1">
                 Alasan Penolakan (Mandatori minimal 5 karakter):
               </label>
               <textarea
@@ -2316,7 +2335,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 onChange={e => setReviewReason(e.target.value)}
                 placeholder="Contoh: Kontrak token belum diaudit oleh auditor independen terpercaya."
                 rows={3}
-                className="w-full bg-[#0E1016] border border-[#292C38] rounded-lg p-2.5 text-xs text-[#F5F5F7] outline-none focus:border-[#EB3458]"
+                className="w-full bg-[#111820] border border-[#202B34] rounded-[7px] p-2.5 text-xs text-[#E4EBEF] outline-none focus:border-[#8DA5B1]"
               />
             </div>
 
@@ -2345,57 +2364,57 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
           title={`Listing Detail & Manajemen Likuiditas: ${selectedListing.symbol}`}
         >
           <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1 text-xs font-mono">
-            <div className="grid grid-cols-2 gap-3 p-3 rounded-lg bg-[#0E1016] border border-[#292C38]">
+            <div className="grid grid-cols-2 gap-3 p-3 rounded-[7px] bg-[#111820] border border-[#202B34]">
               <div>
-                <span className="text-[#686D7A] block">Listing ID:</span>
+                <span className="text-[#71818B] block">Listing ID:</span>
                 <span className="text-white truncate block">{selectedListing.id}</span>
               </div>
               <div>
-                <span className="text-[#686D7A] block">Status:</span>
+                <span className="text-[#71818B] block">Status:</span>
                 <div>{renderStatusBadge(selectedListing.status)}</div>
               </div>
               <div>
-                <span className="text-[#686D7A] block">Maker Admin:</span>
-                <span className="text-[#EB3458] font-bold block">{selectedListing.creatorEmail}</span>
+                <span className="text-[#71818B] block">Maker Admin:</span>
+                <span className="text-[#8DA5B1] font-bold block">{selectedListing.creatorEmail}</span>
               </div>
               <div>
-                <span className="text-[#686D7A] block">Checker Admin:</span>
-                <span className="text-[#5B9DFF] font-bold block">{selectedListing.approval?.reviewerEmail || '-'}</span>
+                <span className="text-[#71818B] block">Checker Admin:</span>
+                <span className="text-[#6D9FE8] font-bold block">{selectedListing.approval?.reviewerEmail || '-'}</span>
               </div>
               <div>
-                <span className="text-[#686D7A] block">Akun Market Maker (MM):</span>
-                <span className="text-[#5B9DFF] font-bold block truncate" title={selectedListing.marketMakerEmail}>
+                <span className="text-[#71818B] block">Akun Market Maker (MM):</span>
+                <span className="text-[#6D9FE8] font-bold block truncate" title={selectedListing.marketMakerEmail}>
                   {selectedListing.marketMakerEmail || selectedListing.marketMakerAccountId || 'mm@dimonex.id'}
                 </span>
               </div>
               <div>
-                <span className="text-[#686D7A] block">Akun Trader Project:</span>
-                <span className="text-[#00C087] font-bold block truncate" title={selectedListing.projectOwnerEmail}>
+                <span className="text-[#71818B] block">Akun Trader Project:</span>
+                <span className="text-[#16A879] font-bold block truncate" title={selectedListing.projectOwnerEmail}>
                   {selectedListing.projectOwnerEmail || selectedListing.projectOwnerAccountId || '-'}
                 </span>
               </div>
             </div>
 
             {/* Deposit & Withdrawal Status and Toggle Controls */}
-            <div className="p-3 rounded-lg bg-[#0E1016] border border-[#292C38] space-y-3">
-              <h4 className="text-xs font-bold text-[#F5F5F7] font-sans flex items-center justify-between">
+            <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-3">
+              <h4 className="text-xs font-bold text-[#E4EBEF] font-sans flex items-center justify-between">
                 <span>Status Deposit & Withdrawal Token</span>
-                <span className="text-[10px] text-[#686D7A]">Live Control</span>
+                <span className="text-[10px] text-[#71818B]">Live Control</span>
               </h4>
 
               <div className="grid grid-cols-2 gap-3">
                 {/* Deposit status card */}
-                <div className="p-2.5 rounded bg-[#15171F] border border-[#292C38] space-y-2">
+                <div className="p-2.5 rounded bg-[#141C24] border border-[#202B34] space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-[#969BA8]">Jalur Deposit:</span>
+                    <span className="text-[#A1AFB8]">Jalur Deposit:</span>
                     <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                      selectedListing.depositStatus === 'OPEN' ? 'bg-[#00C087]/20 text-[#00C087]' : 'bg-[#EB3458]/20 text-[#EB3458]'
+                      selectedListing.depositStatus === 'OPEN' ? 'bg-[#16A879]/20 text-[#16A879]' : 'bg-[#401F27] text-[#EA5B65]'
                     }`}>
                       {selectedListing.depositStatus || 'OPEN'}
                     </span>
                   </div>
                   {selectedListing.depositOpenedAt && (
-                    <span className="text-[10px] text-[#686D7A] block">
+                    <span className="text-[10px] text-[#71818B] block">
                       Buka: {new Date(selectedListing.depositOpenedAt).toLocaleString()}
                     </span>
                   )}
@@ -2404,24 +2423,24 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                       handleToggleDeposit(selectedListing.id, selectedListing.depositStatus === 'OPEN');
                       setShowDetailModal(false);
                     }}
-                    className="w-full py-1 text-[11px] rounded bg-[#292C38] hover:bg-[#EB3458]/20 hover:text-[#EB3458] text-[#F5F5F7] font-sans font-semibold transition-colors"
+                    className="w-full py-1 text-[11px] rounded bg-[#1D2832] hover:bg-[#1D2832] hover:text-[#E4EBEF] text-[#E4EBEF] font-sans font-semibold transition-colors"
                   >
                     {selectedListing.depositStatus === 'OPEN' ? 'Tutup Jalur Deposit' : 'Buka Jalur Deposit'}
                   </button>
                 </div>
 
                 {/* Withdrawal status card */}
-                <div className="p-2.5 rounded bg-[#15171F] border border-[#292C38] space-y-2">
+                <div className="p-2.5 rounded bg-[#141C24] border border-[#202B34] space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-[#969BA8]">Jalur Withdrawal:</span>
+                    <span className="text-[#A1AFB8]">Jalur Withdrawal:</span>
                     <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                      selectedListing.withdrawalStatus === 'OPEN' ? 'bg-[#00C087]/20 text-[#00C087]' : 'bg-[#EB3458]/20 text-[#EB3458]'
+                      selectedListing.withdrawalStatus === 'OPEN' ? 'bg-[#16A879]/20 text-[#16A879]' : 'bg-[#401F27] text-[#EA5B65]'
                     }`}>
                       {selectedListing.withdrawalStatus || 'OPEN'}
                     </span>
                   </div>
                   {selectedListing.withdrawalOpenedAt && (
-                    <span className="text-[10px] text-[#686D7A] block">
+                    <span className="text-[10px] text-[#71818B] block">
                       Buka: {new Date(selectedListing.withdrawalOpenedAt).toLocaleString()}
                     </span>
                   )}
@@ -2430,7 +2449,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                       handleToggleWithdraw(selectedListing.id, selectedListing.withdrawalStatus === 'OPEN');
                       setShowDetailModal(false);
                     }}
-                    className="w-full py-1 text-[11px] rounded bg-[#292C38] hover:bg-[#EB3458]/20 hover:text-[#EB3458] text-[#F5F5F7] font-sans font-semibold transition-colors"
+                    className="w-full py-1 text-[11px] rounded bg-[#1D2832] hover:bg-[#1D2832] hover:text-[#E4EBEF] text-[#E4EBEF] font-sans font-semibold transition-colors"
                   >
                     {selectedListing.withdrawalStatus === 'OPEN' ? 'Tutup Jalur Withdrawal' : 'Buka Jalur Withdrawal'}
                   </button>
@@ -2440,22 +2459,22 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
 
             {/* Cryptographic Audit Events */}
             <div className="pt-2">
-              <h4 className="text-xs font-bold text-[#F5F5F7] font-sans mb-2 flex items-center gap-1.5">
-                <FileText className="w-3.5 h-3.5 text-[#EB3458]" />
+              <h4 className="text-xs font-bold text-[#E4EBEF] font-sans mb-2 flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5 text-[#8DA5B1]" />
                 Cryptographic Audit Trail (SHA-256 Hash Chain)
               </h4>
               <div className="space-y-2">
                 {(!selectedListing.auditEvents || selectedListing.auditEvents.length === 0) ? (
-                  <span className="text-[#686D7A] block text-center py-4">Belum ada audit event tersimpan.</span>
+                  <span className="text-[#71818B] block text-center py-4">Belum ada audit event tersimpan.</span>
                 ) : (
                   selectedListing.auditEvents.map((evt: any) => (
-                    <div key={evt.id} className="p-2.5 rounded bg-[#0E1016] border border-[#292C38] space-y-1">
+                    <div key={evt.id} className="p-2.5 rounded bg-[#111820] border border-[#202B34] space-y-1">
                       <div className="flex items-center justify-between text-[11px]">
-                        <span className="font-bold text-[#EB3458]">{evt.eventType}</span>
-                        <span className="text-[#686D7A]">{new Date(evt.createdAt).toLocaleString()}</span>
+                        <span className="font-bold text-[#8DA5B1]">{evt.eventType}</span>
+                        <span className="text-[#71818B]">{new Date(evt.createdAt).toLocaleString()}</span>
                       </div>
-                      <div className="text-[10px] text-[#969BA8]">{evt.reason}</div>
-                      <div className="text-[9px] text-[#686D7A] truncate font-mono">
+                      <div className="text-[10px] text-[#A1AFB8]">{evt.reason}</div>
+                      <div className="text-[9px] text-[#71818B] truncate font-mono">
                         Hash: {evt.currentHash?.slice(0, 16)}... | Prev: {evt.previousHash?.slice(0, 16)}...
                       </div>
                     </div>
@@ -2474,71 +2493,71 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
           onClose={() => setShowTokenEditModal(false)}
           title={`Edit Parameter & Limit: ${tokenEditForm.pairId}`}
         >
-          <div className="space-y-5 text-xs text-[#F5F5F7]">
+          <div className="space-y-5 text-xs text-[#E4EBEF]">
             {/* Info Box */}
-            <div className="p-3.5 rounded-lg bg-[#0E1016] border border-blue-500/30 space-y-1.5">
+            <div className="p-3.5 rounded-[7px] bg-[#111820] border border-blue-500/30 space-y-1.5">
               <span className="text-xs font-bold text-blue-400 flex items-center gap-1.5">
                 <Info className="w-4 h-4" />
                 Spesifikasi Presisi Token {tokenEditForm.baseCurrency}
               </span>
-              <p className="text-[11px] text-slate-300 leading-relaxed">
+              <p className="text-[11px] text-[#E4EBEF] leading-relaxed">
                 Token ini menggunakan <strong>{tokenEditForm.baseDecimals} desimal</strong> (1 {tokenEditForm.baseCurrency} = {(10n ** BigInt(tokenEditForm.baseDecimals ?? 8)).toLocaleString('id-ID')} unit terkecil).
                 Untuk mencegah bot MM ditolak saat menempatkan order berulang, pastikan kuantitas maksimum cukup besar (misal: 10.000.000 token).
               </p>
             </div>
 
             {/* Input Mode Switcher */}
-            <div className="flex items-center justify-between p-2.5 rounded-lg bg-[#15171F] border border-[#292C38]">
+            <div className="flex items-center justify-between p-2.5 rounded-[7px] bg-[#141C24] border border-[#202B34]">
               <span className="text-xs font-semibold text-white">Mode Pengisian Limit:</span>
-              <div className="flex gap-1.5 bg-[#0E1016] p-1 rounded border border-[#292C38]">
+              <div className="flex gap-1.5 bg-[#111820] p-1 rounded border border-[#202B34]">
                 <button
                   type="button"
                   onClick={() => setTokenEditForm(prev => ({ ...prev, inputMode: 'TOKENS' }))}
                   className={`px-3 py-1 rounded text-xs font-bold transition-colors ${
-                    tokenEditForm.inputMode === 'TOKENS' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                    tokenEditForm.inputMode === 'TOKENS' ? 'bg-[#8DA5B1] text-[#090D12]' : 'text-[#A1AFB8] hover:text-white'
                   }`}
                 >
-                  🪙 Jumlah Token (Human)
+                  Jumlah Token (Human)
                 </button>
                 <button
                   type="button"
                   onClick={() => setTokenEditForm(prev => ({ ...prev, inputMode: 'ATOMIC' }))}
                   className={`px-3 py-1 rounded text-xs font-bold transition-colors ${
-                    tokenEditForm.inputMode === 'ATOMIC' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                    tokenEditForm.inputMode === 'ATOMIC' ? 'bg-[#8DA5B1] text-[#090D12]' : 'text-[#A1AFB8] hover:text-white'
                   }`}
                 >
-                  🔢 Unit Atomik (BigInt)
+                  Unit Atomik (BigInt)
                 </button>
               </div>
             </div>
 
             {/* 1-Click Presets */}
             <div className="space-y-1.5">
-              <span className="text-[11px] text-[#969BA8] block">Preset Cepat Batas Order:</span>
+              <span className="text-[11px] text-[#A1AFB8] block">Preset Cepat Batas Order:</span>
               <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
                   onClick={() => applyTokenLimitPreset('STANDARD')}
-                  className="p-2 rounded bg-[#0E1016] border border-[#292C38] hover:border-blue-500 text-left transition-colors"
+                  className="p-2 rounded bg-[#111820] border border-[#202B34] hover:border-blue-500 text-left transition-colors"
                 >
                   <span className="text-[11px] font-bold text-white block">Standar (1 - 10M)</span>
-                  <span className="text-[10px] text-[#686D7A]">Cocok untuk altcoin/token umum</span>
+                  <span className="text-[10px] text-[#71818B]">Cocok untuk altcoin/token umum</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => applyTokenLimitPreset('MEME')}
-                  className="p-2 rounded bg-[#0E1016] border border-[#292C38] hover:border-blue-500 text-left transition-colors"
+                  className="p-2 rounded bg-[#111820] border border-[#202B34] hover:border-blue-500 text-left transition-colors"
                 >
                   <span className="text-[11px] font-bold text-white block">Meme (100 - 1B)</span>
-                  <span className="text-[10px] text-[#686D7A]">Suplai besar (DOGE, SHIB)</span>
+                  <span className="text-[10px] text-[#71818B]">Suplai besar (DOGE, SHIB)</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => applyTokenLimitPreset('HIGH_VALUE')}
-                  className="p-2 rounded bg-[#0E1016] border border-[#292C38] hover:border-blue-500 text-left transition-colors"
+                  className="p-2 rounded bg-[#111820] border border-[#202B34] hover:border-blue-500 text-left transition-colors"
                 >
                   <span className="text-[11px] font-bold text-white block">High-Value (0.0001 - 100)</span>
-                  <span className="text-[10px] text-[#686D7A]">Aset mahal (BTC, ETH)</span>
+                  <span className="text-[10px] text-[#71818B]">Aset mahal (BTC, ETH)</span>
                 </button>
               </div>
             </div>
@@ -2546,7 +2565,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
             {/* Min and Max Order Quantity Inputs */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="text-xs text-[#969BA8] block mb-1">
+                <label className="text-xs text-[#A1AFB8] block mb-1">
                   Kuantitas Minimum Order {tokenEditForm.inputMode === 'TOKENS' ? `(${tokenEditForm.baseCurrency})` : '(Unit Atomik)'}:
                 </label>
                 {tokenEditForm.inputMode === 'TOKENS' ? (
@@ -2580,7 +2599,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
               </div>
 
               <div>
-                <label className="text-xs text-[#969BA8] block mb-1">
+                <label className="text-xs text-[#A1AFB8] block mb-1">
                   Kuantitas Maksimum Order {tokenEditForm.inputMode === 'TOKENS' ? `(${tokenEditForm.baseCurrency})` : '(Unit Atomik)'}:
                 </label>
                 {tokenEditForm.inputMode === 'TOKENS' ? (
@@ -2615,39 +2634,39 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
             </div>
 
             {/* Fee Settings */}
-            <div className="grid grid-cols-2 gap-4 pt-2 border-t border-[#292C38]">
+            <div className="grid grid-cols-2 gap-4 pt-2 border-t border-[#202B34]">
               <div>
-                <label className="text-xs text-[#969BA8] block mb-1">Maker Fee (bps):</label>
+                <label className="text-xs text-[#A1AFB8] block mb-1">Maker Fee (bps):</label>
                 <Input
                   type="number"
                   value={tokenEditForm.makerFeeBps}
                   onChange={e => setTokenEditForm(prev => ({ ...prev, makerFeeBps: Number(e.target.value) }))}
                   placeholder="10"
                 />
-                <span className="text-[10px] text-[#686D7A] block mt-0.5">
+                <span className="text-[10px] text-[#71818B] block mt-0.5">
                   Setara {(Number(tokenEditForm.makerFeeBps || 0) / 100).toFixed(2)}%
                 </span>
               </div>
 
               <div>
-                <label className="text-xs text-[#969BA8] block mb-1">Taker Fee (bps):</label>
+                <label className="text-xs text-[#A1AFB8] block mb-1">Taker Fee (bps):</label>
                 <Input
                   type="number"
                   value={tokenEditForm.takerFeeBps}
                   onChange={e => setTokenEditForm(prev => ({ ...prev, takerFeeBps: Number(e.target.value) }))}
                   placeholder="20"
                 />
-                <span className="text-[10px] text-[#686D7A] block mt-0.5">
+                <span className="text-[10px] text-[#71818B] block mt-0.5">
                   Setara {(Number(tokenEditForm.takerFeeBps || 0) / 100).toFixed(2)}%
                 </span>
               </div>
             </div>
 
             {/* Trading Status Toggle */}
-            <div className="p-3 rounded-lg bg-[#0E1016] border border-[#292C38] flex items-center justify-between">
+            <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34] flex items-center justify-between">
               <div>
                 <span className="text-xs font-semibold text-white block">Status Operasional Pasar</span>
-                <span className="text-[11px] text-[#969BA8]">
+                <span className="text-[11px] text-[#A1AFB8]">
                   {tokenEditForm.isHalted ? 'Pasar dihentikan sementara (Order ditolak matching engine)' : 'Pasar aktif dapat menerima order transaksi'}
                 </span>
               </div>
@@ -2656,7 +2675,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                   type="checkbox"
                   checked={tokenEditForm.isHalted}
                   onChange={e => setTokenEditForm(prev => ({ ...prev, isHalted: e.target.checked }))}
-                  className="accent-[#EB3458] w-4 h-4"
+                  className="accent-[#8DA5B1] w-4 h-4"
                 />
                 <span className={tokenEditForm.isHalted ? 'text-amber-400' : 'text-emerald-400'}>
                   {tokenEditForm.isHalted ? 'HALTED' : 'ACTIVE'}
@@ -2665,7 +2684,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
             </div>
 
             {/* Modal Actions */}
-            <div className="flex justify-end gap-3 pt-3 border-t border-[#292C38]">
+            <div className="flex justify-end gap-3 pt-3 border-t border-[#202B34]">
               <Button
                 variant="outline"
                 size="sm"
@@ -2685,6 +2704,38 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
           </div>
         </Modal>
       )}
+
+      {/* 9. CONFIRMATION DIALOG: SUSPEND / RESUME MARKET */}
+      <ConfirmationDialog
+        isOpen={confirmDialog.isOpen}
+        onClose={() => setConfirmDialog({ isOpen: false, mode: null, listingId: '' })}
+        title={
+          confirmDialog.mode === 'SUSPEND'
+            ? 'Hentikan Sementara Market (Circuit Breaker)'
+            : 'Buka Kembali Perdagangan Market'
+        }
+        description={
+          confirmDialog.mode === 'SUSPEND'
+            ? 'Trading pada pasangan ini akan dihentikan sementara oleh matching engine. Catat alasan compliance atau operasional:'
+            : 'Pasangan perdagangan akan diaktifkan kembali pada matching engine. Catat alasan pembukaan kembali:'
+        }
+        confirmLabel={confirmDialog.mode === 'SUSPEND' ? 'Halt Market' : 'Resume Market'}
+        tone={confirmDialog.mode === 'SUSPEND' ? 'danger' : 'buy'}
+        fields={[
+          {
+            key: 'reason',
+            label: 'Alasan Tindakan (Audit Trail)',
+            defaultValue:
+              confirmDialog.mode === 'SUSPEND'
+                ? 'Pemeriksaan compliance darurat'
+                : 'Inspeksi selesai, parameter normal',
+            placeholder: 'Masukkan alasan jelas...',
+            required: true
+          }
+        ]}
+        isLoading={isConfirmSubmitting}
+        onConfirm={handleConfirmStatusChange}
+      />
     </div>
   );
 };

@@ -1,10 +1,10 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
- * 
+ *
  * src/App.tsx
- * DIMONEX Premium Cryptocurrency Exchange — Master Application
- * Black & Crimson-Pink Design System (#08090D, #15171F, #292C38, #EB3458, #00C087)
+ * DIMONEX Institutional Cryptocurrency Exchange — Master Application
+ * Obsidian Iridium Design System (#090D12, #141C24, #17212B, #8DA5B1, #16A879, #EA5B65)
  */
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
@@ -36,11 +36,15 @@ import { RewardsVipView } from './components/rewards/RewardsVipView.js';
 import { AuthModal } from './components/auth/AuthModal.js';
 import { ListingPortalPage } from './components/listing/ListingPortalPage.js';
 import { MobileHomeView } from './components/mobile/MobileHomeView.js';
+import { AssetIcon } from './components/ui/AssetIcon.js';
+import { PercentageChange } from './components/ui/PriceDisplay.js';
+import { StatusBadge } from './components/ui/StatusBadge.js';
+import { SegmentedTabs } from './components/ui/Tabs.js';
 import { TradingPairItem, TradeItem, OrderItem, UserProfile, UserBalance, AppLanguage } from './types/index.js';
-import { formatIDR, formatCrypto, formatQuotePrice, formatPairVolume } from './lib/formatters.js';
+import { formatCrypto, formatQuotePrice, formatPairVolume } from './lib/formatters.js';
 import { safeFetchJson } from './lib/safeFetch.js';
 import { isWebSocketSupported, reportWebSocketSuccess, reportWebSocketFailure } from './utils/wsHelper.js';
-import { TrendingUp, Zap, Wallet, BarChart3, Clock, AlertTriangle, ShieldCheck, ChevronDown, Search, Sparkles } from 'lucide-react';
+import { ChevronDown, Search, Zap, Bot, Building2 } from 'lucide-react';
 
 export type ActiveViewType =
   | 'OVERVIEW'
@@ -106,7 +110,6 @@ function AppContent() {
   const [orderHistory, setOrderHistory] = useState<OrderItem[]>([]);
   const [isLoadingOrders, setIsLoadingOrders] = useState(false);
 
-  // View navigation helper
   const handleSelectView = (view: ActiveViewType) => {
     setCurrentViewState(view);
     localStorage.setItem('dimonex_view', view);
@@ -130,7 +133,6 @@ function AppContent() {
     setDisplayCurrency(prev => (prev === 'IDR' ? 'USDT' : 'IDR'));
   };
 
-  // Instant demo account login
   const quickLogin = async (email: string, pass: string) => {
     try {
       const res = await safeFetchJson<any>('/api/auth/login', {
@@ -169,39 +171,6 @@ function AppContent() {
     setOrderHistory([]);
   };
 
-  // Fetch initial system data
-  const fetchInitialData = useCallback(async () => {
-    try {
-      const res = await safeFetchJson<TradingPairItem[]>('/api/trading/pairs');
-      if (res.ok && Array.isArray(res.data)) {
-        setPairs(res.data);
-      }
-    } catch (e) {}
-
-    const token = localStorage.getItem('dimonex_auth_token');
-    if (token) {
-      try {
-        const res = await safeFetchJson<any>('/api/auth/me', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (res.ok && res.data?.user) {
-          const data = res.data;
-          setUser({
-            ...data.user,
-            kycStatus: data.kyc?.status || 'approved',
-            kycTier: data.kyc?.tierLevel || 2,
-            fullName: data.kyc?.fullName || (data.user.email.includes('admin') ? 'Super Admin' : 'Active Trader')
-          });
-          refreshBalances();
-          refreshUserOrders();
-        } else if (res.status === 401) {
-          localStorage.removeItem('dimonex_auth_token');
-          setUser(null);
-        }
-      } catch (e) {}
-    }
-  }, []);
-
   const refreshBalances = useCallback(async () => {
     const token = localStorage.getItem('dimonex_auth_token');
     if (!token) return;
@@ -236,7 +205,6 @@ function AppContent() {
       ]);
       if (openRes.ok && Array.isArray(openRes.data)) {
         const serverOrders = openRes.data;
-        // If server returns empty array but we have recently created optimistic orders (<60s old), keep them
         setOpenOrders(prev => {
           const serverIds = new Set(serverOrders.map(o => o.id));
           const recentOptimistic = prev.filter(o => !serverIds.has(o.id) && (Date.now() - o.createdAt < 60000));
@@ -252,6 +220,38 @@ function AppContent() {
       setIsLoadingOrders(false);
     }
   }, []);
+
+  const fetchInitialData = useCallback(async () => {
+    try {
+      const res = await safeFetchJson<TradingPairItem[]>('/api/trading/pairs');
+      if (res.ok && Array.isArray(res.data)) {
+        setPairs(res.data);
+      }
+    } catch (e) {}
+
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (token) {
+      try {
+        const res = await safeFetchJson<any>('/api/auth/me', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok && res.data?.user) {
+          const data = res.data;
+          setUser({
+            ...data.user,
+            kycStatus: data.kyc?.status || 'approved',
+            kycTier: data.kyc?.tierLevel || 2,
+            fullName: data.kyc?.fullName || (data.user.email.includes('admin') ? 'Super Admin' : 'Active Trader')
+          });
+          refreshBalances();
+          refreshUserOrders();
+        } else if (res.status === 401) {
+          localStorage.removeItem('dimonex_auth_token');
+          setUser(null);
+        }
+      } catch (e) {}
+    }
+  }, [refreshBalances, refreshUserOrders]);
 
   const fetchPairMarketData = useCallback(async () => {
     if (!selectedPairId) return;
@@ -273,7 +273,6 @@ function AppContent() {
     } catch (e) {}
   }, [selectedPairId]);
 
-  // Initial load
   useEffect(() => {
     fetchInitialData();
   }, [fetchInitialData]);
@@ -282,7 +281,6 @@ function AppContent() {
     fetchPairMarketData();
   }, [fetchPairMarketData]);
 
-  // Polling fallback
   useEffect(() => {
     const interval = setInterval(() => {
       fetchPairMarketData();
@@ -293,7 +291,6 @@ function AppContent() {
     return () => clearInterval(interval);
   }, [fetchPairMarketData, refreshUserOrders]);
 
-  // WebSocket Live Sync
   useEffect(() => {
     let socket: WebSocket | null = null;
     let isDisposed = false;
@@ -317,9 +314,7 @@ function AppContent() {
           reportWebSocketFailure();
         };
 
-        socket.onclose = () => {
-          // Handled silently
-        };
+        socket.onclose = () => {};
 
         socket.onmessage = (event) => {
           try {
@@ -363,7 +358,6 @@ function AppContent() {
     }
     const targetPairId = orderPairId || selectedPairId;
     try {
-      // Optimistically remove from state so the UI responds immediately
       setOpenOrders(prev => prev.filter(o => o.id !== orderId));
 
       let res = await safeFetchJson<any>(`/api/trading/order/${orderId}?pairId=${encodeURIComponent(targetPairId)}`, {
@@ -371,7 +365,6 @@ function AppContent() {
         headers: { 'Authorization': `Bearer ${token}` }
       });
 
-      // If DELETE returned error, attempt fallback POST /api/trading/order/cancel
       if (!res.ok) {
         res = await safeFetchJson<any>('/api/trading/order/cancel', {
           method: 'POST',
@@ -389,7 +382,6 @@ function AppContent() {
         refreshBalances();
         fetchPairMarketData();
       } else {
-        // Revert by re-fetching if cancel failed
         refreshUserOrders();
         showToast('error', 'Gagal Membatalkan Order', res.error || 'Terjadi kesalahan saat membatalkan order');
       }
@@ -426,11 +418,9 @@ function AppContent() {
 
   const pairSymbol = selectedPair.symbol || `${selectedPair.baseCurrency}/${selectedPair.quoteCurrency}`;
   const changeNum = parseFloat(selectedPair.priceChangePercent24h || selectedPair.priceChange24h?.replace('+', '') || '0');
-  const isUp = changeNum >= 0;
 
   return (
-    <div className="min-h-screen bg-[#08090D] text-[#F5F5F7] flex flex-col font-sans selection:bg-[#EB3458]/30 selection:text-white">
-      {/* Top Navigation Bar */}
+    <div className="min-h-screen bg-[#090D12] text-[#E4EBEF] flex flex-col font-sans selection:bg-[#8DA5B1]/25 selection:text-white">
       <Navbar
         currentView={currentView}
         onSelectView={handleSelectView}
@@ -447,18 +437,14 @@ function AppContent() {
         onToggleCurrency={handleToggleCurrency}
       />
 
-      {/* Main Workspace: Left Sidebar + Center Viewport */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Desktop Sidebar */}
         <Sidebar
           currentView={currentView}
           onSelectView={handleSelectView}
           isAdmin={Boolean(user && (user.role?.toUpperCase() === 'ADMIN' || user.role?.toUpperCase() === 'SUPERADMIN'))}
         />
 
-        {/* Center Viewport */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
-          {/* VIEW: OVERVIEW */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-y-auto pb-16 md:pb-0">
           {currentView === 'OVERVIEW' && (
             <OverviewView
               pairs={pairs}
@@ -472,7 +458,6 @@ function AppContent() {
             />
           )}
 
-          {/* VIEW: MARKETS */}
           {currentView === 'MARKETS' && (
             <MarketsView
               pairs={pairs}
@@ -488,42 +473,38 @@ function AppContent() {
 
           {/* VIEW: SPOT TRADING TERMINAL */}
           {currentView === 'TRADE' && (
-            <div className="flex-1 flex flex-col p-3 lg:p-4 space-y-3 bg-[#08090D] overflow-y-auto">
+            <div className="flex-1 flex flex-col p-3 lg:p-4 space-y-3 bg-[#090D12] overflow-y-auto">
               {/* Pair Header & 24h Ticker Strip */}
-              <div className="flex flex-wrap items-center justify-between gap-4 p-3 rounded-xl bg-[#15171F] border border-[#292C38] shadow-lg">
-                <div className="flex flex-wrap items-center gap-3">
-                  {/* Interactive Pair Selector Dropdown */}
+              <div className="flex flex-wrap items-center justify-between gap-4 px-3.5 py-2.5 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+                <div className="flex flex-wrap items-center gap-3.5">
                   <div className="relative">
                     <button
+                      type="button"
                       onClick={() => setIsPairDropdownOpen(prev => !prev)}
-                      className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#0E1016] border border-[#292C38] hover:border-[#EB3458]/60 transition-all text-left group"
+                      className="flex items-center gap-2.5 px-2.5 py-1.5 rounded-[7px] bg-[#111820] border border-[#2B3944] hover:border-[#8DA5B1] transition-colors text-left cursor-pointer"
                     >
-                      <span className="text-base font-extrabold text-[#F5F5F7] font-mono group-hover:text-[#EB3458] transition-colors">
+                      <AssetIcon symbol={selectedPair.baseCurrency} size="xs" />
+                      <span className="text-sm sm:text-base font-semibold text-[#E4EBEF] font-mono">
                         {pairSymbol}
                       </span>
-                      <ChevronDown className={`w-3.5 h-3.5 text-[#969BA8] transition-transform ${isPairDropdownOpen ? 'rotate-180 text-[#EB3458]' : ''}`} />
-                      <span className="text-[10px] text-[#686D7A] font-mono uppercase bg-[#1C1F29] px-1.5 py-0.5 rounded border border-[#292C38]">
-                        SPOT
-                      </span>
+                      <ChevronDown
+                        className={`w-3.5 h-3.5 text-[#71818B] transition-transform ${
+                          isPairDropdownOpen ? 'rotate-180 text-[#8DA5B1]' : ''
+                        }`}
+                      />
+                      <StatusBadge tone="neutral">SPOT</StatusBadge>
                       {(selectedPair.isNewListing || selectedPair.baseCurrency === 'SOL') && (
-                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-[#EB3458]/20 text-[#EB3458] font-bold border border-[#EB3458]/30">
-                          BARU
-                        </span>
+                        <StatusBadge tone="brand">NEW</StatusBadge>
                       )}
                     </button>
 
-                    {/* Popover Dropdown Menu */}
                     {isPairDropdownOpen && (
                       <>
-                        <div
-                          className="fixed inset-0 z-40"
-                          onClick={() => setIsPairDropdownOpen(false)}
-                        />
-                        <div className="absolute left-0 top-full mt-2 w-72 sm:w-80 rounded-xl bg-[#0E1016] border border-[#292C38] shadow-2xl p-3 z-50 animate-in fade-in zoom-in-95 duration-150">
-                          {/* Search Bar */}
+                        <div className="fixed inset-0 z-40" onClick={() => setIsPairDropdownOpen(false)} />
+                        <div className="absolute left-0 top-full mt-2 w-72 sm:w-80 rounded-[10px] bg-[#141C24] border border-[#2B3944] shadow-2xl p-3 z-50">
                           <div className="relative mb-2.5">
                             <label htmlFor="pair-search-input" className="sr-only">Cari koin atau pasar</label>
-                            <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#686D7A]" />
+                            <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-[#71818B]" />
                             <input
                               id="pair-search-input"
                               name="pairSearch"
@@ -532,25 +513,25 @@ function AppContent() {
                               aria-label="Cari koin atau pasar"
                               value={pairSearch}
                               onChange={e => setPairSearch(e.target.value)}
-                              className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#15171F] border border-[#292C38] rounded-lg text-[#F5F5F7] placeholder-[#686D7A] outline-none focus:border-[#EB3458]"
+                              className="w-full pl-8 pr-3 py-1.5 text-xs bg-[#111820] border border-[#2B3944] rounded-[7px] text-[#E4EBEF] placeholder-[#53616A] outline-none focus:border-[#8DA5B1]"
                             />
                           </div>
 
-                          {/* Filter Tabs */}
-                          <div className="flex items-center gap-1 mb-2 pb-2 border-b border-[#292C38]/60">
+                          <div className="flex items-center gap-1 mb-2 pb-2 border-b border-[#202B34]">
                             {[
-                              { id: 'ALL', label: 'Semua' },
-                              { id: 'IDR', label: 'Spot IDR' },
-                              { id: 'USDT', label: 'Spot USDT' },
-                              { id: 'NEW', label: '🔥 Baru Listing' },
+                              { id: 'ALL', label: 'All' },
+                              { id: 'IDR', label: 'IDR' },
+                              { id: 'USDT', label: 'USDT' },
+                              { id: 'NEW', label: 'New Listing' },
                             ].map(tab => (
                               <button
                                 key={tab.id}
+                                type="button"
                                 onClick={() => setPairFilterTab(tab.id as any)}
-                                className={`px-2 py-1 text-[11px] rounded transition-colors ${
+                                className={`px-2 py-1 text-[11px] rounded-[5px] transition-colors cursor-pointer ${
                                   pairFilterTab === tab.id
-                                    ? 'bg-[#1C1F29] text-[#EB3458] font-bold border border-[#292C38]'
-                                    : 'text-[#969BA8] hover:text-[#F5F5F7]'
+                                    ? 'bg-[#1D2832] text-[#E4EBEF] font-semibold border border-[#2B3944]'
+                                    : 'text-[#71818B] hover:text-[#E4EBEF]'
                                 }`}
                               >
                                 {tab.label}
@@ -558,13 +539,13 @@ function AppContent() {
                             ))}
                           </div>
 
-                          {/* Pair Items List */}
                           <div className="max-h-64 overflow-y-auto space-y-1 scrollbar-thin">
                             {pairs
                               .filter(p => {
                                 const sym = p.symbol || `${p.baseCurrency}/${p.quoteCurrency}`;
-                                const match = sym.toLowerCase().includes(pairSearch.toLowerCase()) ||
-                                              p.baseCurrency.toLowerCase().includes(pairSearch.toLowerCase());
+                                const match =
+                                  sym.toLowerCase().includes(pairSearch.toLowerCase()) ||
+                                  p.baseCurrency.toLowerCase().includes(pairSearch.toLowerCase());
                                 if (!match) return false;
                                 if (pairFilterTab === 'NEW') return p.isNewListing || p.baseCurrency === 'SOL';
                                 if (pairFilterTab === 'IDR') return p.quoteCurrency === 'IDR';
@@ -575,36 +556,33 @@ function AppContent() {
                                 const sym = `${p.baseCurrency}/${p.quoteCurrency}`;
                                 const isCurrent = p.id === selectedPairId;
                                 const chg = parseFloat(p.priceChangePercent24h || p.priceChange24h?.replace('+', '') || '0');
-                                const isPositive = chg >= 0;
 
                                 return (
                                   <button
                                     key={p.id}
+                                    type="button"
                                     onClick={() => {
                                       handleSelectPair(p.id);
                                       setIsPairDropdownOpen(false);
                                     }}
-                                    className={`w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-xs transition-colors ${
+                                    className={`w-full flex items-center justify-between px-2.5 py-2 rounded-[7px] text-xs transition-colors cursor-pointer ${
                                       isCurrent
-                                        ? 'bg-[#1C1F29] border border-[#EB3458]/40 text-[#F5F5F7]'
-                                        : 'hover:bg-[#15171F] text-[#969BA8]'
+                                        ? 'bg-[#1D2832] border border-[#40515D] text-[#E4EBEF]'
+                                        : 'hover:bg-[#17212B] text-[#A1AFB8]'
                                     }`}
                                   >
                                     <div className="flex items-center gap-2">
-                                      <span className="font-bold text-[#F5F5F7] font-mono">{sym}</span>
+                                      <AssetIcon symbol={p.baseCurrency} size="xs" />
+                                      <span className="font-semibold text-[#E4EBEF] font-mono">{sym}</span>
                                       {(p.isNewListing || p.baseCurrency === 'SOL') && (
-                                        <span className="text-[8px] px-1 py-0.2 rounded bg-[#EB3458]/20 text-[#EB3458] font-bold">
-                                          BARU
-                                        </span>
+                                        <StatusBadge tone="brand">NEW</StatusBadge>
                                       )}
                                     </div>
-                                    <div className="text-right font-mono">
-                                      <div className="font-semibold text-[#F5F5F7]">
+                                    <div className="text-right font-mono tabular-nums">
+                                      <div className="font-semibold text-[#E4EBEF]">
                                         {formatQuotePrice(p.lastPrice, p.quoteCurrency, p.quoteDecimals, true)}
                                       </div>
-                                      <div className={`text-[10px] font-bold ${isPositive ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
-                                        {isPositive ? '+' : ''}{chg.toFixed(2)}%
-                                      </div>
+                                      <PercentageChange value={chg} size="xs" />
                                     </div>
                                   </button>
                                 );
@@ -615,55 +593,60 @@ function AppContent() {
                     )}
                   </div>
 
-                  <div className="h-5 w-px bg-[#292C38] hidden sm:block" />
+                  <div className="h-5 w-px bg-[#202B34] hidden sm:block" />
 
-                  {/* Price and 24h Change */}
-                  <div className="flex items-baseline gap-2 font-mono">
-                    <span className="text-lg lg:text-xl font-extrabold text-[#F5F5F7]">
+                  <div className="flex items-baseline gap-2.5 font-mono tabular-nums">
+                    <span className="text-base lg:text-lg font-semibold text-[#E4EBEF]">
                       {formatQuotePrice(selectedPair.lastPrice, selectedPair.quoteCurrency, selectedPair.quoteDecimals, true)}
                     </span>
-                    <span className={`text-xs font-bold ${isUp ? 'text-[#00C087]' : 'text-[#EB3458]'}`}>
-                      {selectedPair.priceChange24h?.endsWith('%') ? selectedPair.priceChange24h : `${selectedPair.priceChange24h || '0.00'}%`}
-                    </span>
+                    <PercentageChange value={changeNum} size="sm" />
                   </div>
                 </div>
 
                 {/* 24h High, Low, Volume */}
-                <div className="flex flex-wrap items-center gap-4 text-xs font-mono">
+                <div className="flex flex-wrap items-center gap-5 text-xs font-mono tabular-nums">
                   <div>
-                    <span className="text-[10px] text-[#686D7A] block">24h Tertinggi</span>
-                    <span className="text-[#F5F5F7] font-semibold">{formatQuotePrice(selectedPair.high24h, selectedPair.quoteCurrency, selectedPair.quoteDecimals, true)}</span>
+                    <span className="text-[10px] font-sans text-[#71818B] block">24h High</span>
+                    <span className="text-[#E4EBEF] font-medium">
+                      {formatQuotePrice(selectedPair.high24h, selectedPair.quoteCurrency, selectedPair.quoteDecimals, true)}
+                    </span>
                   </div>
                   <div>
-                    <span className="text-[10px] text-[#686D7A] block">24h Terendah</span>
-                    <span className="text-[#F5F5F7] font-semibold">{formatQuotePrice(selectedPair.low24h, selectedPair.quoteCurrency, selectedPair.quoteDecimals, true)}</span>
+                    <span className="text-[10px] font-sans text-[#71818B] block">24h Low</span>
+                    <span className="text-[#E4EBEF] font-medium">
+                      {formatQuotePrice(selectedPair.low24h, selectedPair.quoteCurrency, selectedPair.quoteDecimals, true)}
+                    </span>
                   </div>
                   <div>
-                    <span className="text-[10px] text-[#686D7A] block">24h Vol ({selectedPair.baseCurrency})</span>
-                    <span className="text-[#F5F5F7] font-semibold">{formatCrypto(selectedPair.volume24h, selectedPair.baseDecimals)}</span>
+                    <span className="text-[10px] font-sans text-[#71818B] block">24h Vol ({selectedPair.baseCurrency})</span>
+                    <span className="text-[#E4EBEF] font-medium">
+                      {formatCrypto(selectedPair.volume24h, selectedPair.baseDecimals)}
+                    </span>
                   </div>
                   <div>
-                    <span className="text-[10px] text-[#686D7A] block">24h Vol ({selectedPair.quoteCurrency})</span>
-                    <span className="text-[#F5F5F7] font-semibold">{formatPairVolume(selectedPair.quoteVolume24h || '0', selectedPair.quoteCurrency, selectedPair.quoteDecimals)}</span>
+                    <span className="text-[10px] font-sans text-[#71818B] block">24h Vol ({selectedPair.quoteCurrency})</span>
+                    <span className="text-[#E4EBEF] font-medium">
+                      {formatPairVolume(selectedPair.quoteVolume24h || '0', selectedPair.quoteCurrency, selectedPair.quoteDecimals)}
+                    </span>
                   </div>
                   <div className="hidden sm:block">
-                    <span className="text-[10px] text-[#686D7A] block">Maker / Taker</span>
-                    <span className="text-[#EB3458] font-semibold">
+                    <span className="text-[10px] font-sans text-[#71818B] block">Maker / Taker</span>
+                    <span className="text-[#A5BAC4] font-medium">
                       {((selectedPair.makerFeeBps ?? 10) / 100).toFixed(2)}% / {((selectedPair.takerFeeBps ?? 20) / 100).toFixed(2)}%
                     </span>
                   </div>
                 </div>
               </div>
 
-              {/* Grid: Left Chart + Bottom Orders, Right OrderBook + Form */}
+              {/* Terminal Grid */}
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-start">
-                {/* Left 8 Cols: Candlestick Chart & User Orders Table */}
+                {/* Left 8 Cols: Chart & User Orders */}
                 <div className="lg:col-span-8 space-y-3">
-                  <div className="rounded-xl bg-[#15171F] border border-[#292C38] overflow-hidden shadow-xl p-1">
+                  <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
                     <TradingChart pair={selectedPair} recentTrades={recentTrades} />
                   </div>
 
-                  <div className="rounded-xl bg-[#15171F] border border-[#292C38] overflow-hidden shadow-xl">
+                  <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
                     <UserOrdersTable
                       openOrders={openOrders}
                       orderHistory={orderHistory}
@@ -676,7 +659,7 @@ function AppContent() {
                   </div>
                 </div>
 
-                {/* Right 4 Cols: Order Placement & Order Book / Trades */}
+                {/* Right 4 Cols: Order Form & Order Book / Depth / Trades */}
                 <div className="lg:col-span-4 space-y-3">
                   <OrderPlacementForm
                     pair={selectedPair}
@@ -691,37 +674,39 @@ function AppContent() {
                     onOpenAuthModal={() => setIsAuthModalOpen(true)}
                   />
 
-                  {/* Market Depth & Trades Hub */}
-                  <div className="rounded-xl bg-[#15171F] border border-[#292C38] overflow-hidden shadow-xl">
-                    <div className="flex items-center justify-between px-3 py-2 border-b border-[#292C38] bg-[#0E1016]">
+                  <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
+                    <div className="flex items-center justify-between px-3 py-2 border-b border-[#202B34] bg-[#111820]">
                       <div className="flex items-center gap-1">
                         <button
+                          type="button"
                           onClick={() => setMarketTab('BOOK')}
-                          className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors ${
+                          className={`px-2.5 py-1 text-xs font-semibold rounded-[6px] transition-colors cursor-pointer ${
                             marketTab === 'BOOK'
-                              ? 'bg-[#1C1F29] text-[#F5F5F7] border border-[#292C38]'
-                              : 'text-[#686D7A] hover:text-[#969BA8]'
+                              ? 'bg-[#1D2832] text-[#E4EBEF] border border-[#2B3944]'
+                              : 'text-[#71818B] hover:text-[#E4EBEF]'
                           }`}
                         >
                           Order Book
                         </button>
                         <button
+                          type="button"
                           onClick={() => setMarketTab('DEPTH')}
-                          className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors flex items-center gap-1.5 ${
+                          className={`px-2.5 py-1 text-xs font-semibold rounded-[6px] transition-colors flex items-center gap-1.5 cursor-pointer ${
                             marketTab === 'DEPTH'
-                              ? 'bg-[#1C1F29] text-[#00C087] border border-[#292C38]'
-                              : 'text-[#686D7A] hover:text-[#00C087]'
+                              ? 'bg-[#1D2832] text-[#E4EBEF] border border-[#2B3944]'
+                              : 'text-[#71818B] hover:text-[#E4EBEF]'
                           }`}
                         >
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#00C087]" />
+                          <span className="w-1.5 h-1.5 rounded-full bg-[#16A879]" />
                           Depth (D3)
                         </button>
                         <button
+                          type="button"
                           onClick={() => setMarketTab('TRADES')}
-                          className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors ${
+                          className={`px-2.5 py-1 text-xs font-semibold rounded-[6px] transition-colors cursor-pointer ${
                             marketTab === 'TRADES'
-                              ? 'bg-[#1C1F29] text-[#F5F5F7] border border-[#292C38]'
-                              : 'text-[#686D7A] hover:text-[#969BA8]'
+                              ? 'bg-[#1D2832] text-[#E4EBEF] border border-[#2B3944]'
+                              : 'text-[#71818B] hover:text-[#E4EBEF]'
                           }`}
                         >
                           Trades ({recentTrades.length})
@@ -729,7 +714,7 @@ function AppContent() {
                       </div>
                     </div>
 
-                    <div className="p-1">
+                    <div className="p-1.5">
                       {marketTab === 'BOOK' ? (
                         <OrderBookView
                           pair={selectedPair}
@@ -757,7 +742,6 @@ function AppContent() {
             </div>
           )}
 
-          {/* VIEW: FUTURES PERPETUAL TERMINAL */}
           {currentView === 'FUTURES' && (
             <FuturesTerminal
               pair={selectedPair}
@@ -765,10 +749,14 @@ function AppContent() {
               onSelectPair={handleSelectPair}
               user={user}
               displayCurrency={displayCurrency}
+              balances={balances}
+              depth={depth}
+              recentTrades={recentTrades}
+              onRefreshBalances={refreshBalances}
+              onOpenAuthModal={() => setIsAuthModalOpen(true)}
             />
           )}
 
-          {/* VIEW: WALLET / PORTFOLIO */}
           {currentView === 'WALLET' && (
             <WalletView
               balances={balances}
@@ -784,7 +772,6 @@ function AppContent() {
             />
           )}
 
-          {/* VIEW: DEPOSIT SHORTCUT */}
           {currentView === 'DEPOSIT' && (
             <WalletView
               balances={balances}
@@ -797,7 +784,6 @@ function AppContent() {
             />
           )}
 
-          {/* VIEW: WITHDRAW SHORTCUT */}
           {currentView === 'WITHDRAW' && (
             <WalletView
               balances={balances}
@@ -810,7 +796,6 @@ function AppContent() {
             />
           )}
 
-          {/* VIEW: ORDERS & HISTORY */}
           {(currentView === 'ORDERS' || currentView === 'TRANSACTIONS') && (
             <OrdersView
               openOrders={openOrders}
@@ -821,7 +806,6 @@ function AppContent() {
             />
           )}
 
-          {/* VIEW: COPY TRADING */}
           {currentView === 'COPY' && (
             <CopyTradingView
               user={user}
@@ -831,7 +815,6 @@ function AppContent() {
             />
           )}
 
-          {/* VIEW: INSTANT CONVERT */}
           {currentView === 'CONVERT' && (
             <ConvertView
               user={user}
@@ -843,7 +826,6 @@ function AppContent() {
             />
           )}
 
-          {/* VIEW: REWARDS & VIP CENTER */}
           {currentView === 'REWARDS' && (
             <RewardsVipView
               user={user}
@@ -853,44 +835,31 @@ function AppContent() {
             />
           )}
 
-          {/* VIEW: EARN VAULTS */}
           {currentView === 'EARN' && <EarnView />}
 
-          {/* VIEW: BOT ENGINE */}
           {currentView === 'BOT' && (
-            <div className="flex-1 flex flex-col p-4 bg-[#08090D] overflow-y-auto">
-              <div className="flex flex-wrap items-center gap-2 mb-4 obsidian-glass p-1 rounded-xl border border-white/10 w-fit">
-                <button
-                  onClick={() => setBotConsoleMode('STRATEGIES')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors ${
-                    botConsoleMode === 'STRATEGIES'
-                      ? 'bg-[#FF087F] text-white shadow-sm'
-                      : 'text-[#9298A6] hover:text-[#F5F5F7]'
-                  }`}
-                >
-                  ⚡ Bot Trading Strategies
-                </button>
-                <button
-                  onClick={() => setBotConsoleMode('AUTOMATED')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors ${
-                    botConsoleMode === 'AUTOMATED'
-                      ? 'bg-[#FF087F] text-white shadow-sm'
-                      : 'text-[#9298A6] hover:text-[#F5F5F7]'
-                  }`}
-                >
-                  🤖 Automated Quantitative Bots
-                </button>
-                <button
-                  onClick={() => setBotConsoleMode('MM_CONSOLE')}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors ${
-                    botConsoleMode === 'MM_CONSOLE'
-                      ? 'bg-[#FF087F] text-white shadow-sm'
-                      : 'text-[#9298A6] hover:text-[#F5F5F7]'
-                  }`}
-                >
-                  🏦 Market Maker Operator
-                </button>
-              </div>
+            <div className="flex-1 flex flex-col p-4 lg:p-6 bg-[#090D12] overflow-y-auto space-y-4">
+              <SegmentedTabs
+                activeTab={botConsoleMode}
+                onChange={setBotConsoleMode}
+                tabs={[
+                  {
+                    id: 'STRATEGIES',
+                    label: 'Bot Trading Strategies',
+                    icon: <Zap className="w-3.5 h-3.5" />,
+                  },
+                  {
+                    id: 'AUTOMATED',
+                    label: 'Automated Quantitative Bots',
+                    icon: <Bot className="w-3.5 h-3.5" />,
+                  },
+                  {
+                    id: 'MM_CONSOLE',
+                    label: 'Market Maker Operator',
+                    icon: <Building2 className="w-3.5 h-3.5" />,
+                  },
+                ]}
+              />
 
               {botConsoleMode === 'STRATEGIES' && (
                 <BotConsoleView
@@ -927,16 +896,7 @@ function AppContent() {
             </div>
           )}
 
-          {/* VIEW: SETTINGS & SECURITY */}
-          {currentView === 'SETTINGS' && (
-            <SecurityView
-              user={user}
-              onUserUpdated={fetchInitialData}
-              onOpenAuthModal={() => setIsAuthModalOpen(true)}
-            />
-          )}
-
-          {currentView === 'SECURITY' && (
+          {(currentView === 'SETTINGS' || currentView === 'SECURITY') && (
             <SecurityView
               user={user}
               onUserUpdated={fetchInitialData}
@@ -952,7 +912,6 @@ function AppContent() {
             />
           )}
 
-          {/* VIEW: TOKEN INITIAL LISTING PORTAL */}
           {currentView === 'LISTING' && (
             <ListingPortalPage
               user={user}
@@ -973,7 +932,6 @@ function AppContent() {
             />
           )}
 
-          {/* VIEW: MOBILE HOME */}
           {currentView === 'MOBILE_HOME' && (
             <MobileHomeView
               pairs={pairs}
@@ -985,33 +943,31 @@ function AppContent() {
         </div>
       </div>
 
-      {/* Mobile Bottom Navigation Bar (Hidden on desktop) */}
       <MobileBottomNav
         currentView={currentView}
         onSelectView={v => handleSelectView(v as ActiveViewType)}
       />
 
-      {/* Accessible Footer */}
-      <footer className="hidden md:flex border-t border-white/10 bg-[#08090D] py-3 px-6 text-xs text-[#9298A6] items-center justify-between select-none">
+      {/* Footer */}
+      <footer className="hidden md:flex border-t border-[#202B34] bg-[#090D12] py-2.5 px-6 text-xs text-[#71818B] items-center justify-between select-none">
         <div className="flex items-center gap-2">
-          <span className="font-display font-bold text-[#F5F5F7]">DOMINEX</span>
+          <span className="font-semibold text-[#E4EBEF] tracking-wider">DIMONEX</span>
           <span>·</span>
-          <span>Trade Beyond Limits</span>
+          <span>Precision in Every Trade</span>
           <span>·</span>
           <span>Double-Entry Atomic Ledger</span>
           <span>·</span>
           <span>FIFO In-Memory Matching Engine</span>
         </div>
-        <div className="flex items-center gap-4 text-[11px] font-mono">
-          <span>Engine Latency: &lt; 1.2ms</span>
+        <div className="flex items-center gap-3 text-[11px] font-mono">
+          <span>Zero-Float BigInt Architecture</span>
           <span>·</span>
-          <span className="text-[#16C784]">
-            {isWebSocketSupported() ? 'WebSocket 100% Operational' : 'REST Real-time Sync Active'}
+          <span className="text-[#35B887]">
+            {isWebSocketSupported() ? 'WebSocket Live Feed' : 'REST Sync Active'}
           </span>
         </div>
       </footer>
 
-      {/* Auth Modal */}
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}

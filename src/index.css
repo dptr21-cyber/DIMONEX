@@ -1,91 +1,195 @@
 @import "tailwindcss";
 
+@theme {
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  --color-background: #090D12;
+  --color-background-secondary: #111820;
+  --color-surface-primary: #141C24;
+  --color-surface-secondary: #17212B;
+  --color-surface-elevated: #1D2832;
+  --color-surface-hover: #222F3A;
+
+  --color-border-subtle: #202B34;
+  --color-border-default: #2B3944;
+  --color-border-strong: #40515D;
+
+  --color-brand-primary: #8DA5B1;
+  --color-brand-hover: #A5BAC4;
+  --color-brand-muted: #536B77;
+  --color-brand-highlight: #C1D0D6;
+
+  --color-text-primary: #E4EBEF;
+  --color-text-secondary: #A1AFB8;
+  --color-text-muted: #71818B;
+  --color-text-disabled: #53616A;
+
+  --color-buy: #16A879;
+  --color-buy-hover: #20BC8B;
+  --color-buy-muted: #12392F;
+
+  --color-sell: #EA5B65;
+  --color-sell-hover: #F16D76;
+  --color-sell-muted: #401F27;
+
+  --color-success: #35B887;
+  --color-warning: #D6A85C;
+  --color-danger: #EA5B65;
+  --color-info: #6D9FE8;
+
+  --radius-panel: 10px;
+  --radius-card: 10px;
+  --radius-input: 7px;
+  --radius-button: 7px;
+  --radius-modal: 12px;
+}
+
 @layer base {
   :root {
-    --bg-primary: #08090D;
-    --bg-secondary: #0D1017;
-    --bg-glass: rgba(23, 25, 35, 0.78);
-    --bg-elevated: #171923;
-    --accent-primary: #FF087F;
-    --accent-secondary: #D926FF;
-    --text-primary: #F5F5F7;
-    --text-secondary: #9298A6;
-    --border-glass: rgba(255, 255, 255, 0.09);
-    --bullish: #16C784;
-    --bearish: #EA3943;
-    --titanium: #C5C9D4;
+    --background: #090D12;
+    --background-secondary: #111820;
+    --surface-primary: #141C24;
+    --surface-secondary: #17212B;
+    --surface-elevated: #1D2832;
+    --surface-hover: #222F3A;
+
+    --border-subtle: #202B34;
+    --border-default: #2B3944;
+    --border-strong: #40515D;
+
+    --brand-primary: #8DA5B1;
+    --brand-hover: #A5BAC4;
+    --brand-muted: #536B77;
+    --brand-highlight: #C1D0D6;
+
+    --text-primary: #E4EBEF;
+    --text-secondary: #A1AFB8;
+    --text-muted: #71818B;
+    --text-disabled: #53616A;
+
+    --buy: #16A879;
+    --buy-hover: #20BC8B;
+    --buy-muted: #12392F;
+
+    --sell: #EA5B65;
+    --sell-hover: #F16D76;
+    --sell-muted: #401F27;
+
+    --success: #35B887;
+    --warning: #D6A85C;
+    --danger: #EA5B65;
+    --info: #6D9FE8;
+
+    /* Backward compatibility aliases */
+    --bg-primary: #090D12;
+    --bg-secondary: #111820;
+    --bg-elevated: #1D2832;
+    --accent-primary: #8DA5B1;
+    --accent-secondary: #A5BAC4;
+    --bullish: #16A879;
+    --bearish: #EA5B65;
+  }
+
+  html {
+    background-color: var(--background);
+    color: var(--text-primary);
+    color-scheme: dark;
   }
 
   body {
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
-    background-color: #08090D;
-    color: #F5F5F7;
+    font-family: var(--font-sans);
+    background-color: var(--background);
+    color: var(--text-primary);
     overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Headings with Space Grotesk */
   h1, h2, h3, .font-display {
-    font-family: 'Space Grotesk', 'Inter', sans-serif;
+    font-family: var(--font-sans);
+    letter-spacing: -0.015em;
   }
 
-  /* Financial data, tickers, order book numbers, and wallet values */
   .font-mono, .tabular-nums {
-    font-family: 'Roboto Mono', 'JetBrains Mono', ui-monospace, monospace;
+    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
   }
+
+  /* Accessible focus ring across all interactive elements */
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid var(--brand-primary);
+    outline-offset: 2px;
+  }
 }
 
-/* Obsidian Glass Surface classes */
-.obsidian-glass {
-  background: rgba(23, 25, 35, 0.78);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+/* Obsidian Iridium Matte Mineral Surfaces */
+.iridium-panel {
+  background-color: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
 }
 
-.obsidian-glass-hover {
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.obsidian-glass-hover:hover {
-  background: rgba(27, 30, 42, 0.88);
-  border-color: rgba(255, 8, 127, 0.25);
-  box-shadow: 0 4px 20px -4px rgba(255, 8, 127, 0.12);
+.iridium-surface-secondary {
+  background-color: var(--surface-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
 }
 
-.glow-magenta {
-  box-shadow: 0 0 20px -2px rgba(255, 8, 127, 0.35);
+.iridium-elevated {
+  background-color: var(--surface-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
 }
 
-.glow-magenta-sm {
-  box-shadow: 0 0 10px -1px rgba(255, 8, 127, 0.25);
+.iridium-card-interactive {
+  background-color: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  transition: background-color 150ms ease, border-color 150ms ease;
 }
 
-.text-gradient-magenta {
-  background: linear-gradient(135deg, #FF087F 0%, #D926FF 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+.iridium-card-interactive:hover {
+  background-color: var(--surface-secondary);
+  border-color: var(--border-default);
 }
 
-.bg-gradient-magenta {
-  background: linear-gradient(135deg, #FF087F 0%, #D926FF 100%);
-}
-
-.bg-gradient-magenta-subtle {
-  background: linear-gradient(135deg, rgba(255, 8, 127, 0.12) 0%, rgba(217, 38, 255, 0.08) 100%);
-}
-
-/* Custom scrollbars for high-density trading panels */
+/* Restraint for high-density scrollbars */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
 }
+
 ::-webkit-scrollbar-track {
-  background: #08090D;
+  background: var(--background);
 }
+
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 4px;
+  background: var(--border-default);
+  border-radius: 3px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 8, 127, 0.4);
+  background: var(--border-strong);
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
