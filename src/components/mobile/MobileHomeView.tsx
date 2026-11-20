@@ -21,6 +21,7 @@ import {
 import { TradingPairItem, UserBalance } from '../../types/index.js';
 import { formatQuotePrice, formatPairVolume, safeBigInt } from '../../lib/formatters.js';
 import { AssetIcon } from '../ui/AssetIcon.js';
+import { DIMONEX_HERO_BANNER_SRC } from '../ui/DimonexBrand.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
 import { SegmentedTabs } from '../ui/Tabs.js';
 
@@ -156,6 +157,16 @@ export const MobileHomeView: React.FC<MobileHomeViewProps> = ({
 
   return (
     <div className="flex-1 flex flex-col p-4 pb-20 bg-[#090D12] overflow-y-auto select-none space-y-4">
+      {/* Official DIMONEX Mobile Brand Banner */}
+      <div className="rounded-[10px] bg-[#070A0F] border border-[#202B34] overflow-hidden px-3 py-2.5 shadow-sm">
+        <img
+          src={DIMONEX_HERO_BANNER_SRC}
+          alt="DIMONEX — Precision in Every Trade"
+          className="w-full max-h-[96px] object-contain object-center mx-auto select-none"
+          draggable={false}
+        />
+      </div>
+
       {/* Mobile Balance Card */}
       <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4 shadow-sm">
         <div className="flex items-center justify-between text-[#A1AFB8] mb-1">

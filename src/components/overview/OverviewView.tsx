@@ -12,7 +12,6 @@ import {
   TrendingDown,
   Zap,
   ShieldCheck,
-  Hexagon,
   ChevronRight,
   Globe,
   Layers,
@@ -25,6 +24,11 @@ import { TradingPairItem, UserBalance, UserProfile } from '../../types/index.js'
 import { formatQuotePrice, formatPairVolume, formatCrypto, formatIDR } from '../../lib/formatters.js';
 import { Button } from '../ui/Button.js';
 import { AssetIcon } from '../ui/AssetIcon.js';
+import {
+  DimonexIcon,
+  DIMONEX_HERO_BANNER_SRC,
+  DIMONEX_EXCHANGE_BANNER_SRC,
+} from '../ui/DimonexBrand.js';
 import { PercentageChange } from '../ui/PriceDisplay.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
 import { LoadingState, EmptyState } from '../ui/StateViews.js';
@@ -155,14 +159,26 @@ export const OverviewView: React.FC<OverviewProps> = ({
 
   return (
     <div className="flex-1 flex flex-col p-4 lg:p-6 bg-[#090D12] overflow-y-auto space-y-6">
-      {/* 1. HERO SECTION — Obsidian Iridium Matte Instrument */}
-      <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-6 lg:p-8 shadow-sm">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-          <div className="lg:col-span-7 space-y-4">
-            <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-[5px] bg-[#17212B] border border-[#2B3944] text-[11px] font-mono font-medium text-[#A5BAC4] uppercase tracking-wider">
-              <Hexagon className="w-3.5 h-3.5 text-[#8DA5B1]" />
-              <span>DIMONEX OBSIDIAN IRIDIUM · SPOT & QUANT EXCHANGE</span>
-            </div>
+      {/* 1. HERO SECTION — Obsidian Iridium Matte Instrument with Official DIMONEX Banner */}
+      <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden shadow-sm">
+        {/* Official DIMONEX Brand Hero Banner */}
+        <div className="relative w-full bg-[#070A0F] border-b border-[#202B34] overflow-hidden">
+          <img
+            src={DIMONEX_HERO_BANNER_SRC}
+            alt="DIMONEX — Precision in Every Trade"
+            className="w-full max-h-[210px] sm:max-h-[250px] lg:max-h-[280px] object-contain object-center mx-auto select-none"
+            draggable={false}
+          />
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-[#141C24]/70 to-transparent" />
+        </div>
+
+        <div className="p-6 lg:p-8">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+            <div className="lg:col-span-7 space-y-4">
+              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-[5px] bg-[#17212B] border border-[#2B3944] text-[11px] font-mono font-medium text-[#A5BAC4] uppercase tracking-wider">
+                <DimonexIcon size="xs" />
+                <span>DIMONEX OBSIDIAN IRIDIUM · SPOT & QUANT EXCHANGE</span>
+              </div>
 
             <h1 className="text-3xl sm:text-4xl lg:text-[42px] font-bold text-[#E4EBEF] tracking-tight leading-[1.15]">
               Precision in Every Trade.
@@ -220,9 +236,7 @@ export const OverviewView: React.FC<OverviewProps> = ({
             <div className="rounded-[10px] bg-[#111820] border border-[#2B3944] p-5 space-y-4">
               <div className="flex items-center justify-between pb-3 border-b border-[#202B34]">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-[7px] bg-[#1D2832] border border-[#40515D] flex items-center justify-center">
-                    <Hexagon className="w-4 h-4 text-[#C1D0D6]" />
-                  </div>
+                  <DimonexIcon size="md" />
                   <div>
                     <span className="text-xs font-semibold text-[#E4EBEF] block">DIMONEX Core</span>
                     <span className="text-[10px] font-mono text-[#71818B] uppercase tracking-wider">
@@ -301,6 +315,7 @@ export const OverviewView: React.FC<OverviewProps> = ({
                 </div>
               )}
             </div>
+          </div>
           </div>
         </div>
       </div>
@@ -522,13 +537,23 @@ export const OverviewView: React.FC<OverviewProps> = ({
 
       {/* 5. INSTITUTIONAL INFRASTRUCTURE HIGHLIGHTS */}
       <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-6 space-y-5">
-        <div>
-          <h2 className="font-semibold text-base sm:text-lg text-[#E4EBEF]">
-            Institutional Infrastructure & Financial Integrity
-          </h2>
-          <p className="text-xs text-[#A1AFB8] mt-1">
-            Engineered with double-entry ledger immutability, deterministic FIFO matching, and real-time market depth synchronization.
-          </p>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-[#202B34]">
+          <div className="max-w-xl">
+            <h2 className="font-semibold text-base sm:text-lg text-[#E4EBEF]">
+              Institutional Infrastructure & Financial Integrity
+            </h2>
+            <p className="text-xs text-[#A1AFB8] mt-1 leading-relaxed">
+              Engineered with double-entry ledger immutability, deterministic FIFO matching, and real-time market depth synchronization.
+            </p>
+          </div>
+          <div className="shrink-0 w-full md:w-72 rounded-[8px] bg-[#070A0F] border border-[#2B3944] overflow-hidden">
+            <img
+              src={DIMONEX_EXCHANGE_BANNER_SRC}
+              alt="DIMONEX Crypto Exchange"
+              className="w-full h-24 object-cover object-center select-none"
+              draggable={false}
+            />
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

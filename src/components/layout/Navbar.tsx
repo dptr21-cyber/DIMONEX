@@ -18,12 +18,12 @@ import {
   Crown,
   Cpu,
   Wallet,
-  Hexagon,
   TrendingUp,
 } from 'lucide-react';
 import { UserProfile, AppLanguage, TradingPairItem } from '../../types/index.js';
 import { formatQuotePrice } from '../../lib/formatters.js';
 import { AssetIcon } from '../ui/AssetIcon.js';
+import { DimonexIcon } from '../ui/DimonexBrand.js';
 import { PercentageChange } from '../ui/PriceDisplay.js';
 
 interface Props {
@@ -143,9 +143,10 @@ export const Navbar: React.FC<Props> = ({
           onClick={() => onSelectView('OVERVIEW')}
           className="flex items-center gap-2.5 text-left group cursor-pointer"
         >
-          <div className="w-7 h-7 rounded-[7px] bg-[#1D2832] border border-[#40515D] flex items-center justify-center group-hover:border-[#8DA5B1] transition-colors">
-            <Hexagon className="w-4 h-4 text-[#C1D0D6]" strokeWidth={2.2} />
-          </div>
+          <DimonexIcon
+            size="md"
+            className="group-hover:border-[#8DA5B1] transition-colors shadow-sm"
+          />
           <div className="flex items-center gap-2">
             <span className="text-[15px] font-bold tracking-[0.08em] text-[#E4EBEF] group-hover:text-white transition-colors">
               DIMONEX

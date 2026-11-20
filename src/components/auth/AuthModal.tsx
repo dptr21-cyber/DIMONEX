@@ -7,12 +7,13 @@
  */
 
 import React, { useState } from 'react';
-import { Shield, KeyRound, Hexagon, AlertCircle } from 'lucide-react';
+import { Shield, KeyRound, AlertCircle } from 'lucide-react';
 import { Modal } from '../ui/Modal.js';
 import { Input } from '../ui/Input.js';
 import { Button } from '../ui/Button.js';
 import { SegmentedTabs } from '../ui/Tabs.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
+import { DimonexIcon, DIMONEX_HERO_BANNER_SRC } from '../ui/DimonexBrand.js';
 
 interface Props {
   isOpen: boolean;
@@ -151,6 +152,15 @@ export const AuthModal: React.FC<Props> = ({ isOpen, onClose, onAuthSuccess }) =
       maxWidth="max-w-md"
     >
       <div className="space-y-4">
+        <div className="rounded-[8px] bg-[#070A0F] border border-[#202B34] px-3 py-2.5 overflow-hidden">
+          <img
+            src={DIMONEX_HERO_BANNER_SRC}
+            alt="DIMONEX — Precision in Every Trade"
+            className="w-full max-h-[76px] object-contain object-center mx-auto select-none"
+            draggable={false}
+          />
+        </div>
+
         <SegmentedTabs
           fullWidth
           activeTab={tab}
@@ -260,7 +270,7 @@ export const AuthModal: React.FC<Props> = ({ isOpen, onClose, onAuthSuccess }) =
           </div>
 
           <div className="text-[10px] text-[#71818B] text-center pt-1 flex items-center justify-center gap-1.5">
-            <Hexagon className="w-3 h-3 text-[#8DA5B1]" />
+            <DimonexIcon size="xs" />
             <span>Seluruh akun terdokumentasi di</span>
             <span className="text-[#A5BAC4] font-mono font-medium">README_AKUN_TEST.md</span>
           </div>
