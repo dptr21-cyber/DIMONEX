@@ -1285,6 +1285,69 @@ mmConsoleRouter.get('/fx-rate', requireMMOrAdmin, (req, res) => {
   }
 });
 
+mmConsoleRouter.get('/fx-status', requireMMOrAdmin, (_req, res) => {
+  try {
+    const currentRate = fxConversionService.getCurrentRate();
+    const config = fxConversionService.getConfig();
+    const history = fxConversionService.getAuditHistory();
+
+    res.json({
+      success: true,
+      effectiveRateIdr: currentRate.rate,
+      source: currentRate.source,
+      status: currentRate.isStale ? 'STALE' : 'ACTIVE',
+      isStale: currentRate.isStale,
+      updatedAt: currentRate.updatedAt,
+      validUntil: currentRate.validUntil,
+      updatedBy: currentRate.updatedBy,
+      notes: currentRate.notes,
+      currentRate,
+      config,
+      history
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+mmConsoleRouter.post('/fx-rate', requireAdmin, (req, res) => {
+  try {
+    const user = (req as any).user;
+    const rawRate = req.body?.rateIdr ?? req.body?.newRate;
+    const notes = req.body?.reason ?? req.body?.notes;
+    const validityHours = req.body?.validityHours ?? 24;
+    const confirmOutOfBand = Boolean(req.body?.confirmOutOfBand);
+
+    const parsedRate = parseFloat(String(rawRate));
+    if (!Number.isFinite(parsedRate) || parsedRate <= 0) {
+      return res.status(400).json({ error: 'Nilai kurs rateIdr / newRate wajib berupa angka positif.' });
+    }
+
+    const result = fxConversionService.updateManualRate(
+      parsedRate,
+      user.email,
+      notes,
+      parseInt(String(validityHours), 10),
+      confirmOutOfBand
+    );
+
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+
+    res.json({
+      success: true,
+      effectiveRateIdr: result.rateRecord?.rate,
+      source: result.rateRecord?.source,
+      message: `Kurs USDT/IDR berhasil diperbarui menjadi Rp ${result.rateRecord?.rate.toLocaleString('id-ID')}. Kunci manual diaktifkan.`,
+      rateRecord: result.rateRecord,
+      config: fxConversionService.getConfig()
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 mmConsoleRouter.post('/fx-rate/config', requireAdmin, (req, res) => {
   try {
     const user = (req as any).user;
