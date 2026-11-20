@@ -25,6 +25,14 @@ export type BotType =
   | 'ADVANCED_MM'
   | 'MOVEMENT_DEPTH_LIQUIDITY';
 
+export type SpotLayoutPreset = 'CLASSIC' | 'PRO_TERMINAL' | 'CHART_FOCUS';
+
+export interface UserTradingPreferences {
+  spotLayout: SpotLayoutPreset;
+  hideRecentTradesInChartFocus?: boolean;
+  updatedAt?: number;
+}
+
 export interface UserProfile {
   id: string;
   email: string;
@@ -34,6 +42,7 @@ export interface UserProfile {
   kycStatus?: 'unverified' | 'pending' | 'approved' | 'rejected';
   kycTier?: number;
   fullName?: string;
+  preferences?: UserTradingPreferences;
 }
 
 export interface OrderBotConfig {

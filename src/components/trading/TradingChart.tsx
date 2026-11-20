@@ -20,9 +20,15 @@ interface TradingChartProps {
   pair: TradingPairItem;
   recentTrades: TradeItem[];
   onRefreshMarkets?: () => void;
+  canvasMinHeightClass?: string;
 }
 
-export const TradingChart: React.FC<TradingChartProps> = ({ pair, recentTrades, onRefreshMarkets }) => {
+export const TradingChart: React.FC<TradingChartProps> = ({
+  pair,
+  recentTrades,
+  onRefreshMarkets,
+  canvasMinHeightClass = 'min-h-[420px]',
+}) => {
   const [chartMode, setChartModeState] = useState<ChartMode>(() => {
     const saved = localStorage.getItem('dimonex_chart_mode') || localStorage.getItem('dominex_chart_mode');
     return saved === 'TRADINGVIEW' ? 'TRADINGVIEW' : 'DIMONEX';
@@ -321,7 +327,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({ pair, recentTrades, 
       />
 
       {/* Main Active Engine Canvas */}
-      <div className="relative flex-1 w-full min-h-[420px]">
+      <div className={`relative flex-1 w-full transition-[min-height] duration-150 ${canvasMinHeightClass}`}>
         {chartMode === 'DIMONEX' ? (
           <DimonexChart
             pair={pair}

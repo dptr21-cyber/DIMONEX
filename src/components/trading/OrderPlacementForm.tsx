@@ -25,6 +25,7 @@ interface Props {
   user: UserProfile | null;
   balances: UserBalance[];
   selectedPriceUnits: string | null;
+  layoutMode?: 'STACKED' | 'HORIZONTAL';
   onOrderPlaced: (order?: any) => void;
   onOpenAuthModal: () => void;
 }
@@ -46,6 +47,7 @@ export const OrderPlacementForm: React.FC<Props> = ({
   user,
   balances,
   selectedPriceUnits,
+  layoutMode = 'STACKED',
   onOrderPlaced,
   onOpenAuthModal,
 }) => {
@@ -311,85 +313,91 @@ export const OrderPlacementForm: React.FC<Props> = ({
           </span>
         </div>
 
-        {orderType === 'STOP_LIMIT' && (
-          <Input
-            label="Stop Trigger Price"
-            suffixText={pair.quoteCurrency}
-            placeholder={pricePlaceholder}
-            value={stopPriceInput}
-            onChange={e => setStopPriceInput(e.target.value)}
-          />
-        )}
+        <div className={layoutMode === 'HORIZONTAL' ? 'grid grid-cols-1 md:grid-cols-2 gap-3 items-start' : 'space-y-3'}>
+          <div className="space-y-3">
+            {orderType === 'STOP_LIMIT' && (
+              <Input
+                label="Stop Trigger Price"
+                suffixText={pair.quoteCurrency}
+                placeholder={pricePlaceholder}
+                value={stopPriceInput}
+                onChange={e => setStopPriceInput(e.target.value)}
+              />
+            )}
 
-        {orderType !== 'MARKET' ? (
-          <Input
-            label="Price"
-            suffixText={pair.quoteCurrency}
-            placeholder={pricePlaceholder}
-            value={priceInput}
-            onChange={e => {
-              setPriceInput(e.target.value);
-              setAllocationPct(null);
-            }}
-          />
-        ) : (
-          <div className="p-2.5 rounded-[7px] bg-[#111820] border border-[#2B3944] text-xs text-[#71818B] text-center font-mono">
-            Best Market Price Execution
+            {orderType !== 'MARKET' ? (
+              <Input
+                label="Price"
+                suffixText={pair.quoteCurrency}
+                placeholder={pricePlaceholder}
+                value={priceInput}
+                onChange={e => {
+                  setPriceInput(e.target.value);
+                  setAllocationPct(null);
+                }}
+              />
+            ) : (
+              <div className="p-2.5 rounded-[7px] bg-[#111820] border border-[#2B3944] text-xs text-[#71818B] text-center font-mono">
+                Best Market Price Execution
+              </div>
+            )}
+
+            <Input
+              label="Amount"
+              suffixText={pair.baseCurrency}
+              placeholder="0.00"
+              value={quantityInput}
+              onChange={e => {
+                setQuantityInput(e.target.value);
+                setAllocationPct(null);
+              }}
+            />
           </div>
-        )}
 
-        <Input
-          label="Amount"
-          suffixText={pair.baseCurrency}
-          placeholder="0.00"
-          value={quantityInput}
-          onChange={e => {
-            setQuantityInput(e.target.value);
-            setAllocationPct(null);
-          }}
-        />
+          <div className="space-y-3">
+            {/* Percentage Allocation Controls */}
+            <div className="grid grid-cols-4 gap-1.5">
+              {[25, 50, 75, 100].map(pct => (
+                <button
+                  key={pct}
+                  type="button"
+                  onClick={() => handlePercentageClick(pct)}
+                  className={`py-1.5 text-[11px] font-mono font-medium rounded-[5px] border transition-colors cursor-pointer ${
+                    allocationPct === pct
+                      ? 'bg-[#1D2832] border-[#8DA5B1] text-[#E4EBEF]'
+                      : 'bg-[#111820] border-[#202B34] text-[#71818B] hover:text-[#E4EBEF] hover:border-[#2B3944]'
+                  }`}
+                >
+                  {pct}%
+                </button>
+              ))}
+            </div>
 
-        {/* Percentage Allocation Controls */}
-        <div className="grid grid-cols-4 gap-1.5">
-          {[25, 50, 75, 100].map(pct => (
-            <button
-              key={pct}
-              type="button"
-              onClick={() => handlePercentageClick(pct)}
-              className={`py-1 text-[11px] font-mono font-medium rounded-[5px] border transition-colors cursor-pointer ${
-                allocationPct === pct
-                  ? 'bg-[#1D2832] border-[#8DA5B1] text-[#E4EBEF]'
-                  : 'bg-[#111820] border-[#202B34] text-[#71818B] hover:text-[#E4EBEF] hover:border-[#2B3944]'
-              }`}
-            >
-              {pct}%
-            </button>
-          ))}
-        </div>
-
-        {/* Order Summary */}
-        <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-1.5 text-xs font-mono tabular-nums">
-          <div className="flex justify-between text-[#71818B]">
-            <span>Order Value</span>
-            <span className="text-[#E4EBEF] font-semibold">
-              {formatQuotePrice(
-                quoteVolumeUnits.toString(),
-                pair.quoteCurrency,
-                quoteDecimals,
-                true
-              )}
-            </span>
-          </div>
-          <div className="flex justify-between text-[#71818B]">
-            <span>Est. Fee ({(Number(takerFeeBps) / 100).toFixed(2)}%)</span>
-            <span className="text-[#A1AFB8]">
-              {formatQuotePrice(
-                estimatedFeeUnits.toString(),
-                pair.quoteCurrency,
-                quoteDecimals,
-                true
-              )}
-            </span>
+            {/* Order Summary */}
+            <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-1.5 text-xs font-mono tabular-nums">
+              <div className="flex justify-between text-[#71818B]">
+                <span>Order Value</span>
+                <span className="text-[#E4EBEF] font-semibold">
+                  {formatQuotePrice(
+                    quoteVolumeUnits.toString(),
+                    pair.quoteCurrency,
+                    quoteDecimals,
+                    true
+                  )}
+                </span>
+              </div>
+              <div className="flex justify-between text-[#71818B]">
+                <span>Est. Fee ({(Number(takerFeeBps) / 100).toFixed(2)}%)</span>
+                <span className="text-[#A1AFB8]">
+                  {formatQuotePrice(
+                    estimatedFeeUnits.toString(),
+                    pair.quoteCurrency,
+                    quoteDecimals,
+                    true
+                  )}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
 

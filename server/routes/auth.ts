@@ -87,10 +87,68 @@ authRouter.post('/login', (req, res) => {
   }
 });
 
+const VALID_SPOT_LAYOUTS = new Set(['CLASSIC', 'PRO_TERMINAL', 'CHART_FOCUS']);
+
+function getNormalizedPreferences(userId: string) {
+  const dbUser = db.users.get(userId);
+  const prefs = dbUser?.preferences;
+  const spotLayout =
+    prefs?.spotLayout && VALID_SPOT_LAYOUTS.has(prefs.spotLayout)
+      ? prefs.spotLayout
+      : 'CLASSIC';
+  return {
+    spotLayout,
+    hideRecentTradesInChartFocus: prefs?.hideRecentTradesInChartFocus ?? true,
+    updatedAt: prefs?.updatedAt || dbUser?.updatedAt || Date.now()
+  };
+}
+
 authRouter.get('/me', requireAuth, (req, res) => {
   const user = (req as any).user;
   const kyc = db.kyc.get(user.id);
-  res.json({ user, kyc });
+  const preferences = getNormalizedPreferences(user.id);
+  res.json({ user: { ...user, preferences }, kyc, preferences });
+});
+
+authRouter.get('/preferences', requireAuth, (req, res) => {
+  const user = (req as any).user;
+  res.json(getNormalizedPreferences(user.id));
+});
+
+authRouter.put('/preferences', requireAuth, (req, res) => {
+  const user = (req as any).user;
+  const dbUser = db.users.get(user.id);
+  if (!dbUser) {
+    return res.status(404).json({ error: 'Pengguna tidak ditemukan' });
+  }
+
+  const { spotLayout, hideRecentTradesInChartFocus } = req.body || {};
+  if (spotLayout !== undefined && !VALID_SPOT_LAYOUTS.has(spotLayout)) {
+    return res.status(400).json({
+      error: 'Preset layout tidak valid. Pilihan: CLASSIC, PRO_TERMINAL, CHART_FOCUS'
+    });
+  }
+
+  const current = getNormalizedPreferences(user.id);
+  const nextPrefs = {
+    spotLayout: (spotLayout as 'CLASSIC' | 'PRO_TERMINAL' | 'CHART_FOCUS') || current.spotLayout,
+    hideRecentTradesInChartFocus:
+      typeof hideRecentTradesInChartFocus === 'boolean'
+        ? hideRecentTradesInChartFocus
+        : current.hideRecentTradesInChartFocus,
+    updatedAt: Date.now()
+  };
+
+  dbUser.preferences = nextPrefs;
+  dbUser.updatedAt = Date.now();
+
+  if (process.env.VERCEL === '1') {
+    db.saveToDisk();
+  } else {
+    db.scheduleSave();
+  }
+
+  res.json({ success: true, preferences: nextPrefs });
 });
 
 // Setup 2FA TOTP: Generate Secret & QR uri

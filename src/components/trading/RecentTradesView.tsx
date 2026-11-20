@@ -14,9 +14,15 @@ interface Props {
   pair: TradingPairItem;
   trades: TradeItem[];
   currentUserId?: string;
+  compact?: boolean;
 }
 
-export const RecentTradesView: React.FC<Props> = ({ pair, trades, currentUserId }) => {
+export const RecentTradesView: React.FC<Props> = ({
+  pair,
+  trades,
+  currentUserId,
+  compact = false,
+}) => {
   return (
     <div className="flex flex-col bg-[#141C24] border border-[#202B34] rounded-[8px] overflow-hidden h-full">
       <div className="flex items-center justify-between px-3 py-2 border-b border-[#202B34] bg-[#111820]">
@@ -32,7 +38,7 @@ export const RecentTradesView: React.FC<Props> = ({ pair, trades, currentUserId 
         <span className="text-right">Time</span>
       </div>
 
-      <div className="flex-1 overflow-y-auto max-h-[460px] py-1 divide-y divide-[#202B34]/60">
+      <div className={`flex-1 overflow-y-auto py-1 divide-y divide-[#202B34]/60 ${compact ? 'max-h-[220px]' : 'max-h-[300px]'}`}>
         {trades.length === 0 ? (
           <div className="flex items-center justify-center py-12 text-xs text-[#71818B] font-mono">
             No recent trades on this pair

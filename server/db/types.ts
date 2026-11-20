@@ -14,6 +14,13 @@ export type OrderType = 'LIMIT' | 'MARKET';
 export type TimeInForce = 'GTC' | 'IOC';
 export type OrderStatus = 'NEW' | 'PARTIALLY_FILLED' | 'FILLED' | 'CANCELLED' | 'REJECTED';
 export type Environment = 'DEMO' | 'STAGING' | 'PRODUCTION';
+export type SpotLayoutPreset = 'CLASSIC' | 'PRO_TERMINAL' | 'CHART_FOCUS';
+
+export interface UserTradingPreferences {
+  spotLayout: SpotLayoutPreset;
+  hideRecentTradesInChartFocus?: boolean;
+  updatedAt: number;
+}
 export type BotStatus = 'DRAFT' | 'VALIDATING' | 'READY' | 'RUNNING' | 'PAUSED' | 'STOPPING' | 'STOPPED' | 'ERROR' | 'RISK_HALTED';
 export type BotType = 
   | 'ORDER_BOT' 
@@ -461,6 +468,7 @@ export interface User {
   isTotpEnabled: boolean;
   failedLoginAttempts: number;
   lockedUntil?: number; // epoch ms
+  preferences?: UserTradingPreferences;
   createdAt: number;
   updatedAt: number;
 }

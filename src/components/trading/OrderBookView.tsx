@@ -39,6 +39,7 @@ interface Props {
   myOpenOrderPrices?: Set<string>;
   myOrdersByPrice?: Map<string, UserOrderSummary>;
   userRole?: string;
+  compact?: boolean;
   onSelectPrice: (priceUnits: string) => void;
 }
 
@@ -60,6 +61,7 @@ export const OrderBookView: React.FC<Props> = ({
   depth,
   myOpenOrderPrices,
   myOrdersByPrice,
+  compact = false,
   onSelectPrice,
 }) => {
   const [showHeatmap, setShowHeatmapState] = useState<boolean>(() => {
@@ -771,7 +773,7 @@ export const OrderBookView: React.FC<Props> = ({
         <>
           <div
             ref={asksContainerRef}
-            className="flex-1 overflow-y-auto max-h-[220px] py-1 space-y-px"
+            className={`flex-1 overflow-y-auto py-1 space-y-px ${compact ? 'max-h-[126px]' : 'max-h-[196px]'}`}
             style={{ overscrollBehavior: 'contain' }}
           >
             {displayAsks.length === 0 && (
@@ -783,7 +785,7 @@ export const OrderBookView: React.FC<Props> = ({
           </div>
           {renderSpreadBar()}
           <div
-            className="flex-1 overflow-y-auto max-h-[220px] py-1 space-y-px"
+            className={`flex-1 overflow-y-auto py-1 space-y-px ${compact ? 'max-h-[126px]' : 'max-h-[196px]'}`}
             style={{ overscrollBehavior: 'contain' }}
           >
             {displayBids.length === 0 && (

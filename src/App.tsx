@@ -40,12 +40,13 @@ import { AssetIcon } from './components/ui/AssetIcon.js';
 import { PercentageChange } from './components/ui/PriceDisplay.js';
 import { StatusBadge } from './components/ui/StatusBadge.js';
 import { SegmentedTabs } from './components/ui/Tabs.js';
-import { TradingPairItem, TradeItem, OrderItem, UserProfile, UserBalance, AppLanguage } from './types/index.js';
+import { TradingPairItem, TradeItem, OrderItem, UserProfile, UserBalance, AppLanguage, SpotLayoutPreset } from './types/index.js';
 import { formatCrypto, formatQuotePrice, formatPairVolume } from './lib/formatters.js';
 import { safeFetchJson } from './lib/safeFetch.js';
 import { loadAssetRegistry, hydrateAssetRegistryFromList } from './lib/assetRegistry.js';
 import { isWebSocketSupported, reportWebSocketSuccess, reportWebSocketFailure } from './utils/wsHelper.js';
-import { ChevronDown, Search, Zap, Bot, Building2 } from 'lucide-react';
+import { SpotPreferencesModal, SPOT_LAYOUT_LABELS } from './components/trading/SpotPreferencesModal.js';
+import { ChevronDown, Search, Zap, Bot, Building2, SlidersHorizontal, Eye, EyeOff } from 'lucide-react';
 
 export type ActiveViewType =
   | 'OVERVIEW'
@@ -84,8 +85,45 @@ function AppContent() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [user, setUser] = useState<UserProfile | null>(null);
 
-  // Market tab mode on trading terminal
-  const [marketTab, setMarketTab] = useState<'BOOK' | 'DEPTH' | 'TRADES'>('BOOK');
+  // Order book sub-view mode (Book vs Depth D3) on trading terminal
+  const [orderBookTab, setOrderBookTab] = useState<'BOOK' | 'DEPTH'>('BOOK');
+
+  // Spot Trading Workspace Layout Preferences (persisted per-user in DB + localStorage cache)
+  const readLocalSpotPrefs = (userId?: string): { spotLayout: SpotLayoutPreset; hideRecentTradesInChartFocus: boolean } => {
+    try {
+      const key = `dimonex_spot_prefs_${userId || 'guest'}`;
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.spotLayout && ['CLASSIC', 'PRO_TERMINAL', 'CHART_FOCUS'].includes(parsed.spotLayout)) {
+          return {
+            spotLayout: parsed.spotLayout as SpotLayoutPreset,
+            hideRecentTradesInChartFocus:
+              typeof parsed.hideRecentTradesInChartFocus === 'boolean'
+                ? parsed.hideRecentTradesInChartFocus
+                : true,
+          };
+        }
+      }
+    } catch {}
+    return { spotLayout: 'CLASSIC', hideRecentTradesInChartFocus: true };
+  };
+
+  const writeLocalSpotPrefs = (
+    prefs: { spotLayout: SpotLayoutPreset; hideRecentTradesInChartFocus: boolean },
+    userId?: string
+  ) => {
+    try {
+      localStorage.setItem(`dimonex_spot_prefs_${userId || 'guest'}`, JSON.stringify(prefs));
+    } catch {}
+  };
+
+  const [spotLayout, setSpotLayout] = useState<SpotLayoutPreset>(() => readLocalSpotPrefs().spotLayout);
+  const [hideRecentTradesInChartFocus, setHideRecentTradesInChartFocus] = useState<boolean>(
+    () => readLocalSpotPrefs().hideRecentTradesInChartFocus
+  );
+  const [isSpotPreferencesOpen, setIsSpotPreferencesOpen] = useState(false);
+  const [isSavingSpotPreferences, setIsSavingSpotPreferences] = useState(false);
 
   // Trading data state
   const [pairs, setPairs] = useState<TradingPairItem[]>([]);
@@ -156,6 +194,21 @@ function AppContent() {
             ? 'Trader One'
             : 'Trader Two'
         });
+        const restoredLayout: SpotLayoutPreset =
+          data.user?.preferences?.spotLayout &&
+          ['CLASSIC', 'PRO_TERMINAL', 'CHART_FOCUS'].includes(data.user.preferences.spotLayout)
+            ? data.user.preferences.spotLayout
+            : 'CLASSIC';
+        const restoredHideTrades =
+          typeof data.user?.preferences?.hideRecentTradesInChartFocus === 'boolean'
+            ? data.user.preferences.hideRecentTradesInChartFocus
+            : true;
+        setSpotLayout(restoredLayout);
+        setHideRecentTradesInChartFocus(restoredHideTrades);
+        writeLocalSpotPrefs(
+          { spotLayout: restoredLayout, hideRecentTradesInChartFocus: restoredHideTrades },
+          data.user.id
+        );
         refreshBalances();
         refreshUserOrders();
       }
@@ -170,6 +223,9 @@ function AppContent() {
     setBalances([]);
     setOpenOrders([]);
     setOrderHistory([]);
+    const guestPrefs = readLocalSpotPrefs();
+    setSpotLayout(guestPrefs.spotLayout);
+    setHideRecentTradesInChartFocus(guestPrefs.hideRecentTradesInChartFocus);
   };
 
   const refreshBalances = useCallback(async () => {
@@ -239,17 +295,42 @@ function AppContent() {
         });
         if (res.ok && res.data?.user) {
           const data = res.data;
+          const serverPrefs = data.preferences || data.user?.preferences;
+          const restoredLayout: SpotLayoutPreset =
+            serverPrefs?.spotLayout &&
+            ['CLASSIC', 'PRO_TERMINAL', 'CHART_FOCUS'].includes(serverPrefs.spotLayout)
+              ? serverPrefs.spotLayout
+              : 'CLASSIC';
+          const restoredHideTrades =
+            typeof serverPrefs?.hideRecentTradesInChartFocus === 'boolean'
+              ? serverPrefs.hideRecentTradesInChartFocus
+              : true;
+
           setUser({
             ...data.user,
+            preferences: {
+              spotLayout: restoredLayout,
+              hideRecentTradesInChartFocus: restoredHideTrades,
+              updatedAt: serverPrefs?.updatedAt,
+            },
             kycStatus: data.kyc?.status || 'approved',
             kycTier: data.kyc?.tierLevel || 2,
             fullName: data.kyc?.fullName || (data.user.email.includes('admin') ? 'Super Admin' : 'Active Trader')
           });
+          setSpotLayout(restoredLayout);
+          setHideRecentTradesInChartFocus(restoredHideTrades);
+          writeLocalSpotPrefs(
+            { spotLayout: restoredLayout, hideRecentTradesInChartFocus: restoredHideTrades },
+            data.user.id
+          );
           refreshBalances();
           refreshUserOrders();
         } else if (res.status === 401) {
           localStorage.removeItem('dimonex_auth_token');
           setUser(null);
+          const guestPrefs = readLocalSpotPrefs();
+          setSpotLayout(guestPrefs.spotLayout);
+          setHideRecentTradesInChartFocus(guestPrefs.hideRecentTradesInChartFocus);
         }
       } catch (e) {}
     }
@@ -356,6 +437,75 @@ function AppContent() {
   }, [selectedPairId]);
 
   const { showToast } = useToast();
+
+  const handleSaveSpotPreferences = async (
+    nextLayout: SpotLayoutPreset,
+    nextHideRecentTrades: boolean
+  ) => {
+    setSpotLayout(nextLayout);
+    setHideRecentTradesInChartFocus(nextHideRecentTrades);
+    writeLocalSpotPrefs(
+      { spotLayout: nextLayout, hideRecentTradesInChartFocus: nextHideRecentTrades },
+      user?.id
+    );
+
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (token && user) {
+      setIsSavingSpotPreferences(true);
+      try {
+        const res = await safeFetchJson<{ success?: boolean; preferences?: any; error?: string }>(
+          '/api/auth/preferences',
+          {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              spotLayout: nextLayout,
+              hideRecentTradesInChartFocus: nextHideRecentTrades,
+            }),
+          }
+        );
+
+        if (res.ok && res.data?.preferences) {
+          setUser(prev =>
+            prev
+              ? {
+                  ...prev,
+                  preferences: res.data!.preferences,
+                }
+              : prev
+          );
+          showToast(
+            'success',
+            'Layout Settings Saved',
+            `Workspace switched to ${SPOT_LAYOUT_LABELS[nextLayout]} and synced to your account.`
+          );
+        } else {
+          showToast(
+            'error',
+            'Sync Failed',
+            res.error || 'Layout applied locally, but failed to sync preferences to server.'
+          );
+        }
+      } catch (err: any) {
+        showToast(
+          'error',
+          'Sync Failed',
+          err?.message || 'Layout applied locally, but server sync failed.'
+        );
+      } finally {
+        setIsSavingSpotPreferences(false);
+      }
+    } else {
+      showToast(
+        'info',
+        'Layout Updated',
+        `Workspace switched to ${SPOT_LAYOUT_LABELS[nextLayout]}.`
+      );
+    }
+  };
 
   const handleCancelOrder = async (orderId: string, orderPairId?: string) => {
     const token = localStorage.getItem('dimonex_auth_token');
@@ -648,41 +798,162 @@ function AppContent() {
                       {((selectedPair.makerFeeBps ?? 10) / 100).toFixed(2)}% / {((selectedPair.takerFeeBps ?? 20) / 100).toFixed(2)}%
                     </span>
                   </div>
+
+                  {/* Spot Trading Preferences Trigger */}
+                  <button
+                    type="button"
+                    onClick={() => setIsSpotPreferencesOpen(true)}
+                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-[7px] bg-[#111820] hover:bg-[#17212B] border border-[#2B3944] hover:border-[#8DA5B1] text-xs font-sans font-medium text-[#E4EBEF] transition-colors cursor-pointer"
+                    title="Preferences · Layout Settings"
+                  >
+                    <SlidersHorizontal className="w-3.5 h-3.5 text-[#8DA5B1]" />
+                    <span>Preferences</span>
+                    <span className="px-1.5 py-0.5 rounded-[4px] bg-[#1D2832] border border-[#2B3944] text-[10px] font-mono text-[#A5BAC4]">
+                      {SPOT_LAYOUT_LABELS[spotLayout]}
+                    </span>
+                  </button>
                 </div>
               </div>
 
-              {/* Terminal Grid */}
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-start">
-                {/* Left 8 Cols: Chart & User Orders */}
-                <div className="lg:col-span-8 space-y-3">
-                  <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
-                    <TradingChart
-                      pair={selectedPair}
-                      recentTrades={recentTrades}
-                      onRefreshMarkets={fetchInitialData}
-                    />
+              {/* Single Stable Terminal Grid — Rearranges Panels Purely via CSS Without Unmounting Chart or Engine Feeds */}
+              <div
+                className={`grid grid-cols-1 gap-3 items-start ${
+                  spotLayout === 'CLASSIC'
+                    ? 'lg:grid-cols-12'
+                    : spotLayout === 'PRO_TERMINAL'
+                    ? 'lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_276px_296px] 2xl:grid-cols-[minmax(0,1fr)_304px_316px]'
+                    : 'lg:grid-cols-[minmax(0,1fr)_288px] xl:grid-cols-[minmax(0,1fr)_304px]'
+                }`}
+              >
+                {/* PANEL 1: Candlestick Chart (Never unmounted across presets) */}
+                <div
+                  key="spot-panel-chart"
+                  className={`rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden min-w-0 flex flex-col ${
+                    spotLayout === 'CLASSIC'
+                      ? 'order-1 lg:col-span-8 lg:col-start-1 lg:row-start-1'
+                      : spotLayout === 'PRO_TERMINAL'
+                      ? 'order-1 lg:col-start-1 lg:row-start-1 lg:row-span-3 xl:row-span-2 self-stretch'
+                      : hideRecentTradesInChartFocus
+                      ? 'order-1 lg:col-start-1 lg:row-start-1 lg:row-span-2 self-stretch'
+                      : 'order-1 lg:col-start-1 lg:row-start-1 lg:row-span-3 self-stretch'
+                  }`}
+                >
+                  <TradingChart
+                    pair={selectedPair}
+                    recentTrades={recentTrades}
+                    onRefreshMarkets={fetchInitialData}
+                    canvasMinHeightClass={
+                      spotLayout === 'CHART_FOCUS'
+                        ? 'min-h-[460px] lg:min-h-[630px]'
+                        : spotLayout === 'PRO_TERMINAL'
+                        ? 'min-h-[430px] lg:min-h-[560px]'
+                        : 'min-h-[420px] lg:min-h-[455px]'
+                    }
+                  />
+                </div>
+
+                {/* PANEL 2: Order Book & D3 Depth */}
+                <div
+                  key="spot-panel-orderbook"
+                  className={`rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden min-w-0 ${
+                    spotLayout === 'CLASSIC'
+                      ? 'order-3 lg:order-none lg:col-span-4 lg:col-start-9 lg:row-start-1'
+                      : spotLayout === 'PRO_TERMINAL'
+                      ? 'order-2 lg:order-none lg:col-start-2 lg:row-start-1'
+                      : 'order-2 lg:order-none lg:col-start-2 lg:row-start-1'
+                  }`}
+                >
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-[#202B34] bg-[#111820] gap-2">
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setOrderBookTab('BOOK')}
+                        className={`px-2.5 py-1 text-xs font-semibold rounded-[6px] transition-colors cursor-pointer ${
+                          orderBookTab === 'BOOK'
+                            ? 'bg-[#1D2832] text-[#E4EBEF] border border-[#2B3944]'
+                            : 'text-[#71818B] hover:text-[#E4EBEF]'
+                        }`}
+                      >
+                        Order Book
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOrderBookTab('DEPTH')}
+                        className={`px-2.5 py-1 text-xs font-semibold rounded-[6px] transition-colors flex items-center gap-1.5 cursor-pointer ${
+                          orderBookTab === 'DEPTH'
+                            ? 'bg-[#1D2832] text-[#E4EBEF] border border-[#2B3944]'
+                            : 'text-[#71818B] hover:text-[#E4EBEF]'
+                        }`}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#16A879]" />
+                        Depth (D3)
+                      </button>
+                    </div>
+
+                    {spotLayout === 'CHART_FOCUS' && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleSaveSpotPreferences('CHART_FOCUS', !hideRecentTradesInChartFocus)
+                        }
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-[5px] bg-[#141C24] hover:bg-[#1D2832] border border-[#2B3944] text-[10px] font-mono text-[#A1AFB8] hover:text-[#E4EBEF] transition-colors cursor-pointer"
+                        title={
+                          hideRecentTradesInChartFocus
+                            ? 'Show Recent Trades panel'
+                            : 'Hide Recent Trades panel'
+                        }
+                      >
+                        {hideRecentTradesInChartFocus ? (
+                          <>
+                            <Eye className="w-3 h-3 text-[#8DA5B1]" />
+                            <span>Trades ({recentTrades.length})</span>
+                          </>
+                        ) : (
+                          <>
+                            <EyeOff className="w-3 h-3 text-[#71818B]" />
+                            <span>Hide Trades</span>
+                          </>
+                        )}
+                      </button>
+                    )}
                   </div>
 
-                  <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
-                    <UserOrdersTable
-                      openOrders={openOrders}
-                      orderHistory={orderHistory}
-                      pairs={pairs}
-                      onCancelOrder={handleCancelOrder}
-                      isLoading={isLoadingOrders}
-                      currentUserEmail={user?.email}
-                      userRole={user?.role}
-                    />
+                  <div className="p-1.5">
+                    {orderBookTab === 'BOOK' ? (
+                      <OrderBookView
+                        pair={selectedPair}
+                        depth={depth}
+                        compact={spotLayout === 'CHART_FOCUS'}
+                        onSelectPrice={p => setSelectedPriceForOrder(p)}
+                      />
+                    ) : (
+                      <D3DepthChart
+                        pair={selectedPair}
+                        depth={depth}
+                        onSelectPrice={p => setSelectedPriceForOrder(p)}
+                        height={spotLayout === 'CHART_FOCUS' ? 290 : 400}
+                      />
+                    )}
                   </div>
                 </div>
 
-                {/* Right 4 Cols: Order Form & Order Book / Depth / Trades */}
-                <div className="lg:col-span-4 space-y-3">
+                {/* PANEL 3: Buy / Sell Order Placement Form */}
+                <div
+                  key="spot-panel-orderform"
+                  className={`min-w-0 ${
+                    spotLayout === 'CLASSIC'
+                      ? 'order-2 lg:order-none lg:col-span-8 lg:col-start-1 lg:row-start-2'
+                      : spotLayout === 'PRO_TERMINAL'
+                      ? 'order-3 lg:order-none lg:col-start-2 lg:row-start-3 xl:col-start-3 xl:row-start-1 xl:row-span-2'
+                      : 'order-3 lg:order-none lg:col-start-2 lg:row-start-2'
+                  }`}
+                >
                   <OrderPlacementForm
                     pair={selectedPair}
                     user={user}
                     balances={balances}
                     selectedPriceUnits={selectedPriceForOrder}
+                    layoutMode={spotLayout === 'CLASSIC' ? 'HORIZONTAL' : 'STACKED'}
                     onOrderPlaced={(newOrder) => {
                       refreshBalances();
                       refreshUserOrders(newOrder);
@@ -690,70 +961,49 @@ function AppContent() {
                     }}
                     onOpenAuthModal={() => setIsAuthModalOpen(true)}
                   />
+                </div>
 
-                  <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
-                    <div className="flex items-center justify-between px-3 py-2 border-b border-[#202B34] bg-[#111820]">
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => setMarketTab('BOOK')}
-                          className={`px-2.5 py-1 text-xs font-semibold rounded-[6px] transition-colors cursor-pointer ${
-                            marketTab === 'BOOK'
-                              ? 'bg-[#1D2832] text-[#E4EBEF] border border-[#2B3944]'
-                              : 'text-[#71818B] hover:text-[#E4EBEF]'
-                          }`}
-                        >
-                          Order Book
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setMarketTab('DEPTH')}
-                          className={`px-2.5 py-1 text-xs font-semibold rounded-[6px] transition-colors flex items-center gap-1.5 cursor-pointer ${
-                            marketTab === 'DEPTH'
-                              ? 'bg-[#1D2832] text-[#E4EBEF] border border-[#2B3944]'
-                              : 'text-[#71818B] hover:text-[#E4EBEF]'
-                          }`}
-                        >
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#16A879]" />
-                          Depth (D3)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setMarketTab('TRADES')}
-                          className={`px-2.5 py-1 text-xs font-semibold rounded-[6px] transition-colors cursor-pointer ${
-                            marketTab === 'TRADES'
-                              ? 'bg-[#1D2832] text-[#E4EBEF] border border-[#2B3944]'
-                              : 'text-[#71818B] hover:text-[#E4EBEF]'
-                          }`}
-                        >
-                          Trades ({recentTrades.length})
-                        </button>
-                      </div>
-                    </div>
+                {/* PANEL 4: Recent Market Trades (Preserved live in DOM even when hidden in Chart Focus) */}
+                <div
+                  key="spot-panel-recenttrades"
+                  className={`rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden min-w-0 ${
+                    spotLayout === 'CLASSIC'
+                      ? 'order-4 lg:order-none lg:col-span-4 lg:col-start-9 lg:row-start-2'
+                      : spotLayout === 'PRO_TERMINAL'
+                      ? 'order-4 lg:order-none lg:col-start-2 lg:row-start-2'
+                      : hideRecentTradesInChartFocus
+                      ? 'hidden'
+                      : 'order-4 lg:order-none lg:col-start-2 lg:row-start-3'
+                  }`}
+                >
+                  <RecentTradesView
+                    pair={selectedPair}
+                    trades={recentTrades}
+                    currentUserId={user?.id}
+                    compact
+                  />
+                </div>
 
-                    <div className="p-1.5">
-                      {marketTab === 'BOOK' ? (
-                        <OrderBookView
-                          pair={selectedPair}
-                          depth={depth}
-                          onSelectPrice={p => setSelectedPriceForOrder(p)}
-                        />
-                      ) : marketTab === 'DEPTH' ? (
-                        <D3DepthChart
-                          pair={selectedPair}
-                          depth={depth}
-                          onSelectPrice={p => setSelectedPriceForOrder(p)}
-                          height={440}
-                        />
-                      ) : (
-                        <RecentTradesView
-                          pair={selectedPair}
-                          trades={recentTrades}
-                          currentUserId={user?.id}
-                        />
-                      )}
-                    </div>
-                  </div>
+                {/* PANEL 5: Open Orders & Order History */}
+                <div
+                  key="spot-panel-userorders"
+                  className={`rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden min-w-0 ${
+                    spotLayout === 'CLASSIC'
+                      ? 'order-5 lg:order-none lg:col-span-12 lg:col-start-1 lg:row-start-3'
+                      : spotLayout === 'PRO_TERMINAL'
+                      ? 'order-5 lg:order-none lg:col-span-2 lg:col-start-1 lg:row-start-4 xl:col-span-3 xl:row-start-3'
+                      : 'order-5 lg:order-none lg:col-span-2 lg:col-start-1 lg:row-start-4'
+                  }`}
+                >
+                  <UserOrdersTable
+                    openOrders={openOrders}
+                    orderHistory={orderHistory}
+                    pairs={pairs}
+                    onCancelOrder={handleCancelOrder}
+                    isLoading={isLoadingOrders}
+                    currentUserEmail={user?.email}
+                    userRole={user?.role}
+                  />
                 </div>
               </div>
             </div>
@@ -990,8 +1240,24 @@ function AppContent() {
         onClose={() => setIsAuthModalOpen(false)}
         onAuthSuccess={(_token, authedUser) => {
           setUser(authedUser);
+          if (authedUser?.preferences?.spotLayout) {
+            setSpotLayout(authedUser.preferences.spotLayout);
+            setHideRecentTradesInChartFocus(
+              authedUser.preferences.hideRecentTradesInChartFocus ?? true
+            );
+          }
           fetchInitialData();
         }}
+      />
+
+      <SpotPreferencesModal
+        isOpen={isSpotPreferencesOpen}
+        onClose={() => setIsSpotPreferencesOpen(false)}
+        activeLayout={spotLayout}
+        hideRecentTradesInChartFocus={hideRecentTradesInChartFocus}
+        isAuthenticated={Boolean(user)}
+        isSaving={isSavingSpotPreferences}
+        onApply={handleSaveSpotPreferences}
       />
     </div>
   );

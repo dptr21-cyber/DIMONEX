@@ -474,10 +474,14 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     const handleResize = () => {
       if (!isDisposedRef.current && chartContainerRef.current && chartRef.current) {
         try {
-          chartRef.current.applyOptions({
-            width: chartContainerRef.current.clientWidth,
-            height: chartContainerRef.current.clientHeight
-          });
+          const nextWidth = chartContainerRef.current.clientWidth;
+          const nextHeight = chartContainerRef.current.clientHeight;
+          if (nextWidth > 0 && nextHeight > 0) {
+            chartRef.current.applyOptions({
+              width: nextWidth,
+              height: nextHeight
+            });
+          }
         } catch (e: any) {
           if (e?.message?.includes('disposed')) return;
         }
@@ -485,12 +489,24 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     };
     window.addEventListener('resize', handleResize);
 
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && chartContainerRef.current) {
+      resizeObserver = new ResizeObserver(() => {
+        handleResize();
+      });
+      resizeObserver.observe(chartContainerRef.current);
+    }
+
     loadCandles(true);
 
     return () => {
       isDisposedRef.current = true;
       loadRequestIdRef.current++;
       window.removeEventListener('resize', handleResize);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+        resizeObserver = null;
+      }
 
       if (chartRef.current) {
         try {
