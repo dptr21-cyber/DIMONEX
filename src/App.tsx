@@ -43,6 +43,7 @@ import { SegmentedTabs } from './components/ui/Tabs.js';
 import { TradingPairItem, TradeItem, OrderItem, UserProfile, UserBalance, AppLanguage } from './types/index.js';
 import { formatCrypto, formatQuotePrice, formatPairVolume } from './lib/formatters.js';
 import { safeFetchJson } from './lib/safeFetch.js';
+import { loadAssetRegistry, hydrateAssetRegistryFromList } from './lib/assetRegistry.js';
 import { isWebSocketSupported, reportWebSocketSuccess, reportWebSocketFailure } from './utils/wsHelper.js';
 import { ChevronDown, Search, Zap, Bot, Building2 } from 'lucide-react';
 
@@ -222,6 +223,7 @@ function AppContent() {
   }, []);
 
   const fetchInitialData = useCallback(async () => {
+    loadAssetRegistry();
     try {
       const res = await safeFetchJson<TradingPairItem[]>('/api/trading/pairs');
       if (res.ok && Array.isArray(res.data)) {
@@ -333,6 +335,11 @@ function AppContent() {
                 }
                 return Array.from(map.values());
               });
+            } else if (msg.type === 'assets_updated' && Array.isArray(msg.data)) {
+              hydrateAssetRegistryFromList(msg.data);
+              safeFetchJson<TradingPairItem[]>('/api/trading/pairs').then((res) => {
+                if (res.ok && Array.isArray(res.data)) setPairs(res.data);
+              }).catch(() => {});
             }
           } catch {}
         };
@@ -572,11 +579,17 @@ function AppContent() {
                                     }`}
                                   >
                                     <div className="flex items-center gap-2">
-                                      <AssetIcon symbol={p.baseCurrency} size="xs" />
+                                      <AssetIcon symbol={p.baseCurrency} logoUrl={p.baseLogoUrl || undefined} size="xs" />
                                       <span className="font-semibold text-[#E4EBEF] font-mono">{sym}</span>
-                                      {(p.isNewListing || p.baseCurrency === 'SOL') && (
+                                      {p.isDelisted ? (
+                                        <StatusBadge tone="danger">DELISTED</StatusBadge>
+                                      ) : p.delistScheduledAt && p.delistScheduledAt > Date.now() ? (
+                                        <StatusBadge tone="danger">DELISTING</StatusBadge>
+                                      ) : !p.isActive && p.scheduledAt && p.scheduledAt > Date.now() ? (
+                                        <StatusBadge tone="warning">SOON</StatusBadge>
+                                      ) : (p.isNewListing || p.baseCurrency === 'SOL') ? (
                                         <StatusBadge tone="brand">NEW</StatusBadge>
-                                      )}
+                                      ) : null}
                                     </div>
                                     <div className="text-right font-mono tabular-nums">
                                       <div className="font-semibold text-[#E4EBEF]">
@@ -643,7 +656,11 @@ function AppContent() {
                 {/* Left 8 Cols: Chart & User Orders */}
                 <div className="lg:col-span-8 space-y-3">
                   <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
-                    <TradingChart pair={selectedPair} recentTrades={recentTrades} />
+                    <TradingChart
+                      pair={selectedPair}
+                      recentTrades={recentTrades}
+                      onRefreshMarkets={fetchInitialData}
+                    />
                   </div>
 
                   <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">

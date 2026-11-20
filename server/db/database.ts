@@ -1723,6 +1723,68 @@ class DatabaseStore {
     }
     return out;
   }
+
+  /**
+   * Ensures every baseCurrency and quoteCurrency present in db.tradingPairs has an Asset entry
+   * in db.assets so admins can manage logos, metadata, and decimals for all listed markets.
+   */
+  public ensureAssetsForTradingPairs(): Asset[] {
+    const bySymbol = new Map<string, Asset>();
+    for (const asset of this.assets.values()) {
+      bySymbol.set(asset.symbol.toUpperCase(), asset);
+    }
+
+    let created = false;
+    for (const pair of this.tradingPairs.values()) {
+      const baseSym = pair.baseCurrency.toUpperCase();
+      if (!bySymbol.has(baseSym)) {
+        const newBase: Asset = {
+          id: `ast-${baseSym.toLowerCase()}-${crypto.randomUUID().slice(0, 8)}`,
+          symbol: baseSym,
+          name: baseSym,
+          assetType: baseSym === 'IDR' ? 'NATIVE' : 'TOKEN',
+          category: baseSym === 'IDR' ? 'Fiat' : 'Token',
+          decimals: typeof pair.baseDecimals === 'number' ? pair.baseDecimals : 8,
+          network: baseSym === 'IDR' ? 'FIAT' : baseSym,
+          status: pair.isActive ? 'ACTIVE' : 'PENDING',
+          depositEnabled: true,
+          withdrawalEnabled: true,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        };
+        this.assets.set(newBase.id, newBase);
+        bySymbol.set(baseSym, newBase);
+        created = true;
+      }
+
+      const quoteSym = pair.quoteCurrency.toUpperCase();
+      if (!bySymbol.has(quoteSym)) {
+        const newQuote: Asset = {
+          id: `ast-${quoteSym.toLowerCase()}-${crypto.randomUUID().slice(0, 8)}`,
+          symbol: quoteSym,
+          name: quoteSym === 'IDR' ? 'Indonesian Rupiah' : quoteSym === 'USDT' ? 'Tether USD' : quoteSym,
+          assetType: quoteSym === 'IDR' ? 'NATIVE' : 'TOKEN',
+          category: quoteSym === 'IDR' ? 'Fiat' : quoteSym === 'USDT' ? 'Stablecoin' : 'Token',
+          decimals: typeof pair.quoteDecimals === 'number' ? pair.quoteDecimals : (quoteSym === 'USDT' ? 6 : 2),
+          network: quoteSym === 'IDR' ? 'FIAT' : quoteSym === 'USDT' ? 'TRON' : quoteSym,
+          status: 'ACTIVE',
+          depositEnabled: true,
+          withdrawalEnabled: true,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        };
+        this.assets.set(newQuote.id, newQuote);
+        bySymbol.set(quoteSym, newQuote);
+        created = true;
+      }
+    }
+
+    if (created) {
+      this.scheduleSave();
+    }
+
+    return Array.from(this.assets.values());
+  }
 }
 
 export const db = new DatabaseStore();

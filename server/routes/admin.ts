@@ -12,8 +12,15 @@ import crypto from 'crypto';
 import { requireAdmin } from './auth.js';
 import { db } from '../db/database.js';
 import { PrecisionMath } from '../ledger/PrecisionMath.js';
-import { TradingPair, ExternalWsWhitelistEntry } from '../db/types.js';
+import { TradingPair, ExternalWsWhitelistEntry, Asset, AssetStatus, AssetType } from '../db/types.js';
 import { priceAggregatorService, parseExternalPairSymbol } from '../services/external/PriceAggregatorService.js';
+import { marketWsService } from '../websocket/MarketDataWs.js';
+import {
+  scheduleDelistMarket,
+  cancelScheduledDelistMarket,
+  executeDelistMarket,
+  relistMarket
+} from '../services/MarketLifecycleScheduler.js';
 
 export const adminRouter = Router();
 
@@ -150,7 +157,10 @@ adminRouter.post('/pairs/update-config', requireAdmin, (req, res) => {
       makerFeeBps,
       takerFeeBps,
       isHalted,
-      lastPrice
+      lastPrice,
+      isDelisted,
+      delistScheduledAt,
+      delistReason
     } = req.body;
 
     if (!pairId) return res.status(400).json({ error: 'ID Trading pair wajib ditentukan' });
@@ -181,9 +191,6 @@ adminRouter.post('/pairs/update-config', requireAdmin, (req, res) => {
     if (BigInt(updatedMax) < BigInt(updatedMin)) {
       return res.status(400).json({ error: 'Kuantitas maksimum order tidak boleh lebih kecil dari kuantitas minimum' });
     }
-
-    const oldMin = pair.minOrderSize;
-    const oldMax = pair.maxOrderSize;
 
     pair.minOrderSize = updatedMin;
     pair.maxOrderSize = updatedMax;
@@ -218,12 +225,65 @@ adminRouter.post('/pairs/update-config', requireAdmin, (req, res) => {
       createdAt: Date.now()
     });
 
+    // Apply manual delisting toggle or scheduled delisting date atomically via lifecycle service
+    let lifecycleNote = '';
+    if (typeof isDelisted === 'boolean') {
+      if (isDelisted && !pair.isDelisted) {
+        const resDelist = executeDelistMarket(
+          pairId,
+          adminUser.id,
+          adminUser.email,
+          delistReason || pair.delistReason || 'Manual delisting oleh admin'
+        );
+        lifecycleNote = ` · Market di-DELISTING (${resDelist.cancelledOrdersCount} order dibatalkan & direfund, ${resDelist.stoppedBotsCount} bot dihentikan).`;
+      } else if (!isDelisted && pair.isDelisted) {
+        relistMarket(pairId, adminUser.id, adminUser.email);
+        if (isHalted !== undefined && isHalted !== null) {
+          const refreshed = db.tradingPairs.get(pairId);
+          if (refreshed) {
+            refreshed.isHalted = Boolean(isHalted);
+            db.tradingPairs.set(pairId, refreshed);
+          }
+        }
+        lifecycleNote = ' · Market diaktifkan kembali (Relisted).';
+      }
+    }
+
+    const currentPairAfterToggle = db.tradingPairs.get(pairId) || pair;
+    if (!currentPairAfterToggle.isDelisted && delistScheduledAt !== undefined) {
+      if (delistScheduledAt === null || delistScheduledAt === '' || Number(delistScheduledAt) === 0) {
+        if (currentPairAfterToggle.delistScheduledAt) {
+          cancelScheduledDelistMarket(pairId, adminUser.id, adminUser.email);
+          lifecycleNote += ' · Jadwal delisting dibatalkan.';
+        }
+      } else {
+        const parsedTs = Number(delistScheduledAt);
+        if (!Number.isFinite(parsedTs) || parsedTs <= Date.now() + 10000) {
+          return res.status(400).json({ error: 'Waktu jadwal delisting harus berada di masa depan (minimal 10 detik dari sekarang).' });
+        }
+        if (
+          currentPairAfterToggle.delistScheduledAt !== parsedTs ||
+          (delistReason !== undefined && delistReason !== currentPairAfterToggle.delistReason)
+        ) {
+          scheduleDelistMarket(
+            pairId,
+            parsedTs,
+            adminUser.id,
+            adminUser.email,
+            delistReason || currentPairAfterToggle.delistReason || 'Delisting terjadwal oleh admin'
+          );
+          lifecycleNote += ` · Delisting dijadwalkan pada ${new Date(parsedTs).toLocaleString('id-ID')}.`;
+        }
+      }
+    }
+
     db.saveToDisk();
+    const finalPair = db.tradingPairs.get(pairId) || pair;
 
     res.json({
       success: true,
-      message: `Konfigurasi kuantitas order ${pairId} berhasil diperbarui: Min ${humanMin} ${pair.baseCurrency}, Max ${humanMax} ${pair.baseCurrency}`,
-      pair,
+      message: `Konfigurasi ${pairId} berhasil diperbarui: Min ${humanMin} ${finalPair.baseCurrency}, Max ${humanMax} ${finalPair.baseCurrency}${lifecycleNote}`,
+      pair: finalPair,
       humanLimits: {
         minTokens: humanMin,
         maxTokens: humanMax,
@@ -1017,6 +1077,433 @@ adminRouter.post('/external-ws/whitelist/remove', requireAdmin, (req, res) => {
     res.json({
       success: true,
       message: `Pair ${rawSymbol} dihapus dari whitelist & di-unsubscribe dari WebSocket.`
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ============================================================================
+// CRYPTO ASSET METADATA, LOGO/ICON & DECIMAL MANAGEMENT (ADMIN CONSOLE)
+// ============================================================================
+
+function validateAndSanitizeLogoUrl(rawLogo: unknown): string | undefined {
+  if (rawLogo === undefined) return undefined;
+  const trimmed = String(rawLogo || '').trim();
+  if (!trimmed) return '';
+
+  if (trimmed.length > 512000) {
+    throw new Error('Ukuran logo terlalu besar (maksimal 500 KB). Kompres atau pilih gambar yang lebih kecil.');
+  }
+
+  if (trimmed.startsWith('https://') || trimmed.startsWith('http://')) {
+    if (trimmed.length > 2048) {
+      throw new Error('URL logo terlalu panjang (maksimal 2048 karakter).');
+    }
+    return trimmed;
+  }
+
+  const dataUriMatch = trimmed.match(/^data:image\/(png|jpeg|jpg|webp|gif|svg\+xml);base64,([A-Za-z0-9+/=]+)$/i);
+  if (dataUriMatch) {
+    const mimeSubtype = dataUriMatch[1].toLowerCase();
+    if (mimeSubtype === 'svg+xml') {
+      const decodedSvg = Buffer.from(dataUriMatch[2], 'base64').toString('utf8');
+      if (/<script[\s>]|on[a-z]+\s*=|javascript:/i.test(decodedSvg)) {
+        throw new Error('File SVG tidak diizinkan mengandung script atau event handler.');
+      }
+    }
+    return trimmed;
+  }
+
+  throw new Error('Format logo tidak valid. Gunakan upload PNG/JPG/WebP/SVG atau URL https://');
+}
+
+function validateOptionalHttpUrl(rawUrl: unknown, fieldName: string): string | undefined {
+  if (rawUrl === undefined) return undefined;
+  const trimmed = String(rawUrl || '').trim();
+  if (!trimmed) return '';
+  if (!/^https?:\/\//i.test(trimmed)) {
+    throw new Error(`${fieldName} harus diawali dengan https:// atau http://`);
+  }
+  if (trimmed.length > 1024) {
+    throw new Error(`${fieldName} terlalu panjang.`);
+  }
+  return trimmed;
+}
+
+function serializeAdminAsset(asset: Asset) {
+  const linkedPairs = Array.from(db.tradingPairs.values())
+    .filter(
+      p =>
+        p.baseCurrency.toUpperCase() === asset.symbol.toUpperCase() ||
+        p.quoteCurrency.toUpperCase() === asset.symbol.toUpperCase()
+    )
+    .map(p => p.id);
+
+  return {
+    ...asset,
+    logoUrl: asset.logoUrl || '',
+    category: asset.category || (asset.network === 'FIAT' ? 'Fiat' : asset.assetType === 'NATIVE' ? 'Layer 1' : 'Token'),
+    contractAddress: asset.contractAddress || '',
+    description: asset.description || '',
+    websiteUrl: asset.websiteUrl || '',
+    explorerUrl: asset.explorerUrl || '',
+    linkedPairs
+  };
+}
+
+// GET /api/admin/assets - List all exchange crypto & fiat assets with linked pairs
+adminRouter.get('/assets', requireAdmin, (req, res) => {
+  try {
+    const assets = db.ensureAssetsForTradingPairs()
+      .map(serializeAdminAsset)
+      .sort((a, b) => a.symbol.localeCompare(b.symbol));
+
+    res.json({
+      success: true,
+      count: assets.length,
+      assets
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/assets - Register a new crypto asset with logo, metadata & decimals
+adminRouter.post('/assets', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const rawSymbol = String(req.body?.symbol || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const rawName = String(req.body?.name || '').trim();
+
+    if (!rawSymbol || rawSymbol.length < 2 || rawSymbol.length > 15) {
+      return res.status(400).json({ error: 'Simbol aset harus 2–15 karakter alfanumerik (contoh: BTC, SOL, PEPE).' });
+    }
+    if (!rawName || rawName.length < 2 || rawName.length > 80) {
+      return res.status(400).json({ error: 'Nama lengkap aset harus 2–80 karakter.' });
+    }
+
+    const existing = Array.from(db.assets.values()).find(
+      a => a.symbol.toUpperCase() === rawSymbol
+    );
+    if (existing) {
+      return res.status(409).json({ error: `Aset dengan simbol ${rawSymbol} sudah terdaftar. Gunakan menu Edit Aset.` });
+    }
+
+    const decimals = Number(req.body?.decimals ?? 8);
+    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
+      return res.status(400).json({ error: 'Desimal aset harus berupa bilangan bulat antara 0 sampai 18.' });
+    }
+
+    const assetType: AssetType = req.body?.assetType === 'NATIVE' ? 'NATIVE' : 'TOKEN';
+    const allowedStatuses: AssetStatus[] = ['PENDING', 'ACTIVE', 'SUSPENDED', 'RETIRED'];
+    const status: AssetStatus = allowedStatuses.includes(req.body?.status) ? req.body.status : 'ACTIVE';
+    const network = String(req.body?.network || rawSymbol).trim().toUpperCase() || rawSymbol;
+    const logoUrl = validateAndSanitizeLogoUrl(req.body?.logoUrl) || '';
+    const websiteUrl = validateOptionalHttpUrl(req.body?.websiteUrl, 'Website URL') || '';
+    const explorerUrl = validateOptionalHttpUrl(req.body?.explorerUrl, 'Explorer URL') || '';
+    const category = String(req.body?.category || (assetType === 'NATIVE' ? 'Layer 1' : 'Token')).trim().slice(0, 40);
+    const description = String(req.body?.description || '').trim().slice(0, 1000);
+    const contractAddress = String(req.body?.contractAddress || '').trim().slice(0, 160);
+
+    const now = Date.now();
+    const newAsset: Asset = {
+      id: `ast-${rawSymbol.toLowerCase()}-${crypto.randomUUID().slice(0, 8)}`,
+      symbol: rawSymbol,
+      name: rawName,
+      logoUrl,
+      assetType,
+      category,
+      decimals,
+      network,
+      contractAddress: contractAddress || undefined,
+      description: description || undefined,
+      websiteUrl: websiteUrl || undefined,
+      explorerUrl: explorerUrl || undefined,
+      status,
+      depositEnabled: req.body?.depositEnabled !== undefined ? Boolean(req.body.depositEnabled) : true,
+      withdrawalEnabled: req.body?.withdrawalEnabled !== undefined ? Boolean(req.body.withdrawalEnabled) : true,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    db.assets.set(newAsset.id, newAsset);
+    db.auditLogs.push({
+      id: crypto.randomUUID(),
+      actorId: adminUser?.id || 'ADMIN',
+      action: 'ASSET_CREATED',
+      resource: `asset:${newAsset.symbol}`,
+      details: `Aset baru ${newAsset.symbol} (${newAsset.name}, ${newAsset.decimals} desimal, network=${newAsset.network}, customLogo=${Boolean(logoUrl)}) ditambahkan oleh ${adminUser?.email}`,
+      createdAt: now
+    });
+    db.saveToDisk();
+
+    const serializedList = Array.from(db.assets.values()).map(serializeAdminAsset);
+    marketWsService.broadcastAssetsUpdated(serializedList);
+
+    res.status(201).json({
+      success: true,
+      message: `Aset ${newAsset.symbol} (${newAsset.name}) berhasil ditambahkan.`,
+      asset: serializeAdminAsset(newAsset)
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// PUT /api/admin/assets/:id - Edit asset logo/icon, details, decimals, network & operational flags
+adminRouter.put('/assets/:id', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const assetId = req.params.id;
+    const asset = db.assets.get(assetId) ||
+      Array.from(db.assets.values()).find(a => a.symbol.toUpperCase() === assetId.toUpperCase());
+
+    if (!asset) {
+      return res.status(404).json({ error: `Aset ${assetId} tidak ditemukan.` });
+    }
+
+    const changes: string[] = [];
+
+    if (req.body?.name !== undefined) {
+      const nextName = String(req.body.name).trim();
+      if (nextName.length < 2 || nextName.length > 80) {
+        return res.status(400).json({ error: 'Nama aset harus 2–80 karakter.' });
+      }
+      if (nextName !== asset.name) {
+        changes.push(`name: "${asset.name}" -> "${nextName}"`);
+        asset.name = nextName;
+      }
+    }
+
+    if (req.body?.logoUrl !== undefined) {
+      const sanitizedLogo = validateAndSanitizeLogoUrl(req.body.logoUrl) || '';
+      if (sanitizedLogo !== (asset.logoUrl || '')) {
+        changes.push(`logoUrl: ${sanitizedLogo ? 'UPDATED' : 'CLEARED'}`);
+        asset.logoUrl = sanitizedLogo || undefined;
+      }
+    }
+
+    if (req.body?.assetType !== undefined) {
+      const nextType: AssetType = req.body.assetType === 'NATIVE' ? 'NATIVE' : 'TOKEN';
+      if (nextType !== asset.assetType) {
+        changes.push(`assetType: ${asset.assetType} -> ${nextType}`);
+        asset.assetType = nextType;
+      }
+    }
+
+    if (req.body?.category !== undefined) {
+      const nextCategory = String(req.body.category || '').trim().slice(0, 40);
+      if (nextCategory !== (asset.category || '')) {
+        changes.push(`category: "${asset.category || ''}" -> "${nextCategory}"`);
+        asset.category = nextCategory || undefined;
+      }
+    }
+
+    if (req.body?.network !== undefined) {
+      const nextNetwork = String(req.body.network || '').trim().toUpperCase().slice(0, 40);
+      if (!nextNetwork) {
+        return res.status(400).json({ error: 'Jaringan (network) tidak boleh kosong.' });
+      }
+      if (nextNetwork !== asset.network) {
+        changes.push(`network: ${asset.network} -> ${nextNetwork}`);
+        asset.network = nextNetwork;
+      }
+    }
+
+    if (req.body?.contractAddress !== undefined) {
+      const nextContract = String(req.body.contractAddress || '').trim().slice(0, 160);
+      if (nextContract !== (asset.contractAddress || '')) {
+        changes.push(`contractAddress updated`);
+        asset.contractAddress = nextContract || undefined;
+      }
+    }
+
+    if (req.body?.description !== undefined) {
+      const nextDesc = String(req.body.description || '').trim().slice(0, 1000);
+      if (nextDesc !== (asset.description || '')) {
+        changes.push(`description updated`);
+        asset.description = nextDesc || undefined;
+      }
+    }
+
+    if (req.body?.websiteUrl !== undefined) {
+      const nextWeb = validateOptionalHttpUrl(req.body.websiteUrl, 'Website URL') || '';
+      if (nextWeb !== (asset.websiteUrl || '')) {
+        changes.push(`websiteUrl updated`);
+        asset.websiteUrl = nextWeb || undefined;
+      }
+    }
+
+    if (req.body?.explorerUrl !== undefined) {
+      const nextExplorer = validateOptionalHttpUrl(req.body.explorerUrl, 'Explorer URL') || '';
+      if (nextExplorer !== (asset.explorerUrl || '')) {
+        changes.push(`explorerUrl updated`);
+        asset.explorerUrl = nextExplorer || undefined;
+      }
+    }
+
+    const syncedPairs: string[] = [];
+    if (req.body?.decimals !== undefined) {
+      const nextDecimals = Number(req.body.decimals);
+      if (!Number.isInteger(nextDecimals) || nextDecimals < 0 || nextDecimals > 18) {
+        return res.status(400).json({ error: 'Desimal aset harus berupa bilangan bulat antara 0 sampai 18.' });
+      }
+      if (nextDecimals !== asset.decimals) {
+        changes.push(`decimals: ${asset.decimals} -> ${nextDecimals}`);
+        asset.decimals = nextDecimals;
+
+        // Synchronize baseDecimals / quoteDecimals across linked trading pairs so order book & forms stay consistent
+        for (const pair of db.tradingPairs.values()) {
+          let pairChanged = false;
+          if (pair.baseCurrency.toUpperCase() === asset.symbol.toUpperCase()) {
+            pair.baseDecimals = nextDecimals;
+            pairChanged = true;
+          }
+          if (pair.quoteCurrency.toUpperCase() === asset.symbol.toUpperCase()) {
+            pair.quoteDecimals = nextDecimals;
+            pairChanged = true;
+          }
+          if (pairChanged) {
+            syncedPairs.push(pair.id);
+          }
+        }
+      }
+    }
+
+    if (req.body?.status !== undefined) {
+      const allowedStatuses: AssetStatus[] = ['PENDING', 'ACTIVE', 'SUSPENDED', 'RETIRED'];
+      if (!allowedStatuses.includes(req.body.status)) {
+        return res.status(400).json({ error: 'Status aset tidak valid.' });
+      }
+      if (req.body.status !== asset.status) {
+        changes.push(`status: ${asset.status} -> ${req.body.status}`);
+        asset.status = req.body.status;
+      }
+    }
+
+    if (req.body?.depositEnabled !== undefined) {
+      const nextDep = Boolean(req.body.depositEnabled);
+      if (nextDep !== asset.depositEnabled) {
+        changes.push(`depositEnabled: ${asset.depositEnabled} -> ${nextDep}`);
+        asset.depositEnabled = nextDep;
+      }
+    }
+
+    if (req.body?.withdrawalEnabled !== undefined) {
+      const nextWd = Boolean(req.body.withdrawalEnabled);
+      if (nextWd !== asset.withdrawalEnabled) {
+        changes.push(`withdrawalEnabled: ${asset.withdrawalEnabled} -> ${nextWd}`);
+        asset.withdrawalEnabled = nextWd;
+      }
+    }
+
+    asset.updatedAt = Date.now();
+    db.assets.set(asset.id, asset);
+
+    db.auditLogs.push({
+      id: crypto.randomUUID(),
+      actorId: adminUser?.id || 'ADMIN',
+      action: 'ASSET_UPDATED',
+      resource: `asset:${asset.symbol}`,
+      details: `Aset ${asset.symbol} diperbarui oleh ${adminUser?.email}: ${changes.length > 0 ? changes.join('; ') : 'no field changes'}${syncedPairs.length > 0 ? ` | Synced pairs: ${syncedPairs.join(', ')}` : ''}`,
+      createdAt: Date.now()
+    });
+    db.saveToDisk();
+
+    const serializedList = Array.from(db.assets.values()).map(serializeAdminAsset);
+    marketWsService.broadcastAssetsUpdated(serializedList);
+
+    res.json({
+      success: true,
+      message: `Aset ${asset.symbol} (${asset.name}) berhasil diperbarui${syncedPairs.length > 0 ? ` & disinkronkan ke ${syncedPairs.length} pair` : ''}.`,
+      asset: serializeAdminAsset(asset),
+      syncedPairs
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ============================================================================
+// MARKET DELISTING & RELISTING OPERATIONS (ADMIN CONSOLE)
+// ============================================================================
+
+// POST /api/admin/pairs/delist-schedule - Schedule future delisting with live countdown in Chart & Markets
+adminRouter.post('/pairs/delist-schedule', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const { pairId, delistScheduledAt, reason } = req.body;
+    if (!pairId || !delistScheduledAt) {
+      return res.status(400).json({ error: 'pairId dan delistScheduledAt wajib diisi.' });
+    }
+    const pair = scheduleDelistMarket(
+      String(pairId),
+      Number(delistScheduledAt),
+      adminUser?.id || 'ADMIN',
+      adminUser?.email,
+      reason
+    );
+    res.json({
+      success: true,
+      message: `Delisting ${pair.id} dijadwalkan pada ${new Date(pair.delistScheduledAt || 0).toLocaleString('id-ID')}. Countdown timer delisting kini tampil di Market Chart.`,
+      pair
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/pairs/delist-cancel - Cancel an upcoming scheduled delisting
+adminRouter.post('/pairs/delist-cancel', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const { pairId } = req.body;
+    if (!pairId) return res.status(400).json({ error: 'pairId wajib diisi.' });
+    const pair = cancelScheduledDelistMarket(String(pairId), adminUser?.id || 'ADMIN', adminUser?.email);
+    res.json({
+      success: true,
+      message: `Jadwal delisting untuk ${pair.id} berhasil dibatalkan.`,
+      pair
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/pairs/delist-now - Immediately delist market, cancel & refund all resting orders atomically
+adminRouter.post('/pairs/delist-now', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const { pairId, reason } = req.body;
+    if (!pairId) return res.status(400).json({ error: 'pairId wajib diisi.' });
+    const result = executeDelistMarket(
+      String(pairId),
+      adminUser?.id || 'ADMIN',
+      adminUser?.email,
+      reason
+    );
+    res.json({
+      success: true,
+      message: `Market ${result.pair.id} berhasil di-DELISTING. ${result.cancelledOrdersCount} order terbuka dibatalkan & direfund otomatis, ${result.stoppedBotsCount} bot dihentikan.`,
+      ...result
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// POST /api/admin/pairs/relist - Restore a previously delisted market back to active
+adminRouter.post('/pairs/relist', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const { pairId } = req.body;
+    if (!pairId) return res.status(400).json({ error: 'pairId wajib diisi.' });
+    const pair = relistMarket(String(pairId), adminUser?.id || 'ADMIN', adminUser?.email);
+    res.json({
+      success: true,
+      message: `Market ${pair.id} berhasil diaktifkan kembali (Relisted).`,
+      pair
     });
   } catch (err: any) {
     res.status(400).json({ error: err.message });

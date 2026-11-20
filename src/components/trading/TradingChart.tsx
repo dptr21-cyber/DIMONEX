@@ -13,13 +13,16 @@ import { ChartMode, Timeframe } from './chartTypes.js';
 import { DimonexChart } from './DimonexChart.js';
 import { TradingViewChart } from './TradingViewChart.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
+import { AssetIcon } from '../ui/AssetIcon.js';
+import { MarketCountdownOverlay } from './MarketCountdownOverlay.js';
 
 interface TradingChartProps {
   pair: TradingPairItem;
   recentTrades: TradeItem[];
+  onRefreshMarkets?: () => void;
 }
 
-export const TradingChart: React.FC<TradingChartProps> = ({ pair, recentTrades }) => {
+export const TradingChart: React.FC<TradingChartProps> = ({ pair, recentTrades, onRefreshMarkets }) => {
   const [chartMode, setChartModeState] = useState<ChartMode>(() => {
     const saved = localStorage.getItem('dimonex_chart_mode') || localStorage.getItem('dominex_chart_mode');
     return saved === 'TRADINGVIEW' ? 'TRADINGVIEW' : 'DIMONEX';
@@ -114,6 +117,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({ pair, recentTrades }
         {/* Left: Pair Info & 24h Ticker Stats */}
         <div className="flex items-center gap-4 flex-wrap">
           <div className="flex items-center gap-2">
+            <AssetIcon symbol={pair.baseCurrency} logoUrl={pair.baseLogoUrl || undefined} size="xs" />
             <span className="font-semibold text-sm tracking-tight text-[#E4EBEF]">
               {pair.baseCurrency}/{pair.quoteCurrency}
             </span>
@@ -121,6 +125,15 @@ export const TradingChart: React.FC<TradingChartProps> = ({ pair, recentTrades }
               {pair.quoteCurrency}
             </StatusBadge>
             <StatusBadge tone="neutral">SPOT</StatusBadge>
+            {pair.isDelisted ? (
+              <StatusBadge tone="danger" dot>DELISTED</StatusBadge>
+            ) : pair.delistScheduledAt && pair.delistScheduledAt > Date.now() ? (
+              <StatusBadge tone="danger" dot>DELISTING</StatusBadge>
+            ) : !pair.isActive && pair.scheduledAt && pair.scheduledAt > Date.now() ? (
+              <StatusBadge tone="warning" dot>SCHEDULED</StatusBadge>
+            ) : pair.isHalted ? (
+              <StatusBadge tone="danger">HALTED</StatusBadge>
+            ) : null}
           </div>
 
           <div className="flex items-baseline gap-2 font-mono tabular-nums">
@@ -300,6 +313,13 @@ export const TradingChart: React.FC<TradingChartProps> = ({ pair, recentTrades }
         </div>
       )}
 
+      {/* Scheduled Delisting Non-Blocking Warning Banner with Live Countdown */}
+      <MarketCountdownOverlay
+        pair={pair}
+        mode="BANNER"
+        onCountdownComplete={onRefreshMarkets}
+      />
+
       {/* Main Active Engine Canvas */}
       <div className="relative flex-1 w-full min-h-[420px]">
         {chartMode === 'DIMONEX' ? (
@@ -323,6 +343,13 @@ export const TradingChart: React.FC<TradingChartProps> = ({ pair, recentTrades }
             onFallbackToPro={() => setChartMode('DIMONEX')}
           />
         )}
+
+        {/* Scheduled Initial Listing Countdown or Post-Delisting Overlay */}
+        <MarketCountdownOverlay
+          pair={pair}
+          mode="OVERLAY"
+          onCountdownComplete={onRefreshMarkets}
+        />
       </div>
     </div>
   );

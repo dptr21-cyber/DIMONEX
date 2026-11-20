@@ -397,16 +397,27 @@ export const OrderPlacementForm: React.FC<Props> = ({
           <p className="text-[11px] text-[#EA5B65] font-medium">{errorMessage}</p>
         )}
 
-        {pair.isHalted && (
+        {pair.isDelisted ? (
+          <div className="p-2.5 rounded-[7px] bg-[#401F27]/70 border border-[#EA5B65]/50 text-[#EA5B65] text-xs font-medium">
+            Market ini telah di-delisting{pair.delistReason ? `: ${pair.delistReason}` : ''}. Order baru tidak dapat dipasang.
+          </div>
+        ) : !pair.isActive && pair.scheduledAt && pair.scheduledAt > Date.now() ? (
+          <div className="p-2.5 rounded-[7px] bg-[#2C2415]/70 border border-[#D6A85C]/40 text-[#D6A85C] text-xs font-medium">
+            Jadwal Initial Listing: <span className="font-mono">{new Date(pair.scheduledAt).toLocaleString('id-ID')}</span>. Order dibuka otomatis setelah countdown selesai.
+          </div>
+        ) : pair.isHalted ? (
           <div className="p-2.5 rounded-[7px] bg-[#401F27]/60 border border-[#EA5B65]/40 text-[#EA5B65] text-xs font-medium">
             Perdagangan untuk pasar ini sedang dihentikan sementara (HALTED).
           </div>
-        )}
-        {!pair.isActive && (
+        ) : !pair.isActive ? (
           <div className="p-2.5 rounded-[7px] bg-[#2C2415]/60 border border-[#D6A85C]/40 text-[#D6A85C] text-xs font-medium">
             Pasar ini belum aktif diperdagangkan (PREPARING).
           </div>
-        )}
+        ) : pair.delistScheduledAt && pair.delistScheduledAt > Date.now() ? (
+          <div className="p-2.5 rounded-[7px] bg-[#401F27]/50 border border-[#EA5B65]/40 text-[#F16D76] text-[11px] font-medium">
+            Perhatian: Pair ini dijadwalkan delisting pada <span className="font-mono">{new Date(pair.delistScheduledAt).toLocaleString('id-ID')}</span>.
+          </div>
+        ) : null}
 
         <Button
           type="submit"
@@ -414,9 +425,13 @@ export const OrderPlacementForm: React.FC<Props> = ({
           size="lg"
           className="w-full font-semibold"
           isLoading={isSubmitting}
-          disabled={pair.isHalted || !pair.isActive}
+          disabled={Boolean(pair.isDelisted) || pair.isHalted || !pair.isActive}
         >
-          {pair.isHalted
+          {pair.isDelisted
+            ? 'Market Delisted'
+            : !pair.isActive && pair.scheduledAt && pair.scheduledAt > Date.now()
+            ? 'Menunggu Jadwal Listing'
+            : pair.isHalted
             ? 'Trading Halted'
             : !pair.isActive
             ? 'Market Preparing'

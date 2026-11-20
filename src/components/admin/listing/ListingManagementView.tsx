@@ -50,6 +50,13 @@ import { ConfirmationDialog } from '../../ui/ConfirmationDialog.js';
 import { StatusBadge } from '../../ui/StatusBadge.js';
 import { useToast } from '../../ui/Toast.js';
 import { formatQuotePrice, parseDecimalToUnits, formatUnitsToDecimal } from '../../../lib/formatters.js';
+import { formatCountdownCompact } from '../../trading/MarketCountdownOverlay.js';
+
+function toLocalDateTimeInput(ts: number): string {
+  const d = new Date(ts);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 function formatListingQuoteUnits(rawUnits: string | undefined, item: any): string {
   const quoteSym = item?.quoteAsset?.symbol || (String(item?.symbol || '').includes('USDT') ? 'USDT' : 'IDR');
@@ -110,6 +117,13 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
     listingId: string;
   }>({ isOpen: false, mode: null, listingId: '' });
   const [isConfirmSubmitting, setIsConfirmSubmitting] = useState(false);
+
+  // Schedule Listing Modal State
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [scheduleTargetListing, setScheduleTargetListing] = useState<any | null>(null);
+  const [scheduleDateTime, setScheduleDateTime] = useState<string>('');
+  const [isSubmittingSchedule, setIsSubmittingSchedule] = useState(false);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
 
   // Operations state
   const [auditVerification, setAuditVerification] = useState<any>(null);
@@ -208,6 +222,74 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    const hasScheduled = listings.some(l => l.status === 'SCHEDULED' && l.scheduledAt && l.scheduledAt > Date.now());
+    if (!hasScheduled && !showScheduleModal) return;
+    const t = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [listings, showScheduleModal]);
+
+  const openScheduleModal = (item: any) => {
+    setScheduleTargetListing(item);
+    const defaultTs = item.scheduledAt && item.scheduledAt > Date.now() + 30000
+      ? item.scheduledAt
+      : Date.now() + 60 * 60 * 1000;
+    setScheduleDateTime(toLocalDateTimeInput(defaultTs));
+    setShowScheduleModal(true);
+  };
+
+  const applySchedulePreset = (minutesFromNow: number) => {
+    setScheduleDateTime(toLocalDateTimeInput(Date.now() + minutesFromNow * 60 * 1000));
+  };
+
+  const handleSaveSchedule = async () => {
+    if (!scheduleTargetListing) return;
+    const parsedTs = new Date(scheduleDateTime).getTime();
+    if (!Number.isFinite(parsedTs) || parsedTs <= Date.now() + 10000) {
+      showToast('warning', 'Jadwal Tidak Valid', 'Waktu jadwal listing harus di masa depan (minimal 10 detik dari sekarang).');
+      return;
+    }
+    setIsSubmittingSchedule(true);
+    try {
+      const res = await fetch(`/api/admin/listings/${scheduleTargetListing.id}/schedule`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ scheduledAt: parsedTs })
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Gagal menjadwalkan listing');
+      showToast('success', 'Schedule Listing Aktif', json.message || `Listing ${scheduleTargetListing.symbol} dijadwalkan dengan Countdown Timer di Chart.`);
+      setShowScheduleModal(false);
+      await loadData();
+      onRefreshMarkets?.();
+    } catch (e: any) {
+      showToast('error', 'Gagal Menjadwalkan', e.message);
+    } finally {
+      setIsSubmittingSchedule(false);
+    }
+  };
+
+  const handleCancelSchedule = async (id: string) => {
+    setIsSubmittingSchedule(true);
+    try {
+      const res = await fetch(`/api/admin/listings/${id}/unschedule`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ reason: 'Jadwal listing dibatalkan oleh admin' })
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Gagal membatalkan jadwal listing');
+      showToast('success', 'Jadwal Dibatalkan', json.message || 'Status listing dikembalikan ke APPROVED.');
+      setShowScheduleModal(false);
+      await loadData();
+      onRefreshMarkets?.();
+    } catch (e: any) {
+      showToast('error', 'Gagal Membatalkan Jadwal', e.message);
+    } finally {
+      setIsSubmittingSchedule(false);
+    }
+  };
 
   // Token Management Handlers
   const handleOpenTokenEdit = (pair: any) => {
@@ -800,11 +882,11 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
             </div>
 
             <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto">
-              {['ALL', 'DRAFT', 'PENDING_REVIEW', 'APPROVED', 'ACTIVE', 'SUSPENDED'].map(st => (
+              {['ALL', 'DRAFT', 'PENDING_REVIEW', 'APPROVED', 'SCHEDULED', 'ACTIVE', 'SUSPENDED'].map(st => (
                 <button
                   key={st}
                   onClick={() => setStatusFilter(st)}
-                  className={`px-2.5 py-1 rounded text-xs font-mono font-semibold transition-colors ${
+                  className={`px-2.5 py-1 rounded text-xs font-mono font-semibold transition-colors whitespace-nowrap ${
                     statusFilter === st
                       ? 'bg-[#17212B] text-white border border-[#202B34]'
                       : 'text-[#71818B] hover:text-[#A1AFB8]'
@@ -867,7 +949,25 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                         </div>
                       </td>
                       <td className="py-3 px-4">
-                        {renderStatusBadge(item.status)}
+                        <div className="space-y-1">
+                          <div>{renderStatusBadge(item.status)}</div>
+                          {item.status === 'SCHEDULED' && item.scheduledAt && (
+                            <div className="text-[10px] font-mono tabular-nums text-[#D6A85C] flex flex-col gap-0.5">
+                              <span className="inline-flex items-center gap-1 font-semibold">
+                                <Clock className="w-3 h-3" />
+                                T-{formatCountdownCompact(item.scheduledAt, nowMs)}
+                              </span>
+                              <span className="text-[#71818B] text-[9px]">
+                                {new Date(item.scheduledAt).toLocaleString('id-ID', {
+                                  day: '2-digit',
+                                  month: 'short',
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       </td>
                       <td className="py-3 px-4 text-right font-bold text-[#E4EBEF]">
                         <div>{formatListingQuoteUnits(item.tickSize, item)}</div>
@@ -896,30 +996,60 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                         </span>
                       </td>
                       <td className="py-3 px-4 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
+                        <div className="flex items-center justify-end gap-1.5 flex-wrap">
                           {item.status === 'DRAFT' && (
                             <button
                               onClick={() => handleSubmitForReview(item.id)}
-                              className="px-2 py-1 rounded bg-[#401F27] hover:bg-[#401F27]/80 text-[#EA5B65] text-[11px] font-semibold border border-[#EA5B65]/40 transition-colors"
+                              className="px-2 py-1 rounded bg-[#401F27] hover:bg-[#401F27]/80 text-[#EA5B65] text-[11px] font-semibold border border-[#EA5B65]/40 transition-colors cursor-pointer"
                             >
                               Submit
                             </button>
                           )}
 
                           {item.status === 'APPROVED' && (
-                            <button
-                              onClick={() => handleActivate(item.id)}
-                              disabled={isActivating}
-                              className="px-2 py-1 rounded bg-[#16A879]/15 hover:bg-[#16A879]/25 text-[#16A879] text-[11px] font-semibold border border-[#16A879]/30 transition-colors"
-                            >
-                              Activate
-                            </button>
+                            <>
+                              <button
+                                onClick={() => openScheduleModal(item)}
+                                className="px-2 py-1 rounded bg-[#2C2415] hover:bg-[#3A2F1B] text-[#D6A85C] text-[11px] font-semibold border border-[#D6A85C]/40 transition-colors inline-flex items-center gap-1 cursor-pointer"
+                                title="Jadwalkan listing dengan Countdown Timer di Market Chart"
+                              >
+                                <Calendar className="w-3 h-3" />
+                                Schedule
+                              </button>
+                              <button
+                                onClick={() => handleActivate(item.id)}
+                                disabled={isActivating}
+                                className="px-2 py-1 rounded bg-[#16A879]/15 hover:bg-[#16A879]/25 text-[#16A879] text-[11px] font-semibold border border-[#16A879]/30 transition-colors cursor-pointer"
+                              >
+                                Activate
+                              </button>
+                            </>
+                          )}
+
+                          {item.status === 'SCHEDULED' && (
+                            <>
+                              <button
+                                onClick={() => openScheduleModal(item)}
+                                className="px-2 py-1 rounded bg-[#2C2415] hover:bg-[#3A2F1B] text-[#D6A85C] text-[11px] font-semibold border border-[#D6A85C]/40 transition-colors inline-flex items-center gap-1 cursor-pointer"
+                                title="Ubah atau batalkan jadwal listing"
+                              >
+                                <Calendar className="w-3 h-3" />
+                                Ubah Jadwal
+                              </button>
+                              <button
+                                onClick={() => handleActivate(item.id)}
+                                disabled={isActivating}
+                                className="px-2 py-1 rounded bg-[#16A879]/15 hover:bg-[#16A879]/25 text-[#16A879] text-[11px] font-semibold border border-[#16A879]/30 transition-colors cursor-pointer"
+                              >
+                                Activate Now
+                              </button>
+                            </>
                           )}
 
                           {item.status === 'ACTIVE' && (
                             <button
                               onClick={() => handleSuspend(item.id)}
-                              className="px-2 py-1 rounded bg-[#401F27] hover:bg-[#401F27]/80 text-[#EA5B65] text-[11px] font-semibold border border-[#EA5B65]/40 transition-colors"
+                              className="px-2 py-1 rounded bg-[#401F27] hover:bg-[#401F27]/80 text-[#EA5B65] text-[11px] font-semibold border border-[#EA5B65]/40 transition-colors cursor-pointer"
                             >
                               Halt
                             </button>
@@ -928,7 +1058,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                           {item.status === 'SUSPENDED' && (
                             <button
                               onClick={() => handleResume(item.id)}
-                              className="px-2 py-1 rounded bg-[#16A879]/15 hover:bg-[#16A879]/25 text-[#16A879] text-[11px] font-semibold border border-[#16A879]/30 transition-colors"
+                              className="px-2 py-1 rounded bg-[#16A879]/15 hover:bg-[#16A879]/25 text-[#16A879] text-[11px] font-semibold border border-[#16A879]/30 transition-colors cursor-pointer"
                             >
                               Resume
                             </button>
@@ -939,7 +1069,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                               setSelectedListing(item);
                               setShowDetailModal(true);
                             }}
-                            className="px-2 py-1 rounded bg-[#111820] hover:bg-[#17212B] text-[#A1AFB8] hover:text-white text-[11px] border border-[#202B34] transition-colors"
+                            className="px-2 py-1 rounded bg-[#111820] hover:bg-[#17212B] text-[#A1AFB8] hover:text-white text-[11px] border border-[#202B34] transition-colors cursor-pointer"
                           >
                             Detail
                           </button>
@@ -1075,7 +1205,7 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {listings.filter(l => l.status === 'ACTIVE' || l.status === 'SUSPENDED').map(item => (
+            {listings.filter(l => l.status === 'ACTIVE' || l.status === 'SUSPENDED' || l.status === 'SCHEDULED').map(item => (
               <div key={item.id} className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-base font-bold font-mono text-[#E4EBEF]">{item.symbol}</span>
@@ -1086,28 +1216,49 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                   <div>Engine Pair ID: <strong className="text-white">{item.symbol}</strong></div>
                   <div>Tick Size: {formatListingQuoteUnits(item.tickSize, item)} ({item.tickSize} units) | Lot: {formatUnitsToDecimal(item.lotSize || '0', item.baseAsset?.decimals ?? 8, true)}</div>
                   <div>Base Decimals: {item.baseAsset?.decimals ?? 8} | Quote Decimals: {item.quoteAsset?.decimals ?? (String(item.symbol || '').includes('USDT') ? 6 : 2)}</div>
+                  {item.status === 'SCHEDULED' && item.scheduledAt && (
+                    <div className="text-[#D6A85C] font-semibold pt-1">
+                      Jadwal Launch: {new Date(item.scheduledAt).toLocaleString('id-ID')} (T-{formatCountdownCompact(item.scheduledAt, nowMs)})
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-between pt-2 border-t border-[#202B34]">
                   <button
                     onClick={() => handleReconcile(item.id)}
-                    className="text-xs text-[#6D9FE8] hover:underline flex items-center gap-1"
+                    className="text-xs text-[#6D9FE8] hover:underline flex items-center gap-1 cursor-pointer"
                   >
                     <RefreshCw className="w-3 h-3" /> Verifikasi Engine Sync
                   </button>
 
                   <div className="flex items-center gap-2">
-                    {item.status === 'ACTIVE' ? (
+                    {item.status === 'SCHEDULED' ? (
+                      <>
+                        <button
+                          onClick={() => openScheduleModal(item)}
+                          className="px-2.5 py-1 rounded bg-[#2C2415] text-[#D6A85C] text-xs font-semibold border border-[#D6A85C]/40 cursor-pointer"
+                        >
+                          Ubah Jadwal
+                        </button>
+                        <button
+                          onClick={() => handleActivate(item.id)}
+                          disabled={isActivating}
+                          className="px-2.5 py-1 rounded bg-[#16A879]/15 text-[#16A879] text-xs font-bold border border-[#16A879]/30 cursor-pointer"
+                        >
+                          Activate Now
+                        </button>
+                      </>
+                    ) : item.status === 'ACTIVE' ? (
                       <button
                         onClick={() => handleSuspend(item.id)}
-                        className="px-2.5 py-1 rounded bg-[#8DA5B1]/15 text-[#EA5B65] text-xs font-semibold border border-[#EA5B65]/40"
+                        className="px-2.5 py-1 rounded bg-[#8DA5B1]/15 text-[#EA5B65] text-xs font-semibold border border-[#EA5B65]/40 cursor-pointer"
                       >
                         Halt Market
                       </button>
                     ) : (
                       <button
                         onClick={() => handleResume(item.id)}
-                        className="px-2.5 py-1 rounded bg-[#16A879]/15 text-[#16A879] text-xs font-bold border border-[#16A879]/30"
+                        className="px-2.5 py-1 rounded bg-[#16A879]/15 text-[#16A879] text-xs font-bold border border-[#16A879]/30 cursor-pointer"
                       >
                         Resume Market
                       </button>
@@ -2104,13 +2255,52 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
                 </div>
               </div>
 
-              <div>
-                <label className="text-xs text-[#A1AFB8] block mb-1">Waktu Aktivasi Terjadwal (Opsional):</label>
+              <div className="p-3.5 rounded-[7px] bg-[#111820] border border-[#2B3944] space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-xs font-semibold text-[#E4EBEF] flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-[#D6A85C]" />
+                    <span>Schedule Listing / Waktu Pembukaan Trading (Opsional)</span>
+                  </label>
+                  {wizardData.scheduledAt && (
+                    <button
+                      type="button"
+                      onClick={() => setWizardData({ ...wizardData, scheduledAt: '' })}
+                      className="text-[10px] font-mono text-[#EA5B65] hover:underline cursor-pointer"
+                    >
+                      Hapus Jadwal
+                    </button>
+                  )}
+                </div>
                 <Input
                   type="datetime-local"
                   value={wizardData.scheduledAt}
                   onChange={e => setWizardData({ ...wizardData, scheduledAt: e.target.value })}
                 />
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {[
+                    { label: '+15 Menit', mins: 15 },
+                    { label: '+1 Jam', mins: 60 },
+                    { label: '+6 Jam', mins: 360 },
+                    { label: '+24 Jam', mins: 1440 },
+                  ].map(preset => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() =>
+                        setWizardData({
+                          ...wizardData,
+                          scheduledAt: toLocalDateTimeInput(Date.now() + preset.mins * 60 * 1000),
+                        })
+                      }
+                      className="px-2 py-1 rounded bg-[#17212B] hover:bg-[#1D2832] border border-[#2B3944] text-[10px] font-mono text-[#A1AFB8] hover:text-[#E4EBEF] transition-colors cursor-pointer"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-[#71818B] leading-relaxed">
+                  Jika jadwal di masa depan diisi, setelah disetujui Checker maka pasar otomatis berstatus <strong className="text-[#D6A85C]">SCHEDULED</strong> dan menampilkan <strong className="text-[#E4EBEF]">Countdown Timer</strong> langsung di halaman Market Chart hingga waktu pembukaan tercapai.
+                </p>
               </div>
             </div>
           )}
@@ -2736,6 +2926,119 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
         isLoading={isConfirmSubmitting}
         onConfirm={handleConfirmStatusChange}
       />
+
+      {/* 10. MODAL: SCHEDULE INITIAL LISTING */}
+      {showScheduleModal && scheduleTargetListing && (
+        <Modal
+          isOpen={showScheduleModal}
+          onClose={() => setShowScheduleModal(false)}
+          title={`Schedule Listing: ${scheduleTargetListing.symbol}`}
+          subtitle="Atur waktu pembukaan perdagangan otomatis dengan Countdown Timer di Market Chart"
+          maxWidth="max-w-lg"
+        >
+          <div className="space-y-4 text-xs">
+            <div className="p-3 rounded-[7px] bg-[#111820] border border-[#2B3944] space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[#71818B]">Trading Pair</span>
+                <span className="font-mono font-semibold text-[#E4EBEF]">{scheduleTargetListing.symbol}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[#71818B]">Status Saat Ini</span>
+                <span>{renderStatusBadge(scheduleTargetListing.status)}</span>
+              </div>
+              {scheduleTargetListing.scheduledAt && (
+                <div className="flex items-center justify-between">
+                  <span className="text-[#71818B]">Jadwal Tersimpan</span>
+                  <span className="font-mono text-[#D6A85C]">
+                    {new Date(scheduleTargetListing.scheduledAt).toLocaleString('id-ID')}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-[#A1AFB8] block">
+                Tanggal &amp; Waktu Pembukaan Trading (Waktu Lokal Browser)
+              </label>
+              <Input
+                type="datetime-local"
+                value={scheduleDateTime}
+                onChange={e => setScheduleDateTime(e.target.value)}
+              />
+
+              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                <span className="text-[10px] text-[#71818B] mr-1">Preset Cepat:</span>
+                {[
+                  { label: '+2 Menit', mins: 2 },
+                  { label: '+15 Menit', mins: 15 },
+                  { label: '+1 Jam', mins: 60 },
+                  { label: '+6 Jam', mins: 360 },
+                  { label: '+24 Jam', mins: 1440 },
+                ].map(p => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    onClick={() => applySchedulePreset(p.mins)}
+                    className="px-2 py-1 rounded bg-[#17212B] hover:bg-[#1D2832] border border-[#2B3944] text-[10px] font-mono text-[#A1AFB8] hover:text-[#E4EBEF] transition-colors cursor-pointer"
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {scheduleDateTime && Number.isFinite(new Date(scheduleDateTime).getTime()) && new Date(scheduleDateTime).getTime() > nowMs && (
+              <div className="p-3 rounded-[7px] bg-[#2C2415]/40 border border-[#D6A85C]/30 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-[#D6A85C]">
+                  <Clock className="w-4 h-4 shrink-0" />
+                  <div>
+                    <div className="font-semibold text-[11px]">Countdown Timer di Market Chart</div>
+                    <div className="text-[10px] text-[#A1AFB8]">
+                      Order buku otomatis dibuka saat hitungan mundur mencapai 00:00:00.
+                    </div>
+                  </div>
+                </div>
+                <span className="font-mono font-semibold text-sm text-[#E4EBEF] tabular-nums">
+                  {formatCountdownCompact(new Date(scheduleDateTime).getTime(), nowMs)}
+                </span>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-[#202B34]">
+              <div>
+                {scheduleTargetListing.status === 'SCHEDULED' && (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    disabled={isSubmittingSchedule}
+                    onClick={() => handleCancelSchedule(scheduleTargetListing.id)}
+                  >
+                    Batalkan Jadwal
+                  </Button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowScheduleModal(false)}
+                >
+                  Tutup
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={isSubmittingSchedule}
+                  onClick={handleSaveSchedule}
+                  icon={<Calendar className="w-3.5 h-3.5" />}
+                >
+                  {isSubmittingSchedule ? 'Menyimpan...' : 'Simpan Jadwal Listing'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 };

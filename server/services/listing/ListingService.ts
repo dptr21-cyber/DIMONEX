@@ -17,6 +17,7 @@ import {
 import { ListingAuditService } from './ListingAuditService.js';
 import { ListingActivationService, ActivationResult } from './ListingActivationService.js';
 import { marketWsService } from '../../websocket/MarketDataWs.js';
+import { ensureScheduledPairEntry } from '../MarketLifecycleScheduler.js';
 
 export interface CreateAssetInput {
   symbol: string;
@@ -498,12 +499,18 @@ export class ListingService {
 
     db.listingApprovals.set(listing.id, approval);
 
-    // State transition to APPROVED
-    listing.status = 'APPROVED';
+    // State transition: if a future scheduledAt was already configured, go straight to SCHEDULED
+    const hasFutureSchedule = Boolean(listing.scheduledAt && listing.scheduledAt > Date.now() + 5000);
+    listing.status = hasFutureSchedule ? 'SCHEDULED' : 'APPROVED';
     listing.updatedAt = Date.now();
     db.listingRequests.set(listing.id, listing);
 
-    db.scheduleSave();
+    if (hasFutureSchedule) {
+      ensureScheduledPairEntry(listing);
+      marketWsService.broadcastTickerSnapshot();
+    }
+
+    db.saveToDisk();
 
     ListingAuditService.recordEvent({
       aggregateId: listing.id,
@@ -592,7 +599,7 @@ export class ListingService {
   }
 
   /**
-   * 6. Schedule Listing Request
+   * 6. Schedule Listing Request (supports initial scheduling on APPROVED and rescheduling on SCHEDULED)
    */
   public static scheduleListing(
     id: string, 
@@ -603,19 +610,23 @@ export class ListingService {
     const listing = db.listingRequests.get(id);
     if (!listing) throw new Error(`Listing request tidak ditemukan: ${id}`);
 
-    if (listing.status !== 'APPROVED') {
-      throw new Error(`Hanya listing yang sudah di-APPROVED yang dapat dijadwalkan (Status saat ini: ${listing.status})`);
+    if (listing.status !== 'APPROVED' && listing.status !== 'SCHEDULED') {
+      throw new Error(`Hanya listing berstatus APPROVED atau SCHEDULED yang dapat dijadwalkan (Status saat ini: ${listing.status})`);
     }
 
-    if (!scheduledAt || scheduledAt <= Date.now()) {
-      throw new Error('Waktu jadwal (scheduledAt) harus berupa waktu masa depan.');
+    if (!scheduledAt || !Number.isFinite(scheduledAt) || scheduledAt <= Date.now() + 5000) {
+      throw new Error('Waktu jadwal (scheduledAt) harus berupa waktu masa depan (minimal 5 detik dari sekarang).');
     }
 
     listing.status = 'SCHEDULED';
-    listing.scheduledAt = scheduledAt;
+    listing.scheduledAt = Math.floor(scheduledAt);
     listing.updatedAt = Date.now();
     db.listingRequests.set(listing.id, listing);
-    db.scheduleSave();
+
+    // Expose pre-launch TradingPair immediately so users can open Market Chart & view the live Countdown Timer
+    ensureScheduledPairEntry(listing);
+    db.saveToDisk();
+    marketWsService.broadcastTickerSnapshot();
 
     ListingAuditService.recordEvent({
       aggregateId: listing.id,
@@ -625,7 +636,57 @@ export class ListingService {
       payload: {
         scheduledAt: listing.scheduledAt
       },
-      reason: `Listing scheduled for activation at ${new Date(scheduledAt).toISOString()}`,
+      reason: `Listing scheduled for activation at ${new Date(listing.scheduledAt).toISOString()}`,
+      securityMetadata: securityMeta
+    });
+
+    return listing;
+  }
+
+  /**
+   * 6b. Cancel Scheduled Listing (reverts SCHEDULED -> APPROVED)
+   */
+  public static cancelScheduleListing(
+    id: string,
+    actorId: string,
+    securityMeta?: any
+  ): ListingRequest {
+    const listing = db.listingRequests.get(id);
+    if (!listing) throw new Error(`Listing request tidak ditemukan: ${id}`);
+
+    if (listing.status !== 'SCHEDULED') {
+      throw new Error(`Hanya listing berstatus SCHEDULED yang dapat dibatalkan jadwalnya (Status saat ini: ${listing.status})`);
+    }
+
+    const baseAsset = db.assets.get(listing.assetId);
+    const quoteAsset = db.assets.get(listing.quoteAssetId);
+    const pairId = baseAsset && quoteAsset ? `${baseAsset.symbol}-${quoteAsset.symbol}` : null;
+
+    listing.status = 'APPROVED';
+    listing.scheduledAt = undefined;
+    listing.updatedAt = Date.now();
+    db.listingRequests.set(listing.id, listing);
+
+    if (pairId) {
+      const existingPair = db.tradingPairs.get(pairId);
+      if (existingPair && !existingPair.isActive && !db.markets.has(pairId)) {
+        db.tradingPairs.delete(pairId);
+      } else if (existingPair) {
+        existingPair.scheduledAt = undefined;
+        db.tradingPairs.set(pairId, existingPair);
+      }
+    }
+
+    db.saveToDisk();
+    marketWsService.broadcastTickerSnapshot();
+
+    ListingAuditService.recordEvent({
+      aggregateId: listing.id,
+      eventType: 'LISTING_UPDATED',
+      actorId,
+      aggregateVersion: listing.version,
+      payload: { status: 'APPROVED', scheduledAt: null },
+      reason: 'Scheduled listing launch time cancelled by Admin',
       securityMetadata: securityMeta
     });
 

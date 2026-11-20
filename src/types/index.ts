@@ -526,18 +526,48 @@ export interface UserBalance {
   locked?: string | number;
 }
 
+export interface AssetItem {
+  id: string;
+  symbol: string;
+  name: string;
+  logoUrl?: string;
+  assetType: 'NATIVE' | 'TOKEN';
+  category?: string;
+  decimals: number;
+  network: string;
+  contractAddress?: string;
+  description?: string;
+  websiteUrl?: string;
+  explorerUrl?: string;
+  status: 'PENDING' | 'ACTIVE' | 'SUSPENDED' | 'RETIRED';
+  depositEnabled: boolean;
+  withdrawalEnabled: boolean;
+  depositOpenedAt?: number;
+  withdrawalOpenedAt?: number;
+  linkedPairs?: string[];
+  createdAt?: number;
+  updatedAt?: number;
+}
+
 export interface TradingPairItem {
   id: string;
   baseCurrency: string;
   quoteCurrency: string;
   baseDecimals: number;
   quoteDecimals: number;
+  baseLogoUrl?: string;
+  baseName?: string;
+  quoteLogoUrl?: string;
   minOrderSize: string;
   maxOrderSize: string;
   makerFeeBps: number;
   takerFeeBps: number;
   isActive: boolean;
   isHalted: boolean;
+  isDelisted?: boolean;
+  delistedAt?: number;
+  delistScheduledAt?: number;
+  delistReason?: string;
   lastPrice: string;
   high24h: string;
   low24h: string;
@@ -547,7 +577,7 @@ export interface TradingPairItem {
   quoteVolume24h?: string;
   priceChangePercent24h?: string;
   isNewListing?: boolean;
-  listingStatus?: 'DRAFT' | 'PENDING_REVIEW' | 'APPROVED' | 'SCHEDULED' | 'ACTIVE';
+  listingStatus?: 'DRAFT' | 'PENDING_REVIEW' | 'APPROVED' | 'SCHEDULED' | 'ACTIVE' | 'SUSPENDED' | 'DELISTED';
   depositEnabled?: boolean;
   withdrawalEnabled?: boolean;
   depositOpenedAt?: number;

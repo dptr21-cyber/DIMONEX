@@ -53,15 +53,21 @@ import {
   Scale,
   User,
   Sparkles,
-  Hash
+  Hash,
+  Image as ImageIcon,
+  Clock,
+  Calendar,
+  RotateCcw
 } from 'lucide-react';
 import { UserProfile, TradingPairItem, ExternalWsWhitelistEntry } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
+import { formatCountdownCompact } from '../trading/MarketCountdownOverlay.js';
 import { Button } from '../ui/Button.js';
 import { Modal } from '../ui/Modal.js';
 import { ConfirmationDialog, DialogField } from '../ui/ConfirmationDialog.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
 import { ListingManagementView } from './listing/ListingManagementView.js';
+import { AssetManagementSection } from './AssetManagementSection.js';
 
 interface Props {
   user: UserProfile | null;
@@ -72,6 +78,7 @@ interface Props {
 
 type AdminTab =
   | 'OVERVIEW'
+  | 'ASSETS'
   | 'PAIRS'
   | 'LISTING'
   | 'USERS'
@@ -141,6 +148,7 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
   // Token & Limits Configuration Modal State
   const [showEditPairModal, setShowEditPairModal] = useState(false);
   const [editingPair, setEditingPair] = useState<TradingPairItem | null>(null);
+  const [pairLifecycleFilter, setPairLifecycleFilter] = useState<'ALL' | 'ACTIVE' | 'SCHEDULED_DELIST' | 'DELISTED'>('ALL');
   const [pairConfigForm, setPairConfigForm] = useState({
     inputMode: 'TOKENS' as 'TOKENS' | 'ATOMIC',
     minOrderTokens: '1',
@@ -150,6 +158,9 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
     makerFeeBps: 10,
     takerFeeBps: 20,
     isHalted: false,
+    isDelisted: false,
+    delistScheduledAt: '',
+    delistReason: '',
     lastPrice: ''
   });
 
@@ -195,9 +206,206 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
   const [manualFxRate, setManualFxRate] = useState('16350');
   const [fxReason, setFxReason] = useState('Penyesuaian kurs tengah pasar interbank');
 
+  // Market Delisting Modal State
+  const [showDelistModal, setShowDelistModal] = useState(false);
+  const [delistingPair, setDelistingPair] = useState<TradingPairItem | null>(null);
+  const [delistMode, setDelistMode] = useState<'SCHEDULE' | 'IMMEDIATE'>('SCHEDULE');
+  const [delistDateTime, setDelistDateTime] = useState<string>('');
+  const [delistReason, setDelistReason] = useState<string>('');
+  const [isDelistSubmitting, setIsDelistSubmitting] = useState<boolean>(false);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+
+  const toLocalDateTimeInput = (ts: number): string => {
+    const d = new Date(ts);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'PAIRS' && !showDelistModal && !showEditPairModal) return;
+    const needsTick =
+      showDelistModal ||
+      showEditPairModal ||
+      tradingPairs.some(
+        p =>
+          (p.delistScheduledAt && p.delistScheduledAt > Date.now()) ||
+          (!p.isActive && p.scheduledAt && p.scheduledAt > Date.now())
+      );
+    if (!needsTick) return;
+    const t = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [activeTab, tradingPairs, showDelistModal, showEditPairModal]);
+
   const showToast = (type: 'success' | 'error', text: string) => {
     setFeedbackMsg({ type, text });
     setTimeout(() => setFeedbackMsg(null), 5000);
+  };
+
+  const openDelistModal = (pair: TradingPairItem) => {
+    setDelistingPair(pair);
+    const existingScheduled = pair.delistScheduledAt && pair.delistScheduledAt > Date.now() + 15000;
+    setDelistMode('SCHEDULE');
+    setDelistDateTime(
+      toLocalDateTimeInput(existingScheduled ? pair.delistScheduledAt! : Date.now() + 24 * 60 * 60 * 1000)
+    );
+    setDelistReason(pair.delistReason || 'Evaluasi likuiditas dan kepatuhan berkala bursa');
+    setShowDelistModal(true);
+  };
+
+  const applyDelistPreset = (minutesFromNow: number) => {
+    setDelistDateTime(toLocalDateTimeInput(Date.now() + minutesFromNow * 60 * 1000));
+  };
+
+  const handleSubmitDelist = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!delistingPair) return;
+    const token = localStorage.getItem('dimonex_auth_token');
+    const cleanReason = delistReason.trim() || 'Delisting pasar berdasarkan evaluasi compliance DIMONEX';
+
+    if (delistMode === 'SCHEDULE') {
+      const targetTs = new Date(delistDateTime).getTime();
+      if (!Number.isFinite(targetTs) || targetTs <= Date.now() + 10000) {
+        showToast('error', 'Waktu jadwal delisting harus di masa depan (minimal 10 detik dari sekarang).');
+        return;
+      }
+      setIsDelistSubmitting(true);
+      try {
+        const res = await fetch('/api/admin/pairs/delist-schedule', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            pairId: delistingPair.id,
+            delistScheduledAt: targetTs,
+            reason: cleanReason,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Gagal menjadwalkan delisting');
+        showToast('success', data.message || `Delisting ${delistingPair.id} dijadwalkan dengan Countdown Timer di Chart.`);
+        setShowDelistModal(false);
+        onRefreshPairs();
+        loadAllData();
+      } catch (err: any) {
+        showToast('error', err.message || 'Gagal menjadwalkan delisting');
+      } finally {
+        setIsDelistSubmitting(false);
+      }
+    } else {
+      setIsDelistSubmitting(true);
+      try {
+        const res = await fetch('/api/admin/pairs/delist-now', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            pairId: delistingPair.id,
+            reason: cleanReason,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Gagal mengeksekusi delisting pasar');
+        showToast(
+          'success',
+          data.message || `Pasar ${delistingPair.id} berhasil didelisting (${data.cancelledOrders || 0} order dibatalkan & direfund).`
+        );
+        setShowDelistModal(false);
+        onRefreshPairs();
+        loadAllData();
+      } catch (err: any) {
+        showToast('error', err.message || 'Gagal mengeksekusi delisting');
+      } finally {
+        setIsDelistSubmitting(false);
+      }
+    }
+  };
+
+  const handleCancelScheduledDelist = async (pairId: string) => {
+    const token = localStorage.getItem('dimonex_auth_token');
+    setIsDelistSubmitting(true);
+    try {
+      const res = await fetch('/api/admin/pairs/delist-cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ pairId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gagal membatalkan jadwal delisting');
+      showToast('success', data.message || `Jadwal delisting ${pairId} berhasil dibatalkan.`);
+      setShowDelistModal(false);
+      onRefreshPairs();
+      loadAllData();
+    } catch (err: any) {
+      showToast('error', err.message || 'Gagal membatalkan jadwal delisting');
+    } finally {
+      setIsDelistSubmitting(false);
+    }
+  };
+
+  const handleRelistPair = async (pairId: string) => {
+    const token = localStorage.getItem('dimonex_auth_token');
+    try {
+      const res = await fetch('/api/admin/pairs/relist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ pairId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gagal melakukan relisting pasar');
+      showToast('success', data.message || `Pasar ${pairId} berhasil diaktifkan kembali (Relisted).`);
+      onRefreshPairs();
+      loadAllData();
+    } catch (err: any) {
+      showToast('error', err.message || 'Gagal melakukan relisting');
+    }
+  };
+
+  const handleToggleDelistedInline = (pair: TradingPairItem) => {
+    if (pair.isDelisted) {
+      setConfirmConfig({
+        isOpen: true,
+        title: `Aktifkan Kembali Market (Relist): ${pair.id}`,
+        description: `Apakah Anda yakin ingin mengubah status isDelisted menjadi OFF dan mengaktifkan kembali perdagangan untuk ${pair.id}?`,
+        confirmLabel: 'Relist Market',
+        tone: 'buy',
+        onSubmit: async () => {
+          await handleRelistPair(pair.id);
+        },
+      });
+      return;
+    }
+
+    setConfirmConfig({
+      isOpen: true,
+      title: `Manual Delisting Market: ${pair.id}`,
+      description:
+        'Mengaktifkan toggle isDelisted akan segera men-delisting pasar ini, membatalkan & mengembalikan seluruh dana order terbuka secara atomik, menghentikan semua bot pada pair ini, dan menutup order baru.',
+      confirmLabel: 'Delist Market Sekarang',
+      tone: 'danger',
+      fields: [
+        {
+          key: 'reason',
+          label: 'Alasan Manual Delisting (Audit Trail & Banner)',
+          defaultValue: pair.delistReason || 'Manual delisting berdasarkan evaluasi likuiditas & kepatuhan bursa',
+          placeholder: 'Masukkan alasan delisting...',
+          required: true,
+        },
+      ],
+      onSubmit: async (values) => {
+        const token = localStorage.getItem('dimonex_auth_token');
+        const res = await fetch('/api/admin/pairs/delist-now', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            pairId: pair.id,
+            reason: values.reason || 'Manual delisting oleh admin',
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Gagal mengeksekusi delisting');
+        showToast('success', data.message || `Pasar ${pair.id} berhasil didelisting.`);
+        onRefreshPairs();
+        loadAllData();
+      },
+    });
   };
 
   const isAdmin = user && (user.role?.toUpperCase() === 'ADMIN' || user.role?.toUpperCase() === 'SUPERADMIN');
@@ -414,6 +622,12 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
       makerFeeBps: pair.makerFeeBps ?? 10,
       takerFeeBps: pair.takerFeeBps ?? 20,
       isHalted: Boolean(pair.isHalted),
+      isDelisted: Boolean(pair.isDelisted),
+      delistScheduledAt:
+        !pair.isDelisted && pair.delistScheduledAt && pair.delistScheduledAt > Date.now()
+          ? toLocalDateTimeInput(pair.delistScheduledAt)
+          : '',
+      delistReason: pair.delistReason || '',
       lastPrice: pair.lastPrice || '0'
     });
     setShowEditPairModal(true);
@@ -429,8 +643,23 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         pairId: editingPair.id,
         makerFeeBps: Number(pairConfigForm.makerFeeBps),
         takerFeeBps: Number(pairConfigForm.takerFeeBps),
-        isHalted: Boolean(pairConfigForm.isHalted)
+        isHalted: Boolean(pairConfigForm.isHalted),
+        isDelisted: Boolean(pairConfigForm.isDelisted),
+        delistReason: pairConfigForm.delistReason.trim() || undefined,
       };
+
+      if (!pairConfigForm.isDelisted) {
+        if (pairConfigForm.delistScheduledAt) {
+          const parsedTs = new Date(pairConfigForm.delistScheduledAt).getTime();
+          if (!Number.isFinite(parsedTs) || parsedTs <= Date.now() + 10000) {
+            showToast('error', 'Jadwal tanggal delisting harus berada di masa depan (minimal 10 detik dari sekarang).');
+            return;
+          }
+          payload.delistScheduledAt = parsedTs;
+        } else if (editingPair.delistScheduledAt) {
+          payload.delistScheduledAt = null;
+        }
+      }
 
       if (pairConfigForm.inputMode === 'TOKENS') {
         payload.minOrderTokens = pairConfigForm.minOrderTokens;
@@ -447,7 +676,7 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
       });
       const data = await res.json();
       if (res.ok) {
-        showToast('success', data.message || `Limit ${editingPair.id} berhasil diperbarui!`);
+        showToast('success', data.message || `Konfigurasi ${editingPair.id} berhasil diperbarui!`);
         setShowEditPairModal(false);
         onRefreshPairs();
         loadAllData();
@@ -993,6 +1222,7 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
       <div className="flex items-center gap-1.5 overflow-x-auto pb-2 border-b border-[#202B34]">
         {[
           { id: 'OVERVIEW', label: 'Ringkasan Eksekutif', icon: LayoutDashboard },
+          { id: 'ASSETS', label: 'Aset Kripto & Logo', icon: ImageIcon },
           { id: 'PAIRS', label: `Pasar & Fee (${tradingPairs.length})`, icon: Coins },
           { id: 'LISTING', label: 'Initial Token Listing', icon: Rocket },
           { id: 'USERS', label: `Pengguna & KYC (${usersList.length})`, icon: Users, badge: pendingKycCount > 0 ? pendingKycCount : undefined },
@@ -1179,6 +1409,16 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
       )}
 
       {/* =========================================================================
+          TAB 1B: CRYPTO ASSET MANAGEMENT (LOGO, METADATA & DECIMALS)
+          ========================================================================= */}
+      {activeTab === 'ASSETS' && (
+        <AssetManagementSection
+          onRefreshPairs={onRefreshPairs}
+          onNotify={showToast}
+        />
+      )}
+
+      {/* =========================================================================
           TAB 2: MARKETS, PAIRS & CIRCUIT BREAKERS
           ========================================================================= */}
       {activeTab === 'PAIRS' && (
@@ -1188,15 +1428,69 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
               <h3 className="text-sm font-semibold text-[#E4EBEF]">Daftar Pasangan Perdagangan & Fee Schedule</h3>
               <p className="text-xs text-[#A1AFB8]">Kontrol operasional matching engine, emergency halt, dan penetapan Maker/Taker Fee bursa.</p>
             </div>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => setShowCreatePairModal(true)}
-              icon={<Plus className="w-4 h-4" />}
-              className="self-start"
-            >
-              Tambah Trading Pair Baru
-            </Button>
+            <div className="flex items-center gap-2 self-start">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setActiveTab('ASSETS')}
+                icon={<ImageIcon className="w-3.5 h-3.5" />}
+              >
+                Edit Logo &amp; Desimal Aset
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => setShowCreatePairModal(true)}
+                icon={<Plus className="w-4 h-4" />}
+              >
+                Tambah Trading Pair Baru
+              </Button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              {[
+                { id: 'ALL' as const, label: 'Semua Pair', count: tradingPairs.length },
+                {
+                  id: 'ACTIVE' as const,
+                  label: 'Aktif / Listed',
+                  count: tradingPairs.filter(p => !p.isDelisted).length,
+                },
+                {
+                  id: 'SCHEDULED_DELIST' as const,
+                  label: 'Jadwal Delisting',
+                  count: tradingPairs.filter(p => !p.isDelisted && Boolean(p.delistScheduledAt && p.delistScheduledAt > nowMs)).length,
+                },
+                {
+                  id: 'DELISTED' as const,
+                  label: 'Delisted',
+                  count: tradingPairs.filter(p => Boolean(p.isDelisted)).length,
+                },
+              ].map(tab => {
+                const active = pairLifecycleFilter === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setPairLifecycleFilter(tab.id)}
+                    className={`px-2.5 py-1.5 rounded-[7px] font-medium border transition-colors flex items-center gap-1.5 cursor-pointer ${
+                      active
+                        ? 'bg-[#1D2832] border-[#2B3944] text-[#E4EBEF]'
+                        : 'bg-transparent border-transparent text-[#A1AFB8] hover:text-[#E4EBEF] hover:bg-[#17212B]'
+                    }`}
+                  >
+                    <span>{tab.label}</span>
+                    <span className="text-[10px] font-mono tabular-nums px-1.5 py-0.2 rounded bg-[#111820] border border-[#202B34] text-[#8DA5B1]">
+                      {tab.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <span className="text-[11px] text-[#71818B] font-sans">
+              Gunakan toggle <strong className="text-[#E4EBEF] font-mono">isDelisted</strong> atau tombol <strong className="text-[#E4EBEF]">Jadwalkan Delisting</strong> untuk mengelola siklus hidup pair.
+            </span>
           </div>
 
           <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
@@ -1208,72 +1502,187 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                     <th className="px-4 py-3 font-semibold">Harga Terakhir</th>
                     <th className="px-4 py-3 font-semibold">Limit Kuantitas Order (Min - Max)</th>
                     <th className="px-4 py-3 font-semibold">Maker / Taker Fee</th>
-                    <th className="px-4 py-3 font-semibold">Status Matching Engine</th>
+                    <th className="px-4 py-3 font-semibold">Status &amp; Delisting</th>
+                    <th className="px-4 py-3 font-semibold text-center">Delisted Toggle</th>
                     <th className="px-4 py-3 font-semibold text-right">Kontrol Operasional</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#202B34]">
-                  {tradingPairs.map(p => (
-                    <tr key={p.id} className="hover:bg-[#17212B]/60 transition-colors">
-                      <td className="px-4 py-3.5">
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-[#E4EBEF] text-sm">{p.id}</span>
-                          {p.isNewListing && (
-                            <StatusBadge tone="brand">NEW</StatusBadge>
-                          )}
-                        </div>
-                        <span className="text-[10px] text-[#71818B] block font-sans mt-0.5">
-                          Decimals: Base {p.baseDecimals} / Quote {p.quoteDecimals}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3.5 font-bold text-[#E4EBEF] font-mono">
-                        {formatQuotePrice(p.lastPrice, p.quoteCurrency, p.quoteDecimals, true)}
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <div className="flex flex-col gap-0.5">
-                          <div className="flex items-center gap-1.5 font-semibold text-[#E4EBEF] text-xs">
-                            <span className="text-[#35B887]">Min: {formatAtomicToToken(p.minOrderSize, p.baseDecimals)} {p.baseCurrency}</span>
-                            <span className="text-[#71818B]">—</span>
-                            <span className="text-[#6D9FE8]">Max: {formatAtomicToToken(p.maxOrderSize, p.baseDecimals)} {p.baseCurrency}</span>
+                  {tradingPairs
+                    .filter(p => {
+                      if (pairLifecycleFilter === 'ACTIVE') return !p.isDelisted;
+                      if (pairLifecycleFilter === 'SCHEDULED_DELIST') {
+                        return !p.isDelisted && Boolean(p.delistScheduledAt && p.delistScheduledAt > nowMs);
+                      }
+                      if (pairLifecycleFilter === 'DELISTED') return Boolean(p.isDelisted);
+                      return true;
+                    })
+                    .map(p => {
+                    const isScheduledDelist = Boolean(!p.isDelisted && p.delistScheduledAt && p.delistScheduledAt > nowMs);
+                    const isPreLaunch = Boolean(!p.isDelisted && p.isActive === false && p.scheduledAt && p.scheduledAt > nowMs);
+
+                    return (
+                      <tr key={p.id} className="hover:bg-[#17212B]/60 transition-colors">
+                        <td className="px-4 py-3.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-[#E4EBEF] text-sm">{p.id}</span>
+                            {p.isNewListing && !p.isDelisted && (
+                              <StatusBadge tone="brand">NEW</StatusBadge>
+                            )}
                           </div>
-                          <span className="text-[10px] text-[#71818B] font-mono">
-                            Atomic: {p.minOrderSize || '0'} s/d {p.maxOrderSize || '0'} units
+                          <span className="text-[10px] text-[#71818B] block font-sans mt-0.5">
+                            Decimals: Base {p.baseDecimals} / Quote {p.quoteDecimals}
                           </span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <div className="text-[#35B887] font-semibold text-xs">
-                          Maker: {(p.makerFeeBps / 100).toFixed(2)}% ({p.makerFeeBps} bps)
-                        </div>
-                        <div className="text-[#6D9FE8] font-semibold text-xs">
-                          Taker: {(p.takerFeeBps / 100).toFixed(2)}% ({p.takerFeeBps} bps)
-                        </div>
-                      </td>
-                      <td className="px-4 py-3.5 font-sans">
-                        <StatusBadge tone={p.isHalted ? 'danger' : 'success'} dot>
-                          {p.isHalted ? 'DIHENTIKAN (HALTED)' : 'BERJALAN NORMAL'}
-                        </StatusBadge>
-                      </td>
-                      <td className="px-4 py-3.5 text-right space-x-2 font-sans whitespace-nowrap">
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => handleOpenEditPairModal(p)}
-                          icon={<Sliders className="w-3.5 h-3.5" />}
-                          title="Kelola limit kuantitas order (Token / Integer) & fee"
-                        >
-                          Kelola Limit & Fee
-                        </Button>
-                        <Button
-                          variant={p.isHalted ? 'profit' : 'danger'}
-                          size="sm"
-                          onClick={() => handleToggleHalt(p.id, p.isHalted)}
-                        >
-                          {p.isHalted ? 'Buka Halt' : 'Circuit Breaker (Halt)'}
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="px-4 py-3.5 font-bold text-[#E4EBEF] font-mono">
+                          {formatQuotePrice(p.lastPrice, p.quoteCurrency, p.quoteDecimals, true)}
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <div className="flex flex-col gap-0.5">
+                            <div className="flex items-center gap-1.5 font-semibold text-[#E4EBEF] text-xs">
+                              <span className="text-[#35B887]">Min: {formatAtomicToToken(p.minOrderSize, p.baseDecimals)} {p.baseCurrency}</span>
+                              <span className="text-[#71818B]">—</span>
+                              <span className="text-[#6D9FE8]">Max: {formatAtomicToToken(p.maxOrderSize, p.baseDecimals)} {p.baseCurrency}</span>
+                            </div>
+                            <span className="text-[10px] text-[#71818B] font-mono">
+                              Atomic: {p.minOrderSize || '0'} s/d {p.maxOrderSize || '0'} units
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <div className="text-[#35B887] font-semibold text-xs">
+                            Maker: {(p.makerFeeBps / 100).toFixed(2)}% ({p.makerFeeBps} bps)
+                          </div>
+                          <div className="text-[#6D9FE8] font-semibold text-xs">
+                            Taker: {(p.takerFeeBps / 100).toFixed(2)}% ({p.takerFeeBps} bps)
+                          </div>
+                        </td>
+                        <td className="px-4 py-3.5 font-sans">
+                          <div className="space-y-1">
+                            {p.isDelisted ? (
+                              <>
+                                <StatusBadge tone="danger" dot>
+                                  DELISTED
+                                </StatusBadge>
+                                {p.delistedAt && (
+                                  <span className="text-[10px] font-mono text-[#71818B] block">
+                                    {new Date(p.delistedAt).toLocaleString('id-ID')}
+                                  </span>
+                                )}
+                                {p.delistReason && (
+                                  <span className="text-[10px] text-[#EA5B65]/80 block max-w-[200px] truncate" title={p.delistReason}>
+                                    {p.delistReason}
+                                  </span>
+                                )}
+                              </>
+                            ) : isScheduledDelist && p.delistScheduledAt ? (
+                              <>
+                                <StatusBadge tone="warning" dot>
+                                  <span className="font-mono tabular-nums">
+                                    DELISTING · {formatCountdownCompact(p.delistScheduledAt, nowMs)}
+                                  </span>
+                                </StatusBadge>
+                                <span className="text-[10px] font-mono text-[#D6A85C] block">
+                                  {new Date(p.delistScheduledAt).toLocaleString('id-ID')}
+                                </span>
+                                {p.delistReason && (
+                                  <span className="text-[10px] text-[#71818B] block max-w-[200px] truncate" title={p.delistReason}>
+                                    {p.delistReason}
+                                  </span>
+                                )}
+                              </>
+                            ) : isPreLaunch && p.scheduledAt ? (
+                              <>
+                                <StatusBadge tone="info" dot>
+                                  <span className="font-mono tabular-nums">
+                                    SCHEDULED · {formatCountdownCompact(p.scheduledAt, nowMs)}
+                                  </span>
+                                </StatusBadge>
+                                <span className="text-[10px] font-mono text-[#71818B] block">
+                                  Launch: {new Date(p.scheduledAt).toLocaleString('id-ID')}
+                                </span>
+                              </>
+                            ) : (
+                              <StatusBadge tone={p.isHalted ? 'danger' : 'success'} dot>
+                                {p.isHalted ? 'DIHENTIKAN (HALTED)' : 'BERJALAN NORMAL'}
+                              </StatusBadge>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3.5 text-center font-sans">
+                          <div className="inline-flex flex-col items-center gap-1">
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={Boolean(p.isDelisted)}
+                              aria-label={`Toggle isDelisted untuk ${p.id}`}
+                              onClick={() => handleToggleDelistedInline(p)}
+                              className={`relative inline-flex h-5 w-10 items-center rounded-full border transition-colors cursor-pointer ${
+                                p.isDelisted
+                                  ? 'bg-[#EA5B65]/80 border-[#EA5B65]'
+                                  : 'bg-[#111820] border-[#2B3944] hover:border-[#40515D]'
+                              }`}
+                            >
+                              <span
+                                className={`inline-block h-3.5 w-3.5 transform rounded-full bg-[#E4EBEF] transition-transform ${
+                                  p.isDelisted ? 'translate-x-5' : 'translate-x-0.5'
+                                }`}
+                              />
+                            </button>
+                            <span
+                              className={`text-[9px] font-mono uppercase tracking-wide ${
+                                p.isDelisted ? 'text-[#EA5B65] font-semibold' : 'text-[#71818B]'
+                              }`}
+                            >
+                              {p.isDelisted ? 'DELISTED' : 'LISTED'}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3.5 text-right font-sans whitespace-nowrap">
+                          <div className="inline-flex items-center justify-end gap-1.5 flex-wrap">
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => handleOpenEditPairModal(p)}
+                              icon={<Sliders className="w-3.5 h-3.5" />}
+                              title="Kelola limit, fee, toggle isDelisted & jadwal delisting"
+                            >
+                              Konfigurasi
+                            </Button>
+
+                            {p.isDelisted ? (
+                              <Button
+                                variant="profit"
+                                size="sm"
+                                onClick={() => handleRelistPair(p.id)}
+                                icon={<RotateCcw className="w-3.5 h-3.5" />}
+                              >
+                                Relist Market
+                              </Button>
+                            ) : (
+                              <>
+                                <Button
+                                  variant={p.isHalted ? 'profit' : 'outline'}
+                                  size="sm"
+                                  onClick={() => handleToggleHalt(p.id, p.isHalted)}
+                                >
+                                  {p.isHalted ? 'Buka Halt' : 'Halt'}
+                                </Button>
+                                <Button
+                                  variant="danger"
+                                  size="sm"
+                                  onClick={() => openDelistModal(p)}
+                                  icon={isScheduledDelist ? <Clock className="w-3.5 h-3.5" /> : <Calendar className="w-3.5 h-3.5" />}
+                                >
+                                  {isScheduledDelist ? 'Jadwal Delist' : 'Delist / Jadwal'}
+                                </Button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -2665,12 +3074,135 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                 </button>
               </div>
 
+              {/* Manual Delisting Toggle (isDelisted) & Scheduled Delisting Date Picker */}
+              <div className="p-3.5 rounded-[7px] bg-[#111820] border border-[#2B3944] space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[#E4EBEF] font-semibold">Manual Delisting Market</span>
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#17212B] border border-[#2B3944] text-[#8DA5B1]">
+                        isDelisted
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-[#A1AFB8] block mt-0.5">
+                      {pairConfigForm.isDelisted
+                        ? 'Pasar ditandai DELISTED — seluruh order terbuka dibatalkan & direfund otomatis, bot dihentikan, dan order baru diblokir.'
+                        : 'Pasar berstatus Listed — aktifkan toggle untuk delisting segera atau pilih tanggal untuk menjadwalkan delisting.'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={pairConfigForm.isDelisted}
+                    aria-label="Toggle isDelisted"
+                    onClick={() =>
+                      setPairConfigForm(f => ({
+                        ...f,
+                        isDelisted: !f.isDelisted,
+                        isHalted: !f.isDelisted ? true : f.isHalted,
+                      }))
+                    }
+                    className={`relative inline-flex h-6 w-12 shrink-0 items-center rounded-full border transition-colors cursor-pointer ${
+                      pairConfigForm.isDelisted
+                        ? 'bg-[#EA5B65]/80 border-[#EA5B65]'
+                        : 'bg-[#141C24] border-[#2B3944] hover:border-[#40515D]'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-[#E4EBEF] transition-transform ${
+                        pairConfigForm.isDelisted ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {!pairConfigForm.isDelisted && (
+                  <div className="pt-2.5 border-t border-[#202B34] space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-[11px] font-medium text-[#A1AFB8] flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5 text-[#D6A85C]" />
+                        <span>Jadwalkan Tanggal &amp; Waktu Delisting (Opsional)</span>
+                      </label>
+                      {pairConfigForm.delistScheduledAt && (
+                        <button
+                          type="button"
+                          onClick={() => setPairConfigForm(f => ({ ...f, delistScheduledAt: '' }))}
+                          className="text-[10px] font-mono text-[#EA5B65] hover:underline cursor-pointer"
+                        >
+                          Hapus Jadwal
+                        </button>
+                      )}
+                    </div>
+
+                    <input
+                      type="datetime-local"
+                      value={pairConfigForm.delistScheduledAt}
+                      onChange={e => setPairConfigForm(f => ({ ...f, delistScheduledAt: e.target.value }))}
+                      className="w-full bg-[#141C24] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono outline-none focus:border-[#8DA5B1]"
+                    />
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[10px] text-[#71818B]">Preset:</span>
+                      {[
+                        { label: '+15 Menit', mins: 15 },
+                        { label: '+1 Jam', mins: 60 },
+                        { label: '+24 Jam', mins: 1440 },
+                        { label: '+7 Hari', mins: 10080 },
+                      ].map(preset => (
+                        <button
+                          key={preset.label}
+                          type="button"
+                          onClick={() =>
+                            setPairConfigForm(f => ({
+                              ...f,
+                              delistScheduledAt: toLocalDateTimeInput(Date.now() + preset.mins * 60 * 1000),
+                            }))
+                          }
+                          className="px-2 py-0.5 rounded bg-[#17212B] hover:bg-[#1D2832] border border-[#2B3944] text-[10px] font-mono text-[#A1AFB8] hover:text-[#E4EBEF] transition-colors cursor-pointer"
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {pairConfigForm.delistScheduledAt &&
+                      Number.isFinite(new Date(pairConfigForm.delistScheduledAt).getTime()) &&
+                      new Date(pairConfigForm.delistScheduledAt).getTime() > nowMs && (
+                        <div className="p-2 rounded-[6px] bg-[#2C2415]/40 border border-[#D6A85C]/30 flex items-center justify-between text-[11px]">
+                          <span className="text-[#D6A85C] flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5" />
+                            Countdown Delisting akan aktif di Market Chart
+                          </span>
+                          <span className="font-mono font-semibold text-[#E4EBEF] tabular-nums">
+                            T-{formatCountdownCompact(new Date(pairConfigForm.delistScheduledAt).getTime(), nowMs)}
+                          </span>
+                        </div>
+                      )}
+                  </div>
+                )}
+
+                {(pairConfigForm.isDelisted || pairConfigForm.delistScheduledAt) && (
+                  <div className="pt-1">
+                    <label className="text-[11px] text-[#A1AFB8] block mb-1">
+                      Alasan Delisting (Ditampilkan di Banner Chart &amp; Audit Log):
+                    </label>
+                    <input
+                      type="text"
+                      value={pairConfigForm.delistReason}
+                      onChange={e => setPairConfigForm(f => ({ ...f, delistReason: e.target.value }))}
+                      placeholder="Contoh: Evaluasi likuiditas berkala / migrasi kontrak token"
+                      className="w-full bg-[#141C24] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] outline-none focus:border-[#8DA5B1]"
+                    />
+                  </div>
+                )}
+              </div>
+
               <div className="flex gap-2 pt-2 border-t border-[#202B34]">
                 <Button type="button" variant="secondary" size="md" className="w-1/3" onClick={() => setShowEditPairModal(false)}>
                   Batal
                 </Button>
                 <Button type="submit" variant="primary" size="md" className="w-2/3" icon={<CheckCircle2 className="w-4 h-4" />}>
-                  Simpan Perubahan Limit &amp; Fee
+                  Simpan Konfigurasi Pair
                 </Button>
               </div>
             </form>
@@ -2803,6 +3335,161 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* =========================================================================
+          MODAL: MARKET DELISTING (SCHEDULED COUNTDOWN OR IMMEDIATE)
+          ========================================================================= */}
+      <Modal
+        isOpen={showDelistModal && Boolean(delistingPair)}
+        onClose={() => setShowDelistModal(false)}
+        title={delistingPair ? `Delisting Market: ${delistingPair.id}` : 'Delisting Market'}
+        subtitle="Jadwalkan penghapusan pasar dengan Countdown Timer di Chart atau eksekusi delisting segera"
+        maxWidth="max-w-lg"
+      >
+        {delistingPair && (
+          <form onSubmit={handleSubmitDelist} className="space-y-4 text-xs">
+            {/* Mode Switcher */}
+            <div className="grid grid-cols-2 gap-2 p-1 rounded-[7px] bg-[#111820] border border-[#202B34]">
+              <button
+                type="button"
+                onClick={() => setDelistMode('SCHEDULE')}
+                className={`py-2 px-3 rounded-[5px] text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer ${
+                  delistMode === 'SCHEDULE'
+                    ? 'bg-[#2C2415] text-[#D6A85C] border border-[#D6A85C]/40'
+                    : 'text-[#A1AFB8] hover:text-[#E4EBEF]'
+                }`}
+              >
+                <Calendar className="w-3.5 h-3.5" />
+                <span>Jadwalkan Delisting</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDelistMode('IMMEDIATE')}
+                className={`py-2 px-3 rounded-[5px] text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer ${
+                  delistMode === 'IMMEDIATE'
+                    ? 'bg-[#401F27] text-[#EA5B65] border border-[#EA5B65]/40'
+                    : 'text-[#A1AFB8] hover:text-[#E4EBEF]'
+                }`}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delist Sekarang</span>
+              </button>
+            </div>
+
+            {delistingPair.delistScheduledAt && delistingPair.delistScheduledAt > nowMs && (
+              <div className="p-3 rounded-[7px] bg-[#2C2415]/40 border border-[#D6A85C]/30 flex items-center justify-between gap-3">
+                <div>
+                  <span className="text-[11px] font-semibold text-[#D6A85C] block">
+                    Delisting Sudah Terjadwal
+                  </span>
+                  <span className="text-[10px] font-mono text-[#A1AFB8]">
+                    {new Date(delistingPair.delistScheduledAt).toLocaleString('id-ID')} (T-{formatCountdownCompact(delistingPair.delistScheduledAt, nowMs)})
+                  </span>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={isDelistSubmitting}
+                  onClick={() => handleCancelScheduledDelist(delistingPair.id)}
+                >
+                  Batalkan Jadwal
+                </Button>
+              </div>
+            )}
+
+            {delistMode === 'SCHEDULE' ? (
+              <div className="space-y-2.5">
+                <div>
+                  <label className="text-[#A1AFB8] block mb-1">
+                    Waktu Eksekusi Delisting (Waktu Lokal):
+                  </label>
+                  <input
+                    type="datetime-local"
+                    required
+                    value={delistDateTime}
+                    onChange={e => setDelistDateTime(e.target.value)}
+                    className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono outline-none focus:border-[#8DA5B1]"
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] text-[#71818B] mr-1">Preset Cepat:</span>
+                  {[
+                    { label: '+2 Menit', mins: 2 },
+                    { label: '+15 Menit', mins: 15 },
+                    { label: '+1 Jam', mins: 60 },
+                    { label: '+24 Jam', mins: 1440 },
+                    { label: '+7 Hari', mins: 10080 },
+                  ].map(preset => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => applyDelistPreset(preset.mins)}
+                      className="px-2 py-1 rounded bg-[#17212B] hover:bg-[#1D2832] border border-[#2B3944] text-[10px] font-mono text-[#A1AFB8] hover:text-[#E4EBEF] transition-colors cursor-pointer"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34] text-[11px] text-[#A1AFB8] leading-relaxed">
+                  Selama masa tunggu, trader tetap dapat melihat grafik &amp; mengelola posisi dengan <strong className="text-[#EA5B65]">Banner Countdown Delisting</strong> live di atas Market Chart. Saat hitungan mundur habis, sistem otomatis membatalkan &amp; merefund semua order terbuka.
+                </div>
+              </div>
+            ) : (
+              <div className="p-3.5 rounded-[7px] bg-[#401F27]/40 border border-[#EA5B65]/40 space-y-1.5 text-[11px]">
+                <div className="flex items-center gap-1.5 font-semibold text-[#EA5B65]">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  <span>Peringatan Delisting Permanen Segera</span>
+                </div>
+                <ul className="list-disc pl-4 space-y-1 text-[#E4EBEF]/90">
+                  <li>Semua order terbuka (open/resting) pada <strong>{delistingPair.id}</strong> akan dibatalkan otomatis &amp; dana direfund ke dompet trader (double-entry ledger terjaga).</li>
+                  <li>Semua bot Market Maker / Grid / DCA pada pasangan ini akan dihentikan otomatis.</li>
+                  <li>Order baru akan ditolak dan Market Chart akan menampilkan status <strong>Market Delisted</strong>.</li>
+                </ul>
+              </div>
+            )}
+
+            <div>
+              <label className="text-[#A1AFB8] block mb-1">
+                Alasan Delisting (Ditampilkan di Banner Chart &amp; Audit Log):
+              </label>
+              <textarea
+                required
+                rows={2}
+                value={delistReason}
+                onChange={e => setDelistReason(e.target.value)}
+                placeholder="Contoh: Volume perdagangan di bawah ambang likuiditas minimum / migrasi kontrak token"
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] outline-none focus:border-[#8DA5B1]"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#202B34]">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowDelistModal(false)}
+              >
+                Batal
+              </Button>
+              <Button
+                type="submit"
+                variant="danger"
+                size="sm"
+                disabled={isDelistSubmitting}
+              >
+                {isDelistSubmitting
+                  ? 'Memproses...'
+                  : delistMode === 'SCHEDULE'
+                  ? 'Jadwalkan Delisting'
+                  : 'Eksekusi Delisting Sekarang'}
+              </Button>
+            </div>
+          </form>
+        )}
       </Modal>
 
       {/* UNIFIED CONFIRMATION / PROMPT DIALOG */}

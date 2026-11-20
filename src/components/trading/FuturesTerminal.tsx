@@ -43,6 +43,7 @@ import {
 } from '../../lib/formatters.js';
 import { Button } from '../ui/Button.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
+import { AssetIcon } from '../ui/AssetIcon.js';
 import { useToast } from '../ui/Toast.js';
 import { TradingChart } from './TradingChart.js';
 import { OrderBookView } from './OrderBookView.js';
@@ -446,6 +447,7 @@ export const FuturesTerminal: React.FC<FuturesTerminalProps> = ({
               onClick={() => setIsPairMenuOpen((v) => !v)}
               className="flex items-center gap-2.5 px-3 py-1.5 rounded-[7px] bg-[#17212B] border border-[#2B3944] hover:border-[#8DA5B1] transition-colors cursor-pointer"
             >
+              <AssetIcon symbol={pair.baseCurrency} logoUrl={pair.baseLogoUrl || undefined} size="sm" />
               <div className="text-left">
                 <div className="flex items-center gap-1.5">
                   <span className="text-sm font-bold text-[#E4EBEF] font-mono">
@@ -459,7 +461,7 @@ export const FuturesTerminal: React.FC<FuturesTerminalProps> = ({
                   </StatusBadge>
                 </div>
                 <span className="text-[10px] text-[#71818B] font-mono block">
-                  {pair.id} · Max {activeMarketInfo?.maxLeverage || 125}x
+                  {pair.baseName && pair.baseName !== pair.baseCurrency ? `${pair.baseName} · ` : ''}{pair.id} · Max {activeMarketInfo?.maxLeverage || 125}x
                 </span>
               </div>
               <ChevronDown className="w-4 h-4 text-[#A1AFB8]" />
@@ -520,13 +522,16 @@ export const FuturesTerminal: React.FC<FuturesTerminalProps> = ({
                           p.id === pair.id ? 'bg-[#1D2832]' : ''
                         }`}
                       >
-                        <div className="text-left">
-                          <span className="font-mono font-semibold text-[#E4EBEF] block">
-                            {p.id}
-                          </span>
-                          <span className="text-[10px] text-[#71818B] font-mono">
-                            Base {p.baseDecimals}d · Quote {pDec}d
-                          </span>
+                        <div className="flex items-center gap-2 text-left">
+                          <AssetIcon symbol={p.baseCurrency} logoUrl={p.baseLogoUrl || undefined} size="xs" />
+                          <div>
+                            <span className="font-mono font-semibold text-[#E4EBEF] block">
+                              {p.id}
+                            </span>
+                            <span className="text-[10px] text-[#71818B] font-mono">
+                              Base {p.baseDecimals}d · Quote {pDec}d
+                            </span>
+                          </div>
                         </div>
                         <div className="text-right font-mono tabular-nums">
                           <span className="text-[#E4EBEF] block">

@@ -522,6 +522,11 @@ export interface TradingPair {
   takerFeeBps: number;  // 20 = 0.20%
   isActive: boolean;
   isHalted: boolean;
+  isDelisted?: boolean;
+  delistedAt?: number;
+  delistScheduledAt?: number;
+  delistReason?: string;
+  scheduledAt?: number;
   lastPrice: string;
   high24h: string;
   low24h: string;
@@ -639,10 +644,15 @@ export interface Asset {
   id: string;
   symbol: string;           // Normalized, uppercase, unique (e.g. BTC, IDR, SOL)
   name: string;             // e.g. 'Solana'
+  logoUrl?: string;         // Uploaded data URI (PNG/WebP/SVG) or HTTPS icon URL
   assetType: AssetType;     // 'NATIVE' | 'TOKEN'
-  decimals: number;         // Immutable once referenced in financial transactions (e.g. 8 or 18)
+  category?: string;        // e.g. 'Layer 1', 'Stablecoin', 'DeFi', 'Meme', 'Fiat'
+  decimals: number;         // Display & unit precision (0 - 18)
   network: string;          // e.g. 'BITCOIN', 'ETHEREUM', 'SOLANA', 'FIAT'
   contractAddress?: string; // Validated per network
+  description?: string;     // Asset overview shown in market details
+  websiteUrl?: string;      // Official project website
+  explorerUrl?: string;     // Block explorer URL
   status: AssetStatus;
   depositEnabled: boolean;
   withdrawalEnabled: boolean;

@@ -7,7 +7,7 @@
  */
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Star, ArrowUpDown, Zap, Clock, BarChart3 } from 'lucide-react';
+import { Star, ArrowUpDown, Zap, Clock, BarChart3, AlertTriangle } from 'lucide-react';
 import { TradingPairItem } from '../../types/index.js';
 import { formatQuotePrice, formatPairVolume } from '../../lib/formatters.js';
 import { safeFetchJson } from '../../lib/safeFetch.js';
@@ -18,6 +18,7 @@ import { PercentageChange } from '../ui/PriceDisplay.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
 import { Button } from '../ui/Button.js';
 import { EmptyState } from '../ui/StateViews.js';
+import { formatCountdownCompact } from '../trading/MarketCountdownOverlay.js';
 
 interface MarketsViewProps {
   pairs: TradingPairItem[];
@@ -34,6 +35,7 @@ type MarketCategory =
   | 'SPOT'
   | 'NEW_LISTINGS'
   | 'UPCOMING'
+  | 'DELISTING'
   | 'FUTURES'
   | 'FAVORITES'
   | 'GAINERS'
@@ -95,6 +97,34 @@ export const MarketsView: React.FC<MarketsViewProps> = ({
     }
   };
 
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+
+  const hasLiveCountdown = useMemo(() => {
+    const pairCountdown = pairs.some(
+      p =>
+        (p.delistScheduledAt && p.delistScheduledAt > nowMs) ||
+        (!p.isActive && p.scheduledAt && p.scheduledAt > nowMs)
+    );
+    const listingCountdown = newListings.some(
+      l => l.scheduledAt && l.scheduledAt > nowMs
+    );
+    return pairCountdown || listingCountdown;
+  }, [pairs, newListings, nowMs]);
+
+  useEffect(() => {
+    if (!hasLiveCountdown) return;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [hasLiveCountdown]);
+
+  const delistingPairsCount = useMemo(
+    () =>
+      pairs.filter(
+        p => p.isDelisted || Boolean(p.delistScheduledAt && p.delistScheduledAt > nowMs)
+      ).length,
+    [pairs, nowMs]
+  );
+
   const filteredAndSortedPairs = useMemo(() => {
     return pairs
       .filter(p => {
@@ -106,9 +136,22 @@ export const MarketsView: React.FC<MarketsViewProps> = ({
 
         if (!matchesSearch) return false;
 
+        if (category === 'DELISTING') {
+          return Boolean(p.isDelisted || (p.delistScheduledAt && p.delistScheduledAt > nowMs));
+        }
+
+        // Exclude permanently delisted pairs from active market categories
+        if (p.isDelisted) return false;
+
         if (category === 'FAVORITES') return favorites.has(p.id);
         if (category === 'NEW_LISTINGS')
-          return p.isNewListing || p.baseCurrency === 'SOL' || p.baseCurrency === 'TON';
+          return (
+            p.isNewListing ||
+            p.listingStatus === 'SCHEDULED' ||
+            Boolean(!p.isActive && p.scheduledAt && p.scheduledAt > nowMs) ||
+            p.baseCurrency === 'SOL' ||
+            p.baseCurrency === 'TON'
+          );
         if (category === 'IDR') return p.quoteCurrency === 'IDR';
         if (category === 'USDT') return p.quoteCurrency === 'USDT';
         if (category === 'SPOT') return true;
@@ -131,7 +174,7 @@ export const MarketsView: React.FC<MarketsViewProps> = ({
         else if (sortField === 'volume') diff = volA - volB;
         return sortOrder === 'asc' ? diff : -diff;
       });
-  }, [pairs, search, category, sortField, sortOrder, favorites]);
+  }, [pairs, search, category, sortField, sortOrder, favorites, nowMs]);
 
   const upcomingListings = useMemo(
     () => newListings.filter(l => l.status === 'SCHEDULED' || l.status === 'PENDING_REVIEW'),
@@ -140,10 +183,11 @@ export const MarketsView: React.FC<MarketsViewProps> = ({
 
   // Featured live pair from authoritative pairs list (no hardcoded prices)
   const featuredPair = useMemo(() => {
+    const activePairs = pairs.filter(p => !p.isDelisted && p.isActive !== false);
     return (
-      pairs.find(p => p.isNewListing) ||
-      pairs.find(p => p.id === 'SOL-IDR') ||
-      pairs[0] ||
+      activePairs.find(p => p.isNewListing) ||
+      activePairs.find(p => p.id === 'SOL-IDR') ||
+      activePairs[0] ||
       null
     );
   }, [pairs]);
@@ -240,8 +284,12 @@ export const MarketsView: React.FC<MarketsViewProps> = ({
             )}
 
             {nextUpcoming && (
-              <div className="flex-1 sm:flex-initial p-3 rounded-[10px] bg-[#111820] border border-[#2B3944] flex items-center gap-3 min-w-[230px]">
-                <AssetIcon symbol={nextUpcoming.tokenSymbol || nextUpcoming.symbol || 'NEW'} size="md" />
+              <div className="flex-1 sm:flex-initial p-3 rounded-[10px] bg-[#111820] border border-[#2B3944] flex items-center gap-3 min-w-[250px]">
+                <AssetIcon
+                  symbol={nextUpcoming.baseCurrency || nextUpcoming.tokenSymbol || nextUpcoming.symbol?.split(/[-/]/)[0] || 'NEW'}
+                  logoUrl={nextUpcoming.logoUrl || undefined}
+                  size="md"
+                />
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="font-mono font-semibold text-xs text-[#E4EBEF]">
@@ -249,20 +297,22 @@ export const MarketsView: React.FC<MarketsViewProps> = ({
                     </span>
                     <StatusBadge tone="warning">UPCOMING</StatusBadge>
                   </div>
-                  <div className="text-[10px] text-[#71818B] flex items-center gap-1 mt-0.5">
-                    <Clock className="w-3 h-3 text-[#D6A85C]" />
+                  <div className="text-[10px] font-mono tabular-nums text-[#D6A85C] flex items-center gap-1 mt-0.5">
+                    <Clock className="w-3 h-3 text-[#D6A85C] shrink-0" />
                     <span>
-                      Deposit {nextUpcoming.depositStatus === 'OPEN' ? 'Open' : 'Scheduled'}
+                      {nextUpcoming.scheduledAt && nextUpcoming.scheduledAt > nowMs
+                        ? `Launch T-${formatCountdownCompact(nextUpcoming.scheduledAt, nowMs)}`
+                        : `Deposit ${nextUpcoming.depositStatus === 'OPEN' ? 'Open' : 'Scheduled'}`}
                     </span>
                   </div>
                 </div>
                 <Button
                   variant="secondary"
                   size="sm"
-                  onClick={() => setCategory('UPCOMING')}
+                  onClick={() => onNavigateTrade(nextUpcoming.pairId, 'SPOT')}
                   className="ml-auto"
                 >
-                  Detail
+                  Chart
                 </Button>
               </div>
             )}
@@ -286,6 +336,7 @@ export const MarketsView: React.FC<MarketsViewProps> = ({
             { id: 'SPOT', label: 'Spot' },
             { id: 'NEW_LISTINGS', label: 'New Listings', badge: 'NEW' },
             { id: 'UPCOMING', label: 'Upcoming', count: upcomingListings.length },
+            { id: 'DELISTING', label: 'Delisting', count: delistingPairsCount, tone: 'danger' as const },
             { id: 'FUTURES', label: 'Futures' },
             { id: 'FAVORITES', label: 'Favorites' },
             { id: 'GAINERS', label: 'Gainers' },
@@ -310,7 +361,13 @@ export const MarketsView: React.FC<MarketsViewProps> = ({
                   </span>
                 )}
                 {tab.count !== undefined && tab.count > 0 && (
-                  <span className="text-[9px] px-1.5 rounded-[4px] bg-[#2C2415] text-[#D6A85C] font-mono">
+                  <span
+                    className={`text-[9px] px-1.5 rounded-[4px] font-mono ${
+                      tab.tone === 'danger'
+                        ? 'bg-[#401F27] text-[#EA5B65]'
+                        : 'bg-[#2C2415] text-[#D6A85C]'
+                    }`}
+                  >
                     {tab.count}
                   </span>
                 )}
@@ -389,19 +446,36 @@ export const MarketsView: React.FC<MarketsViewProps> = ({
                   </tr>
                 ) : (
                   upcomingListings.map(item => (
-                    <tr key={item.id} className="hover:bg-[#17212B] transition-colors">
+                    <tr
+                      key={item.id}
+                      onClick={() => onNavigateTrade(item.pairId, 'SPOT')}
+                      className="hover:bg-[#17212B] transition-colors cursor-pointer"
+                    >
                       <td className="py-3 px-4 text-center">
                         <Clock className="w-3.5 h-3.5 mx-auto text-[#D6A85C]" />
                       </td>
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-2">
-                          <AssetIcon symbol={item.symbol?.split('/')[0] || 'NEW'} size="xs" />
+                          <AssetIcon
+                            symbol={item.baseCurrency || item.symbol?.split(/[-/]/)[0] || 'NEW'}
+                            logoUrl={item.logoUrl || undefined}
+                            size="sm"
+                          />
                           <span className="font-semibold text-[#E4EBEF]">{item.symbol}</span>
                           <span className="text-[11px] font-sans text-[#71818B]">{item.tokenName}</span>
                           <StatusBadge tone="warning">Scheduled</StatusBadge>
                         </div>
                       </td>
-                      <td className="py-3 px-4 text-right text-[#A1AFB8]">Initial Phase</td>
+                      <td className="py-3 px-4 text-right">
+                        {item.scheduledAt && item.scheduledAt > nowMs ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[5px] bg-[#2C2415]/60 border border-[#D6A85C]/30 text-[#D6A85C] text-[11px] font-mono font-semibold tabular-nums">
+                            <Clock className="w-3 h-3" />
+                            T-{formatCountdownCompact(item.scheduledAt, nowMs)}
+                          </span>
+                        ) : (
+                          <span className="text-[#A1AFB8]">Initial Phase</span>
+                        )}
+                      </td>
                       <td className="py-3 px-4 text-right">
                         <StatusBadge tone={item.depositStatus === 'OPEN' ? 'buy' : 'neutral'}>
                           DEP: {item.depositStatus === 'OPEN' ? 'OPEN' : 'CLOSED'}
@@ -424,16 +498,16 @@ export const MarketsView: React.FC<MarketsViewProps> = ({
                         MM Ready
                       </td>
                       <td className="py-3 px-4 text-center hidden lg:table-cell">
-                        <StatusBadge tone="info">Maker-Checker</StatusBadge>
+                        <StatusBadge tone="info">Countdown Live</StatusBadge>
                       </td>
-                      <td className="py-3 px-4 text-right">
+                      <td className="py-3 px-4 text-right" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1.5">
                           <Button
                             variant="secondary"
                             size="sm"
                             onClick={() => onNavigateTrade(item.pairId, 'SPOT')}
                           >
-                            Open
+                            Open Chart
                           </Button>
                         </div>
                       </td>
@@ -456,6 +530,8 @@ export const MarketsView: React.FC<MarketsViewProps> = ({
                     p.priceChangePercent24h || p.priceChange24h?.replace('+', '') || '0'
                   );
                   const isFav = favorites.has(p.id);
+                  const isScheduledDelist = Boolean(!p.isDelisted && p.delistScheduledAt && p.delistScheduledAt > nowMs);
+                  const isPreLaunch = Boolean(!p.isDelisted && p.isActive === false && p.scheduledAt && p.scheduledAt > nowMs);
 
                   return (
                     <tr
@@ -478,46 +554,91 @@ export const MarketsView: React.FC<MarketsViewProps> = ({
 
                       <td className="py-3 px-4">
                         <div className="flex items-center gap-2.5">
-                          <AssetIcon symbol={p.baseCurrency} size="xs" />
-                          <span className="font-semibold text-[#E4EBEF] group-hover:text-white">
-                            {sym}
-                          </span>
-                          <StatusBadge tone={p.quoteCurrency === 'USDT' ? 'buy' : 'info'}>
-                            {p.quoteCurrency}
-                          </StatusBadge>
-                          {(p.isNewListing || p.baseCurrency === 'SOL') && (
-                            <StatusBadge tone="brand">NEW</StatusBadge>
-                          )}
-                          {p.isHalted && <StatusBadge tone="danger">HALTED</StatusBadge>}
+                          <AssetIcon symbol={p.baseCurrency} logoUrl={p.baseLogoUrl || undefined} size="sm" />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-semibold text-[#E4EBEF] group-hover:text-white">
+                                {sym}
+                              </span>
+                              <StatusBadge tone={p.quoteCurrency === 'USDT' ? 'buy' : 'info'}>
+                                {p.quoteCurrency}
+                              </StatusBadge>
+                              {(p.isNewListing || p.baseCurrency === 'SOL') && !p.isDelisted && (
+                                <StatusBadge tone="brand">NEW</StatusBadge>
+                              )}
+                              {p.isDelisted ? (
+                                <StatusBadge tone="danger">DELISTED</StatusBadge>
+                              ) : isScheduledDelist && p.delistScheduledAt ? (
+                                <StatusBadge tone="danger">
+                                  <span className="inline-flex items-center gap-1 font-mono tabular-nums">
+                                    <AlertTriangle className="w-2.5 h-2.5" />
+                                    DELISTING · {formatCountdownCompact(p.delistScheduledAt, nowMs)}
+                                  </span>
+                                </StatusBadge>
+                              ) : isPreLaunch && p.scheduledAt ? (
+                                <StatusBadge tone="warning">
+                                  <span className="inline-flex items-center gap-1 font-mono tabular-nums">
+                                    <Clock className="w-2.5 h-2.5" />
+                                    SOON · {formatCountdownCompact(p.scheduledAt, nowMs)}
+                                  </span>
+                                </StatusBadge>
+                              ) : p.isHalted ? (
+                                <StatusBadge tone="danger">HALTED</StatusBadge>
+                              ) : null}
+                            </div>
+                            {(p.isDelisted || isScheduledDelist) && p.delistReason ? (
+                              <span className="text-[10px] font-sans text-[#EA5B65]/90 block truncate max-w-[240px]">
+                                {p.delistReason}
+                              </span>
+                            ) : p.baseName && p.baseName !== p.baseCurrency ? (
+                              <span className="text-[10px] font-sans text-[#71818B] block truncate max-w-[180px]">
+                                {p.baseName}
+                              </span>
+                            ) : null}
+                          </div>
                         </div>
                       </td>
 
                       <td className="py-3 px-4 text-right font-semibold text-[#E4EBEF]">
-                        {formatQuotePrice(p.lastPrice, p.quoteCurrency, p.quoteDecimals, true)}
+                        {isPreLaunch
+                          ? <span className="text-[#D6A85C] text-[11px]">Pre-Launch</span>
+                          : formatQuotePrice(p.lastPrice, p.quoteCurrency, p.quoteDecimals, true)}
                       </td>
 
                       <td className="py-3 px-4 text-right font-semibold">
-                        <PercentageChange value={chg} size="sm" />
-                      </td>
-
-                      <td className="py-3 px-4 text-right text-[#A1AFB8] hidden sm:table-cell">
-                        {formatQuotePrice(p.high24h, p.quoteCurrency, p.quoteDecimals, true)}
-                      </td>
-
-                      <td className="py-3 px-4 text-right text-[#A1AFB8] hidden sm:table-cell">
-                        {formatQuotePrice(p.low24h, p.quoteCurrency, p.quoteDecimals, true)}
-                      </td>
-
-                      <td className="py-3 px-4 text-right text-[#A1AFB8] hidden md:table-cell">
-                        {formatPairVolume(
-                          p.quoteVolume24h || p.volume24h || '0',
-                          p.quoteCurrency,
-                          p.quoteDecimals
+                        {isPreLaunch ? (
+                          <span className="text-[#71818B] text-[11px]">—</span>
+                        ) : (
+                          <PercentageChange value={chg} size="sm" />
                         )}
                       </td>
 
+                      <td className="py-3 px-4 text-right text-[#A1AFB8] hidden sm:table-cell">
+                        {isPreLaunch ? '—' : formatQuotePrice(p.high24h, p.quoteCurrency, p.quoteDecimals, true)}
+                      </td>
+
+                      <td className="py-3 px-4 text-right text-[#A1AFB8] hidden sm:table-cell">
+                        {isPreLaunch ? '—' : formatQuotePrice(p.low24h, p.quoteCurrency, p.quoteDecimals, true)}
+                      </td>
+
+                      <td className="py-3 px-4 text-right text-[#A1AFB8] hidden md:table-cell">
+                        {isPreLaunch
+                          ? '—'
+                          : formatPairVolume(
+                              p.quoteVolume24h || p.volume24h || '0',
+                              p.quoteCurrency,
+                              p.quoteDecimals
+                            )}
+                      </td>
+
                       <td className="py-3 px-4 text-center hidden lg:table-cell">
-                        <div className="flex justify-center">{renderRangeTrend(p, chg)}</div>
+                        <div className="flex justify-center">
+                          {isPreLaunch ? (
+                            <span className="text-[10px] text-[#71818B]">Countdown</span>
+                          ) : (
+                            renderRangeTrend(p, chg)
+                          )}
+                        </div>
                       </td>
 
                       <td className="py-3 px-4 text-right">
@@ -525,21 +646,41 @@ export const MarketsView: React.FC<MarketsViewProps> = ({
                           className="flex items-center justify-end gap-1.5"
                           onClick={e => e.stopPropagation()}
                         >
-                          <button
-                            type="button"
-                            onClick={() => onNavigateTrade(p.id, 'SPOT')}
-                            className="px-2.5 py-1 text-[11px] font-semibold rounded-[6px] bg-[#8DA5B1] hover:bg-[#A5BAC4] text-[#090D12] transition-colors cursor-pointer"
-                          >
-                            Trade
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onNavigateTrade(p.id, 'FUTURES')}
-                            title="Trade Futures"
-                            className="p-1.5 rounded-[6px] bg-[#111820] border border-[#2B3944] text-[#8DA5B1] hover:text-[#E4EBEF] hover:bg-[#1D2832] transition-colors cursor-pointer"
-                          >
-                            <Zap className="w-3.5 h-3.5" />
-                          </button>
+                          {p.isDelisted ? (
+                            <button
+                              type="button"
+                              onClick={() => onNavigateTrade(p.id, 'SPOT')}
+                              className="px-2.5 py-1 text-[11px] font-semibold rounded-[6px] bg-[#17212B] hover:bg-[#1D2832] text-[#A1AFB8] border border-[#2B3944] transition-colors cursor-pointer"
+                            >
+                              Chart
+                            </button>
+                          ) : isPreLaunch ? (
+                            <button
+                              type="button"
+                              onClick={() => onNavigateTrade(p.id, 'SPOT')}
+                              className="px-2.5 py-1 text-[11px] font-semibold rounded-[6px] bg-[#2C2415] hover:bg-[#3A2F1B] text-[#D6A85C] border border-[#D6A85C]/40 transition-colors cursor-pointer"
+                            >
+                              Countdown
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => onNavigateTrade(p.id, 'SPOT')}
+                                className="px-2.5 py-1 text-[11px] font-semibold rounded-[6px] bg-[#8DA5B1] hover:bg-[#A5BAC4] text-[#090D12] transition-colors cursor-pointer"
+                              >
+                                Trade
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => onNavigateTrade(p.id, 'FUTURES')}
+                                title="Trade Futures"
+                                className="p-1.5 rounded-[6px] bg-[#111820] border border-[#2B3944] text-[#8DA5B1] hover:text-[#E4EBEF] hover:bg-[#1D2832] transition-colors cursor-pointer"
+                              >
+                                <Zap className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>

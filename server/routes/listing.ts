@@ -570,7 +570,7 @@ listingRouter.post('/:id/reject', requireAdmin, (req, res) => {
   }
 });
 
-// POST /api/admin/listings/:id/schedule - Schedule activation
+// POST /api/admin/listings/:id/schedule - Schedule or reschedule activation
 listingRouter.post('/:id/schedule', requireAdmin, (req, res) => {
   try {
     const adminUser = (req as any).user;
@@ -578,9 +578,29 @@ listingRouter.post('/:id/schedule', requireAdmin, (req, res) => {
     const { scheduledAt } = req.body;
 
     const scheduled = ListingService.scheduleListing(id, Number(scheduledAt), adminUser.id, extractSecurityMeta(req));
-    res.json({ success: true, listing: scheduled });
+    res.json({
+      success: true,
+      message: `Listing berhasil dijadwalkan untuk ${new Date(scheduled.scheduledAt || 0).toLocaleString('id-ID')}. Countdown timer kini aktif di Market Chart.`,
+      listing: scheduled
+    });
   } catch (err: any) {
     res.status(400).json({ error: err.message, code: 'SCHEDULE_FAILED' });
+  }
+});
+
+// POST /api/admin/listings/:id/unschedule - Cancel scheduled launch time
+listingRouter.post('/:id/unschedule', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const { id } = req.params;
+    const updated = ListingService.cancelScheduleListing(id, adminUser.id, extractSecurityMeta(req));
+    res.json({
+      success: true,
+      message: 'Jadwal aktivasi listing dibatalkan (kembali ke status APPROVED).',
+      listing: updated
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message, code: 'UNSCHEDULE_FAILED' });
   }
 });
 

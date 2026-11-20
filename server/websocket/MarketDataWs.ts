@@ -131,6 +131,13 @@ export class MarketDataWebSocketService {
     }
   }
 
+  broadcastTickerSnapshot() {
+    this.broadcast('ticker', {
+      type: 'snapshot',
+      data: Array.from(db.tradingPairs.values())
+    });
+  }
+
   broadcast(arg1: string | any, arg2?: any) {
     let channel: string;
     let payload: any;
@@ -224,6 +231,19 @@ export class MarketDataWebSocketService {
           client.channels.has(`bots:${userId}`)) &&
         client.ws.readyState === WebSocket.OPEN
       ) {
+        client.ws.send(message);
+      }
+    }
+  }
+
+  broadcastAssetsUpdated(assets: any[]) {
+    const message = JSON.stringify({
+      type: 'assets_updated',
+      channel: 'ticker',
+      data: assets
+    });
+    for (const client of this.clients) {
+      if (client.ws.readyState === WebSocket.OPEN) {
         client.ws.send(message);
       }
     }

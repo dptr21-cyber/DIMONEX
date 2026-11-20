@@ -33,6 +33,7 @@ import { db } from './db/database.js';
 import { priceAggregatorService } from './services/external/PriceAggregatorService.js';
 import { priceThresholdService } from './services/PriceThresholdService.js';
 import { futuresEngine } from './services/FuturesEngine.js';
+import { marketLifecycleScheduler } from './services/MarketLifecycleScheduler.js';
 
 export async function startServer() {
   const app = express();
@@ -48,8 +49,8 @@ export async function startServer() {
     10
   );
 
-  // JSON Body Parser
-  app.use(express.json());
+  // JSON Body Parser (5mb limit supports admin crypto asset logo uploads)
+  app.use(express.json({ limit: '5mb' }));
 
   // WebSocket Server for High-Speed Market Data
   const wss = new WebSocketServer({ server, path: '/ws' });
@@ -165,9 +166,10 @@ export async function startServer() {
       }
     }, 1500);
 
-    // Start Price Threshold Alert Engine & Real Perpetual Futures Engine
+    // Start Price Threshold Alert Engine, Real Perpetual Futures Engine & Market Lifecycle Scheduler
     priceThresholdService.start();
     futuresEngine.start();
+    marketLifecycleScheduler.start();
 
     // Background periodic live rate sync every 60 seconds
     setInterval(() => {

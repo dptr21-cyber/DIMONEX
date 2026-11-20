@@ -12,6 +12,7 @@ import { matchingEngine } from '../engine/MatchingEngine.js';
 import { db } from '../db/database.js';
 import { marketWsService } from '../websocket/MarketDataWs.js';
 import { klineService } from '../engine/KlineService.js';
+import { ensureScheduledPairEntry } from '../services/MarketLifecycleScheduler.js';
 
 export const tradingRouter = Router();
 
@@ -48,8 +49,20 @@ tradingRouter.get('/pairs', (req, res) => {
     }
   }
 
+  // Sync SCHEDULED initial listings so pre-launch pairs appear in Markets & Chart with Countdown Timer
+  for (const listing of db.listingRequests.values()) {
+    if (listing.status === 'SCHEDULED') {
+      ensureScheduledPairEntry(listing);
+    }
+  }
+
   // Authoritatively compute rolling 24h stats from actual executed trades
+  db.ensureAssetsForTradingPairs();
   db.recalculatePair24hStats();
+
+  const assetsBySymbol = new Map(
+    Array.from(db.assets.values()).map(a => [a.symbol.toUpperCase(), a])
+  );
 
   const enrichedPairs = Array.from(db.tradingPairs.values()).map(pair => {
     const market = db.markets.get(pair.id);
@@ -61,18 +74,35 @@ tradingRouter.get('/pairs', (req, res) => {
           return base && base.symbol === pair.baseCurrency && (!quote || quote.symbol === pair.quoteCurrency);
         });
 
-    const baseAsset = Array.from(db.assets.values()).find(a => a.symbol === pair.baseCurrency);
+    const baseAsset = assetsBySymbol.get(pair.baseCurrency.toUpperCase());
+    const quoteAsset = assetsBySymbol.get(pair.quoteCurrency.toUpperCase());
     const isNew = pair.baseCurrency === 'SOL' || (listing !== undefined);
+    const resolvedScheduledAt = listing?.status === 'SCHEDULED'
+      ? (listing.scheduledAt || pair.scheduledAt)
+      : pair.scheduledAt;
+
+    const resolvedListingStatus = pair.isDelisted
+      ? 'DELISTED'
+      : listing?.status === 'SCHEDULED' && !pair.isActive
+      ? 'SCHEDULED'
+      : (listing?.status || (pair.isActive ? 'ACTIVE' : 'PREPARING'));
 
     return {
       ...pair,
+      baseName: baseAsset?.name || pair.baseCurrency,
+      baseLogoUrl: baseAsset?.logoUrl || '',
+      quoteLogoUrl: quoteAsset?.logoUrl || '',
       isNewListing: isNew,
-      listingStatus: listing?.status || (pair.isActive ? 'ACTIVE' : 'PREPARING'),
+      listingStatus: resolvedListingStatus,
       depositEnabled: baseAsset?.depositEnabled ?? true,
       withdrawalEnabled: baseAsset?.withdrawalEnabled ?? true,
       depositOpenedAt: baseAsset?.depositOpenedAt || listing?.depositOpenedAt,
       withdrawalOpenedAt: baseAsset?.withdrawalOpenedAt || listing?.withdrawalOpenedAt,
-      scheduledAt: listing?.scheduledAt
+      scheduledAt: resolvedScheduledAt,
+      isDelisted: Boolean(pair.isDelisted),
+      delistedAt: pair.delistedAt,
+      delistScheduledAt: pair.delistScheduledAt,
+      delistReason: pair.delistReason
     };
   });
 
@@ -281,6 +311,18 @@ tradingRouter.post('/order', requireAuth, (req, res) => {
 
     if (!pairId || !side || !orderType || !quantity) {
       return res.status(400).json({ error: 'Parameter order tidak lengkap' });
+    }
+
+    const targetPair = db.tradingPairs.get(pairId);
+    if (targetPair?.isDelisted) {
+      return res.status(400).json({
+        error: `Market ${pairId} telah di-delisting dari bursa dan tidak lagi menerima order baru.`
+      });
+    }
+    if (targetPair && !targetPair.isActive && targetPair.scheduledAt && targetPair.scheduledAt > Date.now()) {
+      return res.status(400).json({
+        error: `Market ${pairId} dijadwalkan listing pada ${new Date(targetPair.scheduledAt).toLocaleString('id-ID')}. Trading akan dibuka otomatis setelah countdown selesai.`
+      });
     }
 
     const result = matchingEngine.placeOrder({
