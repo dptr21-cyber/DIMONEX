@@ -24,12 +24,14 @@ import { AssetIcon } from '../ui/AssetIcon.js';
 import { DIMONEX_HERO_BANNER_SRC } from '../ui/DimonexBrand.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
 import { SegmentedTabs } from '../ui/Tabs.js';
+import { NewsCarousel } from '../news/NewsCarousel.js';
 
 interface MobileHomeViewProps {
   pairs: TradingPairItem[];
   balances: UserBalance[];
   onSelectPair: (pairId: string) => void;
   onNavigate: (view: string) => void;
+  onOpenArticle?: (slug: string) => void;
 }
 
 export const MobileHomeView: React.FC<MobileHomeViewProps> = ({
@@ -37,6 +39,7 @@ export const MobileHomeView: React.FC<MobileHomeViewProps> = ({
   balances,
   onSelectPair,
   onNavigate,
+  onOpenArticle,
 }) => {
   const [hideBalance, setHideBalance] = useState(false);
   const [activeTab, setActiveTab] = useState<'GAINERS' | 'LOSERS' | 'VOLUME'>('GAINERS');
@@ -292,6 +295,9 @@ export const MobileHomeView: React.FC<MobileHomeViewProps> = ({
           })}
         </div>
       </div>
+
+      {/* Latest Published News & Pinned Announcements Carousel */}
+      <NewsCarousel compact onOpenArticle={slug => onOpenArticle?.(slug)} />
 
       {/* Listing Portal Mobile CTA Banner */}
       <button

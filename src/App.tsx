@@ -477,6 +477,8 @@ function AppContent() {
               }).catch(() => {});
             } else if (msg.type === 'user_notification') {
               refreshUnreadNotifications();
+            } else if (msg.type === 'announcement_published') {
+              window.dispatchEvent(new CustomEvent('dimonex:news-updated'));
             }
           } catch {}
         };
@@ -1282,6 +1284,7 @@ function AppContent() {
               balances={balances}
               onSelectPair={handleSelectPair}
               onNavigate={v => handleSelectView(v as ActiveViewType)}
+              onOpenArticle={handleOpenArticle}
             />
           )}
         </div>

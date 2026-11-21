@@ -21,6 +21,7 @@ newsPublicRouter.get('/news', (req, res) => {
     const result = newsCmsService.listPublicAnnouncements({
       category: typeof req.query.category === 'string' ? req.query.category : undefined,
       search: typeof req.query.search === 'string' ? req.query.search : undefined,
+      pinnedOnly: req.query.pinnedOnly === 'true' || req.query.pinnedOnly === '1',
       page: req.query.page ? Number(req.query.page) : 1,
       limit: req.query.limit ? Number(req.query.limit) : 12
     });

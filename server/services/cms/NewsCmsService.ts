@@ -765,15 +765,23 @@ export class NewsCmsService {
   public listPublicAnnouncements(params?: {
     category?: string;
     search?: string;
+    pinnedOnly?: boolean;
     page?: number;
     limit?: number;
   }) {
-    let items = Array.from(db.announcements.values()).filter(
+    const allPublished = Array.from(db.announcements.values()).filter(
       a => a.status === 'PUBLISHED' && a.publishedAt !== undefined
     );
 
+    const pinnedCount = allPublished.filter(a => a.isPinned).length;
+    let items = allPublished;
+
     if (params?.category && params.category !== 'ALL') {
       items = items.filter(a => a.category === params.category);
+    }
+
+    if (params?.pinnedOnly) {
+      items = items.filter(a => a.isPinned);
     }
 
     if (params?.search && params.search.trim()) {
@@ -785,7 +793,7 @@ export class NewsCmsService {
       );
     }
 
-    // Pinned announcements appear first, then newest publishedAt descending
+    // Pinned announcements always appear first, then newest publishedAt descending
     items.sort((a, b) => {
       if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
       return (b.publishedAt || 0) - (a.publishedAt || 0);
@@ -804,10 +812,12 @@ export class NewsCmsService {
         category: a.category,
         shortDescription: a.shortDescription,
         coverImageUrl: a.coverImageUrl,
-        isPinned: a.isPinned,
+        status: 'PUBLISHED' as const,
+        isPinned: Boolean(a.isPinned),
         publishedAt: a.publishedAt,
         authorName: a.authorName || 'DIMONEX Official'
       })),
+      pinnedCount,
       pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
     };
   }

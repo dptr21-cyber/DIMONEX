@@ -388,6 +388,9 @@ export const OverviewView: React.FC<OverviewProps> = ({
         )}
       </div>
 
+      {/* 2B. LATEST NEWS & ANNOUNCEMENTS CAROUSEL (Real Backend API, Pinned First, Published Only) */}
+      <NewsCarousel onOpenArticle={slug => onOpenArticle?.(slug)} />
+
       {/* 3. AUTHORITATIVE EXCHANGE METRICS */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
@@ -537,9 +540,6 @@ export const OverviewView: React.FC<OverviewProps> = ({
           )}
         </div>
       </div>
-
-      {/* 4B. LATEST NEWS & ANNOUNCEMENTS CAROUSEL (Real Backend API) */}
-      <NewsCarousel onOpenArticle={slug => onOpenArticle?.(slug)} />
 
       {/* 5. INSTITUTIONAL INFRASTRUCTURE HIGHLIGHTS */}
       <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-6 space-y-5">
