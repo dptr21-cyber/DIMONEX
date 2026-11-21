@@ -18,7 +18,7 @@
  * Zero mock figures, zero hardcoded user progress, real double-entry USDT ledger payouts.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Copy,
   RefreshCw,
@@ -32,26 +32,15 @@ import {
   Ticket,
   History,
   ChevronLeft,
-  ChevronRight,
-  BarChart3
+  ChevronRight
 } from 'lucide-react';
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Cell,
-  ReferenceLine
-} from 'recharts';
 import { Button } from '../ui/Button.js';
 import { PageHeader, PanelHeader } from '../ui/PanelHeader.js';
 import { SegmentedTabs } from '../ui/Tabs.js';
 import { useToast } from '../ui/Toast.js';
 import { UserProfile, UserBalance } from '../../types/index.js';
 import { safeFetchJson } from '../../lib/safeFetch.js';
+import { VipVolumeProgressPanel } from './VipVolumeProgressPanel.js';
 
 interface Props {
   user: UserProfile | null;
@@ -234,12 +223,6 @@ function formatUsd(val: number, decimals = 2): string {
   })}`;
 }
 
-function formatCompactUsd(val: number): string {
-  if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(val % 1_000_000 === 0 ? 0 : 1)}M`;
-  if (val >= 1_000) return `$${(val / 1_000).toFixed(val % 1_000 === 0 ? 0 : 1)}K`;
-  return `$${val.toFixed(0)}`;
-}
-
 function formatIdrShort(val: number): string {
   return `Rp ${Math.round(val).toLocaleString('id-ID')}`;
 }
@@ -258,29 +241,6 @@ const VOUCHER_TYPE_LABEL: Record<UserVoucherItem['voucherType'], string> = {
   USDT_BONUS: 'USDT Bonus',
   FEE_REBATE: 'Fee Rebate',
   TRADING_CREDIT: 'Trading Credit'
-};
-
-interface ChartTooltipProps {
-  active?: boolean;
-  payload?: any[];
-  label?: string;
-}
-
-const ObsidianChartTooltip: React.FC<ChartTooltipProps> = ({ active, payload, label }) => {
-  if (!active || !payload || payload.length === 0) return null;
-  const entry = payload[0];
-  const val = Number(entry?.value ?? 0);
-  const sub = entry?.payload?.note as string | undefined;
-
-  return (
-    <div className="rounded-[8px] bg-[#0E141B] border border-[#2B3944] px-3 py-2 text-xs shadow-lg">
-      <div className="font-sans font-medium text-[#E4EBEF]">{label || entry?.payload?.name}</div>
-      <div className="font-mono tabular-nums font-semibold text-[#16A879] mt-0.5">
-        {formatUsd(val, 2)} USDT
-      </div>
-      {sub && <div className="text-[11px] font-sans text-[#71818B] mt-0.5">{sub}</div>}
-    </div>
-  );
 };
 
 export const RewardsVipView: React.FC<Props> = ({
@@ -553,75 +513,12 @@ export const RewardsVipView: React.FC<Props> = ({
   const formatVolumePref = (usdtVal: number) =>
     displayCurrency === 'IDR' ? formatIdrShort(usdtVal * usdtIdrRate) : formatUsd(usdtVal);
 
-  // Recharts Dataset 1: Current 30D Volume Breakdown vs Next Tier Target
-  const nextTierBreakdownData = useMemo(() => {
-    if (!summary) return [];
-    const { spotVolume30dUsdt, futuresVolume30dUsdt, volume30dUsdt, nextTier, currentTier, remainingVolumeUsdt } =
-      summary.vip;
-    const rows = [
-      {
-        name: 'Spot 30D',
-        value: Number(spotVolume30dUsdt.toFixed(2)),
-        fill: '#5B9BD5',
-        note: 'Verified 30-day Spot trade fills'
-      },
-      {
-        name: 'Futures 30D',
-        value: Number(futuresVolume30dUsdt.toFixed(2)),
-        fill: '#8DA5B1',
-        note: 'Verified 30-day Perpetual notional'
-      },
-      {
-        name: 'Total 30D',
-        value: Number(volume30dUsdt.toFixed(2)),
-        fill: '#16A879',
-        note: `Current active tier: ${currentTier.name}`
-      }
-    ];
-    if (nextTier) {
-      rows.push({
-        name: `${nextTier.name} Goal`,
-        value: nextTier.minVolume30dUsdt,
-        fill: '#2B3944',
-        note: `${formatUsd(remainingVolumeUsdt)} remaining to unlock ${nextTier.name}`
-      });
-    } else {
-      rows.push({
-        name: `${currentTier.name} Min`,
-        value: currentTier.minVolume30dUsdt,
-        fill: '#2B3944',
-        note: 'Top institutional tier threshold achieved'
-      });
-    }
-    return rows;
-  }, [summary]);
-
-  // Recharts Dataset 2: User Current Volume vs Upcoming VIP Tier Requirements
-  const tierComparisonData = useMemo(() => {
-    if (!summary) return [];
-    const curLevel = summary.vip.currentTier.level;
-    const targetTiers = summary.vip.schedule
-      .filter(t => t.level > 0 && t.level >= Math.max(1, curLevel))
-      .slice(0, 3);
-
-    return [
-      {
-        name: 'Your 30D',
-        value: Number(summary.vip.volume30dUsdt.toFixed(2)),
-        fill: '#16A879',
-        note: `${summary.vip.currentTier.name} · ${summary.vip.tradesCount30d} fills (30d)`
-      },
-      ...targetTiers.map(t => ({
-        name: t.name,
-        value: t.minVolume30dUsdt,
-        fill: t.level === summary.vip.nextTier?.level ? '#D6A85C' : '#334452',
-        note: `Maker ${t.makerFeePct} / Taker ${t.takerFeePct} · ${t.referralRebatePct}% Rebate`
-      }))
-    ];
-  }, [summary]);
-
   const userVouchers = summary?.vouchers?.items || [];
   const taskBadgeCount = (summary?.tasks.readyCount || 0) + (summary?.vouchers?.availableCount || 0);
+  const activeTierForChart = summary?.vip.currentTier || vipTiers[0] || null;
+  const nextTierForChart = summary
+    ? summary.vip.nextTier
+    : vipTiers.find(t => t.level === 1) || null;
 
   return (
     <div className="flex-1 flex flex-col p-4 lg:p-6 bg-[#090D12] overflow-y-auto space-y-6">
@@ -714,8 +611,7 @@ export const RewardsVipView: React.FC<Props> = ({
         {activeTab === 'VIP' && (
           <div className="space-y-6">
             {user && summary ? (
-              <>
-                <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-5 space-y-5">
+              <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-5 space-y-5">
                   <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
                     {/* Current VIP Tier Identity */}
                     <div className="lg:col-span-4 space-y-1.5">
@@ -830,149 +726,6 @@ export const RewardsVipView: React.FC<Props> = ({
                     </div>
                   </div>
                 </div>
-
-                {/* Recharts Visual Breakdown of VIP Progress vs Tier Requirements */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  {/* Chart 1: Current 30D Volume Composition vs Next VIP Target */}
-                  <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-5 space-y-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-2">
-                        <BarChart3 className="w-4 h-4 text-[#8DA5B1] shrink-0" />
-                        <div>
-                          <h3 className="text-sm font-semibold text-[#E4EBEF]">
-                            Next VIP Level Progress Breakdown
-                          </h3>
-                          <p className="text-xs text-[#71818B]">
-                            Live 30-day Spot &amp; Futures volume compared against{' '}
-                            {summary.vip.nextTier
-                              ? `${summary.vip.nextTier.name} (${formatUsd(summary.vip.nextTier.minVolume30dUsdt, 0)})`
-                              : 'Institutional ceiling'}
-                          </p>
-                        </div>
-                      </div>
-                      <span className="font-mono tabular-nums text-xs font-semibold text-[#16A879] whitespace-nowrap">
-                        {summary.vip.progressPct.toFixed(1)}%
-                      </span>
-                    </div>
-
-                    <div className="h-56 w-full">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart
-                          data={nextTierBreakdownData}
-                          layout="vertical"
-                          margin={{ top: 6, right: 20, left: 10, bottom: 6 }}
-                        >
-                          <CartesianGrid stroke="#202B34" strokeDasharray="3 3" horizontal={false} />
-                          <XAxis
-                            type="number"
-                            tickFormatter={formatCompactUsd}
-                            tick={{ fill: '#71818B', fontSize: 11 }}
-                            axisLine={{ stroke: '#202B34' }}
-                            tickLine={false}
-                          />
-                          <YAxis
-                            type="category"
-                            dataKey="name"
-                            width={82}
-                            tick={{ fill: '#A1AFB8', fontSize: 11 }}
-                            axisLine={{ stroke: '#202B34' }}
-                            tickLine={false}
-                          />
-                          <Tooltip content={<ObsidianChartTooltip />} cursor={{ fill: '#1D2832', opacity: 0.4 }} />
-                          <Bar dataKey="value" radius={[0, 5, 5, 0]} maxBarSize={24}>
-                            {nextTierBreakdownData.map((entry, idx) => (
-                              <Cell key={idx} fill={entry.fill} />
-                            ))}
-                          </Bar>
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-
-                    <div className="pt-3 border-t border-[#202B34] flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono tabular-nums text-[#A1AFB8]">
-                      <span>
-                        Spot: {formatUsd(summary.vip.spotVolume30dUsdt)} · Futures:{' '}
-                        {formatUsd(summary.vip.futuresVolume30dUsdt)}
-                      </span>
-                      <span className="text-[#E4EBEF]">
-                        {summary.vip.nextTier
-                          ? `Gap: ${formatUsd(summary.vip.remainingVolumeUsdt)}`
-                          : 'Max Tier Reached'}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Chart 2: Volume vs Upcoming VIP Tier Requirements */}
-                  <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-5 space-y-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-2">
-                        <Award className="w-4 h-4 text-[#D6A85C] shrink-0" />
-                        <div>
-                          <h3 className="text-sm font-semibold text-[#E4EBEF]">
-                            Current Volume vs. Tier Requirements
-                          </h3>
-                          <p className="text-xs text-[#71818B]">
-                            Benchmarking your rolling 30D volume against upcoming VIP volume thresholds
-                          </p>
-                        </div>
-                      </div>
-                      <span className="font-mono tabular-nums text-xs text-[#A1AFB8] whitespace-nowrap">
-                        {summary.vip.currentTier.code}
-                      </span>
-                    </div>
-
-                    <div className="h-56 w-full">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart
-                          data={tierComparisonData}
-                          margin={{ top: 10, right: 16, left: 4, bottom: 6 }}
-                        >
-                          <CartesianGrid stroke="#202B34" strokeDasharray="3 3" vertical={false} />
-                          <XAxis
-                            dataKey="name"
-                            tick={{ fill: '#A1AFB8', fontSize: 11 }}
-                            axisLine={{ stroke: '#202B34' }}
-                            tickLine={false}
-                          />
-                          <YAxis
-                            tickFormatter={formatCompactUsd}
-                            tick={{ fill: '#71818B', fontSize: 11 }}
-                            axisLine={{ stroke: '#202B34' }}
-                            tickLine={false}
-                            width={54}
-                          />
-                          <Tooltip content={<ObsidianChartTooltip />} cursor={{ fill: '#1D2832', opacity: 0.4 }} />
-                          {summary.vip.volume30dUsdt > 0 && (
-                            <ReferenceLine
-                              y={summary.vip.volume30dUsdt}
-                              stroke="#16A879"
-                              strokeDasharray="4 4"
-                            />
-                          )}
-                          <Bar dataKey="value" radius={[5, 5, 0, 0]} maxBarSize={44}>
-                            {tierComparisonData.map((entry, idx) => (
-                              <Cell key={idx} fill={entry.fill} />
-                            ))}
-                          </Bar>
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-
-                    <div className="pt-3 border-t border-[#202B34] flex flex-wrap items-center justify-between gap-2 text-[11px] font-sans text-[#71818B]">
-                      <span>
-                        <span className="inline-block w-2 h-2 rounded-full bg-[#16A879] mr-1.5" />
-                        Your 30D Volume
-                        <span className="inline-block w-2 h-2 rounded-full bg-[#D6A85C] ml-3 mr-1.5" />
-                        Next Tier Target
-                      </span>
-                      {summary.vip.nextTier && (
-                        <span className="font-mono text-[#E4EBEF]">
-                          Next Fee: {summary.vip.nextTier.makerFeePct} / {summary.vip.nextTier.takerFeePct}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </>
             ) : user && isLoading ? (
               <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-6 animate-pulse space-y-4">
                 <div className="h-5 w-48 bg-[#1D2832] rounded" />
@@ -984,6 +737,30 @@ export const RewardsVipView: React.FC<Props> = ({
                 </div>
               </div>
             ) : null}
+
+            {/* Unified Recharts Visual Progress Bar & Volume vs Next VIP Tier Chart (Auth & Guest) */}
+            {activeTierForChart && (
+              <VipVolumeProgressPanel
+                currentTier={activeTierForChart}
+                nextTier={nextTierForChart}
+                schedule={vipTiers}
+                spotVolume30dUsdt={summary ? summary.vip.spotVolume30dUsdt : 0}
+                futuresVolume30dUsdt={summary ? summary.vip.futuresVolume30dUsdt : 0}
+                volume30dUsdt={summary ? summary.vip.volume30dUsdt : 0}
+                remainingVolumeUsdt={
+                  summary
+                    ? summary.vip.remainingVolumeUsdt
+                    : nextTierForChart?.minVolume30dUsdt || 0
+                }
+                progressPct={summary ? summary.vip.progressPct : 0}
+                tradesCount30d={summary ? summary.vip.tradesCount30d : 0}
+                displayCurrency={displayCurrency}
+                usdtIdrRate={usdtIdrRate}
+                isAuthenticated={Boolean(user && summary)}
+                onStartTrading={() => onNavigate?.('TRADE')}
+                onOpenAuthModal={onOpenAuthModal}
+              />
+            )}
 
             {/* Authoritative Institutional Fee Schedule Table */}
             <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
