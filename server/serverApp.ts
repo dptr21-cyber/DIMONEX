@@ -40,6 +40,7 @@ import { notificationsRouter } from './routes/notifications.js';
 import { newsCmsService } from './services/cms/NewsCmsService.js';
 import { notificationBroadcastService } from './services/cms/NotificationBroadcastService.js';
 import { rewardsRouter } from './routes/rewards.js';
+import { rewardsAdminRouter } from './routes/rewardsAdmin.js';
 
 export async function startServer() {
   const app = express();
@@ -74,6 +75,7 @@ export async function startServer() {
   app.use('/api/api-keys', apiKeyRouter);
   app.use('/api/admin/listings', listingRouter);
   app.use('/api/listing', listingRouter);
+  app.use('/api/admin/rewards', rewardsAdminRouter);
   app.use('/api/admin', newsAdminRouter);
   app.use('/api/admin', adminRouter);
   app.use('/api/public', newsPublicRouter);

@@ -3,14 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * src/components/rewards/RewardsVipView.tsx
- * DIMONEX Institutional VIP Fee Schedule, Real Trader Task Center & Referral Program.
+ * DIMONEX Institutional VIP Fee Schedule, Recharts VIP Progress Analytics,
+ * Dynamic Trader Task Center & Vouchers, Referral Program & Dedicated Rewards History.
  *
- * 100% backed by authoritative backend APIs (/api/rewards/schedule, /api/rewards/summary,
- * /api/rewards/tasks/:taskId/claim, /api/rewards/referral/apply, /api/rewards/referral/claim).
+ * 100% backed by authoritative backend APIs:
+ * - GET  /api/rewards/schedule
+ * - GET  /api/rewards/summary
+ * - GET  /api/rewards/history
+ * - POST /api/rewards/tasks/:taskId/claim
+ * - POST /api/rewards/vouchers/redeem
+ * - POST /api/rewards/referral/apply
+ * - POST /api/rewards/referral/claim
+ *
  * Zero mock figures, zero hardcoded user progress, real double-entry USDT ledger payouts.
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Copy,
   RefreshCw,
@@ -21,7 +29,23 @@ import {
   Users,
   Gift,
   Award,
+  Ticket,
+  History,
+  ChevronLeft,
+  ChevronRight,
+  BarChart3
 } from 'lucide-react';
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Cell,
+  ReferenceLine
+} from 'recharts';
 import { Button } from '../ui/Button.js';
 import { PageHeader, PanelHeader } from '../ui/PanelHeader.js';
 import { SegmentedTabs } from '../ui/Tabs.js';
@@ -71,6 +95,29 @@ interface RewardTaskItem {
   status: 'CLAIMED' | 'READY' | 'IN_PROGRESS';
 }
 
+interface UserVoucherItem {
+  id: string;
+  code: string;
+  title: string;
+  description: string;
+  voucherType: 'USDT_BONUS' | 'FEE_REBATE' | 'TRADING_CREDIT';
+  rewardCurrency: 'USDT';
+  rewardAmountUsdt: number;
+  rewardDisplay: string;
+  minVipLevel: number;
+  maxRedemptions: number;
+  redeemedCount: number;
+  remainingSlots: number;
+  expiresAt: number | null;
+  isExpired: boolean;
+  isExhausted: boolean;
+  eligibleByVip: boolean;
+  redeemed: boolean;
+  redeemedAt: number | null;
+  journalId: string | null;
+  canRedeem: boolean;
+}
+
 interface RefereeItem {
   userId: string;
   emailMasked: string;
@@ -82,14 +129,34 @@ interface RefereeItem {
   isActiveTrader: boolean;
 }
 
-interface PayoutHistoryItem {
+interface RewardHistoryRecord {
   id: string;
-  type: 'TASK_REWARD' | 'REFERRAL_COMMISSION';
+  type: 'TASK_REWARD' | 'VOUCHER_REDEMPTION' | 'REFERRAL_COMMISSION';
   title: string;
+  code: string | null;
   currency: string;
+  amountUsdt: number;
   amountDisplay: string;
+  status: 'SETTLED';
   journalId: string;
   claimedAt: number;
+}
+
+interface RewardsHistoryResponse {
+  items: RewardHistoryRecord[];
+  summary: {
+    totalCount: number;
+    totalSettledUsdt: number;
+    taskCount: number;
+    voucherCount: number;
+    referralCount: number;
+  };
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
 }
 
 interface RewardsSchedulePayload {
@@ -138,6 +205,12 @@ interface RewardsSummaryPayload {
     claimedCount: number;
     totalClaimedUsdt: number;
   };
+  vouchers?: {
+    items: UserVoucherItem[];
+    availableCount: number;
+    redeemedCount: number;
+    totalRedeemedUsdt: number;
+  };
   referral: {
     referralCode: string;
     referredBy: { code: string; emailMasked: string; boundAt: number } | null;
@@ -151,14 +224,20 @@ interface RewardsSummaryPayload {
     minClaimThresholdUsdt: number;
     referees: RefereeItem[];
   };
-  payoutHistory: PayoutHistoryItem[];
+  payoutHistory: RewardHistoryRecord[];
 }
 
 function formatUsd(val: number, decimals = 2): string {
   return `$${val.toLocaleString('en-US', {
     minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
+    maximumFractionDigits: decimals
   })}`;
+}
+
+function formatCompactUsd(val: number): string {
+  if (val >= 1_000_000) return `$${(val / 1_000_000).toFixed(val % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (val >= 1_000) return `$${(val / 1_000).toFixed(val % 1_000 === 0 ? 0 : 1)}K`;
+  return `$${val.toFixed(0)}`;
 }
 
 function formatIdrShort(val: number): string {
@@ -171,28 +250,66 @@ function formatDateTime(ts: number): string {
     day: 'numeric',
     year: 'numeric',
     hour: '2-digit',
-    minute: '2-digit',
+    minute: '2-digit'
   });
 }
+
+const VOUCHER_TYPE_LABEL: Record<UserVoucherItem['voucherType'], string> = {
+  USDT_BONUS: 'USDT Bonus',
+  FEE_REBATE: 'Fee Rebate',
+  TRADING_CREDIT: 'Trading Credit'
+};
+
+interface ChartTooltipProps {
+  active?: boolean;
+  payload?: any[];
+  label?: string;
+}
+
+const ObsidianChartTooltip: React.FC<ChartTooltipProps> = ({ active, payload, label }) => {
+  if (!active || !payload || payload.length === 0) return null;
+  const entry = payload[0];
+  const val = Number(entry?.value ?? 0);
+  const sub = entry?.payload?.note as string | undefined;
+
+  return (
+    <div className="rounded-[8px] bg-[#0E141B] border border-[#2B3944] px-3 py-2 text-xs shadow-lg">
+      <div className="font-sans font-medium text-[#E4EBEF]">{label || entry?.payload?.name}</div>
+      <div className="font-mono tabular-nums font-semibold text-[#16A879] mt-0.5">
+        {formatUsd(val, 2)} USDT
+      </div>
+      {sub && <div className="text-[11px] font-sans text-[#71818B] mt-0.5">{sub}</div>}
+    </div>
+  );
+};
 
 export const RewardsVipView: React.FC<Props> = ({
   user,
   onOpenAuthModal,
   onRefreshBalances,
   onNavigate,
-  displayCurrency,
+  displayCurrency
 }) => {
   const { showToast } = useToast();
-  const [activeTab, setActiveTab] = useState<'VIP' | 'REWARDS' | 'REFERRAL'>('VIP');
+  const [activeTab, setActiveTab] = useState<'VIP' | 'REWARDS' | 'REFERRAL' | 'HISTORY'>('VIP');
   const [schedule, setSchedule] = useState<RewardsSchedulePayload | null>(null);
   const [summary, setSummary] = useState<RewardsSummaryPayload | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const [claimingTaskId, setClaimingTaskId] = useState<string | null>(null);
+  const [voucherCodeInput, setVoucherCodeInput] = useState('');
+  const [redeemingCode, setRedeemingCode] = useState<string | null>(null);
   const [isClaimingCommission, setIsClaimingCommission] = useState(false);
   const [applyCodeInput, setApplyCodeInput] = useState('');
   const [isApplyingCode, setIsApplyingCode] = useState(false);
+
+  // Dedicated Rewards History API state
+  const [historyData, setHistoryData] = useState<RewardsHistoryResponse | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyFilter, setHistoryFilter] = useState<'ALL' | 'TASK_REWARD' | 'VOUCHER_REDEMPTION' | 'REFERRAL_COMMISSION'>('ALL');
+  const [historyPage, setHistoryPage] = useState(1);
 
   const fetchRewardsData = useCallback(async () => {
     setIsLoading(true);
@@ -208,7 +325,7 @@ export const RewardsVipView: React.FC<Props> = ({
       const token = localStorage.getItem('dimonex_auth_token');
       if (user && token) {
         const sumRes = await safeFetchJson<RewardsSummaryPayload>('/api/rewards/summary', {
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { Authorization: `Bearer ${token}` }
         });
         if (sumRes.ok && sumRes.data) {
           setSummary(sumRes.data);
@@ -226,9 +343,46 @@ export const RewardsVipView: React.FC<Props> = ({
     }
   }, [user]);
 
+  const fetchRewardsHistory = useCallback(async () => {
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!user || !token) {
+      setHistoryData(null);
+      setHistoryError(null);
+      return;
+    }
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const params = new URLSearchParams({
+        type: historyFilter,
+        page: String(historyPage),
+        limit: '15'
+      });
+      const res = await safeFetchJson<RewardsHistoryResponse>(
+        `/api/rewards/history?${params.toString()}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.ok && res.data) {
+        setHistoryData(res.data);
+      } else {
+        setHistoryError(res.error || 'Failed to load rewards history.');
+      }
+    } catch {
+      setHistoryError('Network error loading rewards history.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [user, historyFilter, historyPage]);
+
   useEffect(() => {
     fetchRewardsData();
   }, [fetchRewardsData]);
+
+  useEffect(() => {
+    if (activeTab === 'HISTORY') {
+      fetchRewardsHistory();
+    }
+  }, [activeTab, fetchRewardsHistory]);
 
   const copyToClipboard = async (text: string, label: string) => {
     try {
@@ -253,12 +407,13 @@ export const RewardsVipView: React.FC<Props> = ({
         summary: RewardsSummaryPayload;
       }>(`/api/rewards/tasks/${encodeURIComponent(task.id)}/claim`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}` }
       });
 
       if (res.ok && res.data?.summary) {
         setSummary(res.data.summary);
         onRefreshBalances?.();
+        fetchRewardsHistory();
         showToast(
           'success',
           'Reward Credited to Spot Wallet',
@@ -269,6 +424,50 @@ export const RewardsVipView: React.FC<Props> = ({
       }
     } finally {
       setClaimingTaskId(null);
+    }
+  };
+
+  const handleRedeemVoucher = async (rawCode: string) => {
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!user || !token) {
+      onOpenAuthModal();
+      return;
+    }
+    const clean = rawCode.trim().toUpperCase();
+    if (!clean) {
+      showToast('warning', 'Voucher Code Required', 'Enter a valid DIMONEX voucher code.');
+      return;
+    }
+    setRedeemingCode(clean);
+    try {
+      const res = await safeFetchJson<{
+        success: boolean;
+        redemption: { voucherCode: string; amountDisplay: string; journalId: string };
+        summary: RewardsSummaryPayload;
+      }>('/api/rewards/vouchers/redeem', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ code: clean })
+      });
+
+      if (res.ok && res.data?.summary) {
+        setSummary(res.data.summary);
+        setVoucherCodeInput('');
+        onRefreshBalances?.();
+        fetchRewardsHistory();
+        showToast(
+          'success',
+          `Voucher ${res.data.redemption.voucherCode} Redeemed`,
+          `${res.data.redemption.amountDisplay} credited to Spot Wallet (Journal ${res.data.redemption.journalId.slice(0, 8)}).`
+        );
+      } else {
+        showToast('error', 'Voucher Redemption Failed', res.error || 'Invalid or ineligible voucher.');
+      }
+    } finally {
+      setRedeemingCode(null);
     }
   };
 
@@ -293,9 +492,9 @@ export const RewardsVipView: React.FC<Props> = ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({ referralCode: clean }),
+        body: JSON.stringify({ referralCode: clean })
       });
 
       if (res.ok && res.data?.summary) {
@@ -324,12 +523,13 @@ export const RewardsVipView: React.FC<Props> = ({
         summary: RewardsSummaryPayload;
       }>('/api/rewards/referral/claim', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}` }
       });
 
       if (res.ok && res.data?.summary) {
         setSummary(res.data.summary);
         onRefreshBalances?.();
+        fetchRewardsHistory();
         showToast(
           'success',
           'Commission Settled',
@@ -353,12 +553,82 @@ export const RewardsVipView: React.FC<Props> = ({
   const formatVolumePref = (usdtVal: number) =>
     displayCurrency === 'IDR' ? formatIdrShort(usdtVal * usdtIdrRate) : formatUsd(usdtVal);
 
+  // Recharts Dataset 1: Current 30D Volume Breakdown vs Next Tier Target
+  const nextTierBreakdownData = useMemo(() => {
+    if (!summary) return [];
+    const { spotVolume30dUsdt, futuresVolume30dUsdt, volume30dUsdt, nextTier, currentTier, remainingVolumeUsdt } =
+      summary.vip;
+    const rows = [
+      {
+        name: 'Spot 30D',
+        value: Number(spotVolume30dUsdt.toFixed(2)),
+        fill: '#5B9BD5',
+        note: 'Verified 30-day Spot trade fills'
+      },
+      {
+        name: 'Futures 30D',
+        value: Number(futuresVolume30dUsdt.toFixed(2)),
+        fill: '#8DA5B1',
+        note: 'Verified 30-day Perpetual notional'
+      },
+      {
+        name: 'Total 30D',
+        value: Number(volume30dUsdt.toFixed(2)),
+        fill: '#16A879',
+        note: `Current active tier: ${currentTier.name}`
+      }
+    ];
+    if (nextTier) {
+      rows.push({
+        name: `${nextTier.name} Goal`,
+        value: nextTier.minVolume30dUsdt,
+        fill: '#2B3944',
+        note: `${formatUsd(remainingVolumeUsdt)} remaining to unlock ${nextTier.name}`
+      });
+    } else {
+      rows.push({
+        name: `${currentTier.name} Min`,
+        value: currentTier.minVolume30dUsdt,
+        fill: '#2B3944',
+        note: 'Top institutional tier threshold achieved'
+      });
+    }
+    return rows;
+  }, [summary]);
+
+  // Recharts Dataset 2: User Current Volume vs Upcoming VIP Tier Requirements
+  const tierComparisonData = useMemo(() => {
+    if (!summary) return [];
+    const curLevel = summary.vip.currentTier.level;
+    const targetTiers = summary.vip.schedule
+      .filter(t => t.level > 0 && t.level >= Math.max(1, curLevel))
+      .slice(0, 3);
+
+    return [
+      {
+        name: 'Your 30D',
+        value: Number(summary.vip.volume30dUsdt.toFixed(2)),
+        fill: '#16A879',
+        note: `${summary.vip.currentTier.name} · ${summary.vip.tradesCount30d} fills (30d)`
+      },
+      ...targetTiers.map(t => ({
+        name: t.name,
+        value: t.minVolume30dUsdt,
+        fill: t.level === summary.vip.nextTier?.level ? '#D6A85C' : '#334452',
+        note: `Maker ${t.makerFeePct} / Taker ${t.takerFeePct} · ${t.referralRebatePct}% Rebate`
+      }))
+    ];
+  }, [summary]);
+
+  const userVouchers = summary?.vouchers?.items || [];
+  const taskBadgeCount = (summary?.tasks.readyCount || 0) + (summary?.vouchers?.availableCount || 0);
+
   return (
     <div className="flex-1 flex flex-col p-4 lg:p-6 bg-[#090D12] overflow-y-auto space-y-6">
       <div className="max-w-7xl w-full mx-auto space-y-6">
         <PageHeader
           title="Institutional VIP & Trader Rewards"
-          subtitle="Real-time 30-day rolling volume tiering, server-verified trading milestones, and double-entry USDT referral rebates."
+          subtitle="Real-time 30-day rolling volume tiering, server-verified trading milestones, redeemable vouchers, and double-entry USDT settlement history."
           actions={
             <div className="flex flex-wrap items-center gap-2">
               <SegmentedTabs
@@ -369,22 +639,32 @@ export const RewardsVipView: React.FC<Props> = ({
                   {
                     id: 'REWARDS',
                     label:
-                      summary && summary.tasks.readyCount > 0
-                        ? `Task Center (${summary.tasks.readyCount})`
-                        : 'Task Center',
+                      taskBadgeCount > 0
+                        ? `Tasks & Vouchers (${taskBadgeCount})`
+                        : 'Tasks & Vouchers'
                   },
                   { id: 'REFERRAL', label: 'Referral Program' },
+                  {
+                    id: 'HISTORY',
+                    label:
+                      summary && summary.payoutHistory.length > 0
+                        ? `Rewards History (${summary.payoutHistory.length})`
+                        : 'Rewards History'
+                  }
                 ]}
               />
               <button
                 type="button"
-                onClick={fetchRewardsData}
-                disabled={isLoading}
+                onClick={() => {
+                  fetchRewardsData();
+                  if (activeTab === 'HISTORY') fetchRewardsHistory();
+                }}
+                disabled={isLoading || historyLoading}
                 className="h-9 w-9 rounded-[7px] bg-[#141C24] border border-[#202B34] hover:border-[#40515D] text-[#A1AFB8] hover:text-[#E4EBEF] flex items-center justify-center transition-colors cursor-pointer"
                 title="Refresh VIP & Rewards metrics"
                 aria-label="Refresh VIP & Rewards metrics"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoading || historyLoading ? 'animate-spin' : ''}`} />
               </button>
             </div>
           }
@@ -406,7 +686,7 @@ export const RewardsVipView: React.FC<Props> = ({
           </div>
         )}
 
-        {/* Guest Sign-In Callout (shown when unauthenticated — never shows fake account stats) */}
+        {/* Guest Sign-In Callout */}
         {!user && (
           <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-start gap-3">
@@ -415,10 +695,10 @@ export const RewardsVipView: React.FC<Props> = ({
               </div>
               <div>
                 <h3 className="text-sm font-semibold text-[#E4EBEF]">
-                  Sign in to view your live VIP tier, claimable USDT tasks, and referral code
+                  Sign in to view your live VIP progress, claimable USDT tasks, vouchers, and payout history
                 </h3>
                 <p className="text-xs text-[#71818B] mt-0.5">
-                  All volumes, fee tiers, task progress, and referral rebates are computed strictly from your verified account trades and double-entry ledger history.
+                  All volumes, fee tiers, task progress, voucher redemptions, and referral rebates are computed strictly from your verified account trades and double-entry ledger history.
                 </p>
               </div>
             </div>
@@ -429,126 +709,270 @@ export const RewardsVipView: React.FC<Props> = ({
         )}
 
         {/* ================================================================= */}
-        {/* TAB 1: VIP TIER LADDER                                            */}
+        {/* TAB 1: VIP TIER LADDER + RECHARTS VISUAL PROGRESS BREAKDOWN       */}
         {/* ================================================================= */}
         {activeTab === 'VIP' && (
           <div className="space-y-6">
             {user && summary ? (
-              <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-5 space-y-5">
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
-                  {/* Current VIP Tier Identity */}
-                  <div className="lg:col-span-4 space-y-1.5">
-                    <span className="text-xs text-[#71818B] block">Active Membership Tier</span>
-                    <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 rounded-[8px] bg-[#1D2832] border border-[#40515D] flex items-center justify-center font-mono font-semibold text-[#E4EBEF] text-sm shrink-0">
-                        {summary.vip.currentTier.code}
+              <>
+                <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-5 space-y-5">
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+                    {/* Current VIP Tier Identity */}
+                    <div className="lg:col-span-4 space-y-1.5">
+                      <span className="text-xs text-[#71818B] block">Active Membership Tier</span>
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-[8px] bg-[#1D2832] border border-[#40515D] flex items-center justify-center font-mono font-semibold text-[#E4EBEF] text-sm shrink-0">
+                          {summary.vip.currentTier.code}
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="font-semibold text-base text-[#E4EBEF] truncate">
+                            {summary.vip.currentTier.name}
+                          </h3>
+                          <p className="text-xs text-[#71818B] truncate">
+                            <span className="text-[#16A879] font-medium">
+                              {summary.account.status === 'active' ? 'Active' : summary.account.status}
+                            </span>
+                            <span aria-hidden="true"> · </span>
+                            <span>
+                              KYC {summary.account.kycStatus === 'approved' ? `Tier ${summary.account.kycTier}` : summary.account.kycStatus}
+                            </span>
+                            <span aria-hidden="true"> · </span>
+                            <span>{summary.vip.currentTier.referralRebatePct}% Referral Rebate</span>
+                          </p>
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <h3 className="font-semibold text-base text-[#E4EBEF] truncate">
-                          {summary.vip.currentTier.name}
-                        </h3>
-                        <p className="text-xs text-[#71818B] truncate">
-                          <span className="text-[#16A879] font-medium">
-                            {summary.account.status === 'active' ? 'Active' : summary.account.status}
-                          </span>
-                          <span aria-hidden="true"> · </span>
-                          <span>
-                            KYC {summary.account.kycStatus === 'approved' ? `Tier ${summary.account.kycTier}` : summary.account.kycStatus}
-                          </span>
-                          <span aria-hidden="true"> · </span>
-                          <span>{summary.vip.currentTier.referralRebatePct}% Referral Rebate</span>
-                        </p>
+                    </div>
+
+                    {/* Rolling 30D Volume Progress */}
+                    <div className="lg:col-span-5 space-y-2">
+                      <div className="flex items-baseline justify-between gap-2 text-xs">
+                        <span className="text-[#A1AFB8]">30-Day Rolling Volume (Spot + Futures)</span>
+                        <span className="font-mono tabular-nums text-[#E4EBEF] font-semibold">
+                          {formatUsd(summary.vip.volume30dUsdt)}
+                          {summary.vip.nextTier
+                            ? ` / ${formatUsd(summary.vip.nextTier.minVolume30dUsdt, 0)}`
+                            : ' · Max Tier'}
+                        </span>
+                      </div>
+                      <div className="w-full bg-[#111820] rounded-[5px] h-2 overflow-hidden border border-[#202B34]">
+                        <div
+                          className="bg-[#16A879] h-2 rounded-[5px] transition-all duration-300"
+                          style={{ width: `${Math.max(0, Math.min(100, summary.vip.progressPct))}%` }}
+                        />
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#71818B] font-mono tabular-nums">
+                        <span>
+                          {summary.vip.nextTier
+                            ? `${formatUsd(summary.vip.remainingVolumeUsdt)} remaining to unlock ${summary.vip.nextTier.name}`
+                            : 'Institutional tier unlocked — lowest fee schedule active'}
+                        </span>
+                        <span>{summary.vip.progressPct.toFixed(1)}%</span>
+                      </div>
+                    </div>
+
+                    {/* Active Maker / Taker Fee Rates */}
+                    <div className="lg:col-span-3 flex items-center justify-around gap-4 p-3.5 rounded-[8px] bg-[#111820] border border-[#202B34] font-mono tabular-nums">
+                      <div>
+                        <span className="text-[11px] text-[#71818B] block font-sans">Spot Maker</span>
+                        <span className="text-base font-semibold text-[#16A879]">
+                          {summary.vip.currentTier.makerFeePct}
+                        </span>
+                      </div>
+                      <div className="w-px h-8 bg-[#202B34]" />
+                      <div>
+                        <span className="text-[11px] text-[#71818B] block font-sans">Spot Taker</span>
+                        <span className="text-base font-semibold text-[#E4EBEF]">
+                          {summary.vip.currentTier.takerFeePct}
+                        </span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Rolling 30D Volume Progress */}
-                  <div className="lg:col-span-5 space-y-2">
-                    <div className="flex items-baseline justify-between gap-2 text-xs">
-                      <span className="text-[#A1AFB8]">30-Day Rolling Volume (Spot + Futures)</span>
-                      <span className="font-mono tabular-nums text-[#E4EBEF] font-semibold">
-                        {formatUsd(summary.vip.volume30dUsdt)}
-                        {summary.vip.nextTier
-                          ? ` / ${formatUsd(summary.vip.nextTier.minVolume30dUsdt, 0)}`
-                          : ' · Max Tier'}
+                  {/* Live 30-Day Breakdown Strip */}
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 pt-4 border-t border-[#202B34] font-mono tabular-nums">
+                    <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34]">
+                      <span className="text-[11px] font-sans text-[#71818B] block">30D Spot Volume</span>
+                      <span className="text-sm font-semibold text-[#E4EBEF] mt-0.5 block">
+                        {formatVolumePref(summary.vip.spotVolume30dUsdt)}
+                      </span>
+                      <span className="text-[10px] text-[#71818B] block mt-0.5">
+                        {summary.vip.tradesCount30d} fills (30d)
                       </span>
                     </div>
-                    <div className="w-full bg-[#111820] rounded-[5px] h-2 overflow-hidden border border-[#202B34]">
-                      <div
-                        className="bg-[#8DA5B1] h-2 rounded-[5px] transition-all duration-300"
-                        style={{ width: `${Math.max(0, Math.min(100, summary.vip.progressPct))}%` }}
-                      />
+                    <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34]">
+                      <span className="text-[11px] font-sans text-[#71818B] block">30D Futures Volume</span>
+                      <span className="text-sm font-semibold text-[#E4EBEF] mt-0.5 block">
+                        {formatVolumePref(summary.vip.futuresVolume30dUsdt)}
+                      </span>
+                      <span className="text-[10px] text-[#71818B] block mt-0.5">
+                        Perpetual notional
+                      </span>
                     </div>
-                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#71818B] font-mono tabular-nums">
+                    <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34]">
+                      <span className="text-[11px] font-sans text-[#71818B] block">30D Trading Fees Paid</span>
+                      <span className="text-sm font-semibold text-[#E4EBEF] mt-0.5 block">
+                        {formatUsd(summary.vip.feesPaid30dUsdt, 4)}
+                      </span>
+                      <span className="text-[10px] text-[#71818B] block mt-0.5">
+                        Authoritative ledger fees
+                      </span>
+                    </div>
+                    <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34]">
+                      <span className="text-[11px] font-sans text-[#71818B] block">Verified Portfolio Equity</span>
+                      <span className="text-sm font-semibold text-[#E4EBEF] mt-0.5 block">
+                        {displayCurrency === 'IDR'
+                          ? formatIdrShort(summary.account.portfolioEquityIdr)
+                          : formatUsd(summary.account.portfolioEquityUsdt)}
+                      </span>
+                      <span className="text-[10px] text-[#71818B] block mt-0.5">
+                        1 USDT ≈ {formatIdrShort(usdtIdrRate)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Recharts Visual Breakdown of VIP Progress vs Tier Requirements */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {/* Chart 1: Current 30D Volume Composition vs Next VIP Target */}
+                  <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-5 space-y-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <BarChart3 className="w-4 h-4 text-[#8DA5B1] shrink-0" />
+                        <div>
+                          <h3 className="text-sm font-semibold text-[#E4EBEF]">
+                            Next VIP Level Progress Breakdown
+                          </h3>
+                          <p className="text-xs text-[#71818B]">
+                            Live 30-day Spot &amp; Futures volume compared against{' '}
+                            {summary.vip.nextTier
+                              ? `${summary.vip.nextTier.name} (${formatUsd(summary.vip.nextTier.minVolume30dUsdt, 0)})`
+                              : 'Institutional ceiling'}
+                          </p>
+                        </div>
+                      </div>
+                      <span className="font-mono tabular-nums text-xs font-semibold text-[#16A879] whitespace-nowrap">
+                        {summary.vip.progressPct.toFixed(1)}%
+                      </span>
+                    </div>
+
+                    <div className="h-56 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={nextTierBreakdownData}
+                          layout="vertical"
+                          margin={{ top: 6, right: 20, left: 10, bottom: 6 }}
+                        >
+                          <CartesianGrid stroke="#202B34" strokeDasharray="3 3" horizontal={false} />
+                          <XAxis
+                            type="number"
+                            tickFormatter={formatCompactUsd}
+                            tick={{ fill: '#71818B', fontSize: 11 }}
+                            axisLine={{ stroke: '#202B34' }}
+                            tickLine={false}
+                          />
+                          <YAxis
+                            type="category"
+                            dataKey="name"
+                            width={82}
+                            tick={{ fill: '#A1AFB8', fontSize: 11 }}
+                            axisLine={{ stroke: '#202B34' }}
+                            tickLine={false}
+                          />
+                          <Tooltip content={<ObsidianChartTooltip />} cursor={{ fill: '#1D2832', opacity: 0.4 }} />
+                          <Bar dataKey="value" radius={[0, 5, 5, 0]} maxBarSize={24}>
+                            {nextTierBreakdownData.map((entry, idx) => (
+                              <Cell key={idx} fill={entry.fill} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="pt-3 border-t border-[#202B34] flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono tabular-nums text-[#A1AFB8]">
                       <span>
+                        Spot: {formatUsd(summary.vip.spotVolume30dUsdt)} · Futures:{' '}
+                        {formatUsd(summary.vip.futuresVolume30dUsdt)}
+                      </span>
+                      <span className="text-[#E4EBEF]">
                         {summary.vip.nextTier
-                          ? `${formatUsd(summary.vip.remainingVolumeUsdt)} remaining to unlock ${summary.vip.nextTier.name}`
-                          : 'Institutional tier unlocked — lowest fee schedule active'}
+                          ? `Gap: ${formatUsd(summary.vip.remainingVolumeUsdt)}`
+                          : 'Max Tier Reached'}
                       </span>
-                      <span>{summary.vip.progressPct.toFixed(1)}%</span>
                     </div>
                   </div>
 
-                  {/* Active Maker / Taker Fee Rates */}
-                  <div className="lg:col-span-3 flex items-center justify-around gap-4 p-3.5 rounded-[8px] bg-[#111820] border border-[#202B34] font-mono tabular-nums">
-                    <div>
-                      <span className="text-[11px] text-[#71818B] block font-sans">Spot Maker</span>
-                      <span className="text-base font-semibold text-[#16A879]">
-                        {summary.vip.currentTier.makerFeePct}
+                  {/* Chart 2: Volume vs Upcoming VIP Tier Requirements */}
+                  <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-5 space-y-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <Award className="w-4 h-4 text-[#D6A85C] shrink-0" />
+                        <div>
+                          <h3 className="text-sm font-semibold text-[#E4EBEF]">
+                            Current Volume vs. Tier Requirements
+                          </h3>
+                          <p className="text-xs text-[#71818B]">
+                            Benchmarking your rolling 30D volume against upcoming VIP volume thresholds
+                          </p>
+                        </div>
+                      </div>
+                      <span className="font-mono tabular-nums text-xs text-[#A1AFB8] whitespace-nowrap">
+                        {summary.vip.currentTier.code}
                       </span>
                     </div>
-                    <div className="w-px h-8 bg-[#202B34]" />
-                    <div>
-                      <span className="text-[11px] text-[#71818B] block font-sans">Spot Taker</span>
-                      <span className="text-base font-semibold text-[#E4EBEF]">
-                        {summary.vip.currentTier.takerFeePct}
-                      </span>
-                    </div>
-                  </div>
-                </div>
 
-                {/* Live 30-Day Breakdown Strip */}
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 pt-4 border-t border-[#202B34] font-mono tabular-nums">
-                  <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34]">
-                    <span className="text-[11px] font-sans text-[#71818B] block">30D Spot Volume</span>
-                    <span className="text-sm font-semibold text-[#E4EBEF] mt-0.5 block">
-                      {formatVolumePref(summary.vip.spotVolume30dUsdt)}
-                    </span>
-                    <span className="text-[10px] text-[#71818B] block mt-0.5">
-                      {summary.vip.tradesCount30d} fills (30d)
-                    </span>
-                  </div>
-                  <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34]">
-                    <span className="text-[11px] font-sans text-[#71818B] block">30D Futures Volume</span>
-                    <span className="text-sm font-semibold text-[#E4EBEF] mt-0.5 block">
-                      {formatVolumePref(summary.vip.futuresVolume30dUsdt)}
-                    </span>
-                    <span className="text-[10px] text-[#71818B] block mt-0.5">
-                      Perpetual notional
-                    </span>
-                  </div>
-                  <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34]">
-                    <span className="text-[11px] font-sans text-[#71818B] block">30D Trading Fees Paid</span>
-                    <span className="text-sm font-semibold text-[#E4EBEF] mt-0.5 block">
-                      {formatUsd(summary.vip.feesPaid30dUsdt, 4)}
-                    </span>
-                    <span className="text-[10px] text-[#71818B] block mt-0.5">
-                      Authoritative ledger fees
-                    </span>
-                  </div>
-                  <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34]">
-                    <span className="text-[11px] font-sans text-[#71818B] block">Verified Portfolio Equity</span>
-                    <span className="text-sm font-semibold text-[#E4EBEF] mt-0.5 block">
-                      {displayCurrency === 'IDR'
-                        ? formatIdrShort(summary.account.portfolioEquityIdr)
-                        : formatUsd(summary.account.portfolioEquityUsdt)}
-                    </span>
-                    <span className="text-[10px] text-[#71818B] block mt-0.5">
-                      1 USDT ≈ {formatIdrShort(usdtIdrRate)}
-                    </span>
+                    <div className="h-56 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={tierComparisonData}
+                          margin={{ top: 10, right: 16, left: 4, bottom: 6 }}
+                        >
+                          <CartesianGrid stroke="#202B34" strokeDasharray="3 3" vertical={false} />
+                          <XAxis
+                            dataKey="name"
+                            tick={{ fill: '#A1AFB8', fontSize: 11 }}
+                            axisLine={{ stroke: '#202B34' }}
+                            tickLine={false}
+                          />
+                          <YAxis
+                            tickFormatter={formatCompactUsd}
+                            tick={{ fill: '#71818B', fontSize: 11 }}
+                            axisLine={{ stroke: '#202B34' }}
+                            tickLine={false}
+                            width={54}
+                          />
+                          <Tooltip content={<ObsidianChartTooltip />} cursor={{ fill: '#1D2832', opacity: 0.4 }} />
+                          {summary.vip.volume30dUsdt > 0 && (
+                            <ReferenceLine
+                              y={summary.vip.volume30dUsdt}
+                              stroke="#16A879"
+                              strokeDasharray="4 4"
+                            />
+                          )}
+                          <Bar dataKey="value" radius={[5, 5, 0, 0]} maxBarSize={44}>
+                            {tierComparisonData.map((entry, idx) => (
+                              <Cell key={idx} fill={entry.fill} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    <div className="pt-3 border-t border-[#202B34] flex flex-wrap items-center justify-between gap-2 text-[11px] font-sans text-[#71818B]">
+                      <span>
+                        <span className="inline-block w-2 h-2 rounded-full bg-[#16A879] mr-1.5" />
+                        Your 30D Volume
+                        <span className="inline-block w-2 h-2 rounded-full bg-[#D6A85C] ml-3 mr-1.5" />
+                        Next Tier Target
+                      </span>
+                      {summary.vip.nextTier && (
+                        <span className="font-mono text-[#E4EBEF]">
+                          Next Fee: {summary.vip.nextTier.makerFeePct} / {summary.vip.nextTier.takerFeePct}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
+              </>
             ) : user && isLoading ? (
               <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-6 animate-pulse space-y-4">
                 <div className="h-5 w-48 bg-[#1D2832] rounded" />
@@ -631,7 +1055,7 @@ export const RewardsVipView: React.FC<Props> = ({
         )}
 
         {/* ================================================================= */}
-        {/* TAB 2: REAL TRADER TASK CENTER & PAYOUT LEDGER                    */}
+        {/* TAB 2: TRADER TASK CENTER & REDEEMABLE VOUCHERS                   */}
         {/* ================================================================= */}
         {activeTab === 'REWARDS' && (
           <div className="space-y-6">
@@ -653,14 +1077,125 @@ export const RewardsVipView: React.FC<Props> = ({
                   </span>
                 </div>
                 <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
-                  <span className="text-xs font-sans text-[#71818B] block">Total Rewards Credited</span>
+                  <span className="text-xs font-sans text-[#71818B] block">Tasks &amp; Vouchers Credited</span>
                   <span className="text-xl font-semibold text-[#E4EBEF] mt-1 block">
-                    {formatUsd(summary.tasks.totalClaimedUsdt)} USDT
+                    {formatUsd(
+                      summary.tasks.totalClaimedUsdt + (summary.vouchers?.totalRedeemedUsdt || 0)
+                    )}{' '}
+                    USDT
                   </span>
                 </div>
               </div>
             )}
 
+            {/* Voucher Code Redemption Center */}
+            <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-5 space-y-4">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-9 h-9 rounded-[8px] bg-[#111820] border border-[#2B3944] flex items-center justify-center text-[#8DA5B1] shrink-0">
+                    <Ticket className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold text-[#E4EBEF]">Voucher Redemption Center</h3>
+                    <p className="text-xs text-[#71818B] mt-0.5">
+                      Redeem institutional USDT bonus or fee-rebate voucher codes directly into your Spot Wallet.
+                    </p>
+                  </div>
+                </div>
+
+                <form
+                  onSubmit={e => {
+                    e.preventDefault();
+                    handleRedeemVoucher(voucherCodeInput);
+                  }}
+                  className="flex items-center gap-2 w-full md:w-auto"
+                >
+                  <input
+                    type="text"
+                    value={voucherCodeInput}
+                    onChange={e => setVoucherCodeInput(e.target.value.toUpperCase())}
+                    placeholder="Enter voucher code (e.g. DMX-VIP)"
+                    maxLength={32}
+                    className="flex-1 md:w-60 px-3 py-2 rounded-[7px] bg-[#111820] border border-[#2B3944] text-xs font-mono uppercase text-[#E4EBEF] placeholder-[#53616A] outline-none focus:border-[#8DA5B1]"
+                  />
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="sm"
+                    isLoading={Boolean(redeemingCode && redeemingCode === voucherCodeInput.trim().toUpperCase())}
+                    className="shrink-0"
+                  >
+                    Redeem
+                  </Button>
+                </form>
+              </div>
+
+              {user && userVouchers.length > 0 && (
+                <div className="pt-3 border-t border-[#202B34] grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {userVouchers.map(v => (
+                    <div
+                      key={v.id}
+                      className={`p-3.5 rounded-[8px] bg-[#111820] border ${
+                        v.canRedeem ? 'border-[#16A879]/40' : 'border-[#202B34]'
+                      } flex flex-col justify-between gap-3`}
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono text-xs font-semibold text-[#E4EBEF] tracking-wide">
+                            {v.code}
+                          </span>
+                          <span className="font-mono tabular-nums text-xs font-semibold text-[#16A879]">
+                            +{v.rewardDisplay}
+                          </span>
+                        </div>
+                        <div className="text-xs font-medium text-[#E4EBEF]">{v.title}</div>
+                        {v.description && (
+                          <div className="text-[11px] text-[#71818B] line-clamp-2">{v.description}</div>
+                        )}
+                        <div className="text-[10px] font-mono text-[#71818B] pt-1">
+                          {VOUCHER_TYPE_LABEL[v.voucherType]}
+                          {' · '}
+                          {v.minVipLevel > 0 ? `VIP ${v.minVipLevel}+` : 'All Tiers'}
+                          {' · '}
+                          {v.remainingSlots} left
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-[#202B34] flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-mono text-[#71818B]">
+                          {v.expiresAt ? `Exp ${formatDateTime(v.expiresAt)}` : 'No expiry'}
+                        </span>
+                        {v.redeemed ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#16A879]">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            Redeemed
+                          </span>
+                        ) : v.canRedeem ? (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            isLoading={redeemingCode === v.code}
+                            onClick={() => handleRedeemVoucher(v.code)}
+                          >
+                            Redeem
+                          </Button>
+                        ) : (
+                          <span className="text-[11px] text-[#71818B]">
+                            {!v.eligibleByVip
+                              ? `Requires VIP ${v.minVipLevel}`
+                              : v.isExhausted
+                              ? 'Exhausted'
+                              : 'Unavailable'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Active Trader Milestone Tasks */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {(summary?.tasks.items || schedule?.taskCatalog || []).map((rawTask: any) => {
                 const task = rawTask as RewardTaskItem;
@@ -777,58 +1312,6 @@ export const RewardsVipView: React.FC<Props> = ({
                 );
               })}
             </div>
-
-            {/* Verified Reward Payout Ledger History */}
-            {summary && (
-              <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
-                <PanelHeader
-                  title="Reward & Rebate Settlement Ledger"
-                  subtitle="Every claimed milestone reward and referral rebate is settled atomically into your USDT Spot Wallet."
-                />
-                {summary.payoutHistory.length === 0 ? (
-                  <div className="py-10 px-4 text-center space-y-1.5">
-                    <Gift className="w-6 h-6 text-[#53616A] mx-auto" />
-                    <p className="text-sm font-medium text-[#A1AFB8]">No reward settlements yet</p>
-                    <p className="text-xs text-[#71818B]">
-                      Complete an eligible milestone above and claim your USDT reward to record your first ledger payout.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs font-mono tabular-nums">
-                      <thead>
-                        <tr className="bg-[#111820] text-[#71818B] border-b border-[#202B34]">
-                          <th className="py-2.5 px-4 font-sans font-medium">Timestamp</th>
-                          <th className="py-2.5 px-4 font-sans font-medium">Type</th>
-                          <th className="py-2.5 px-4 font-sans font-medium">Description</th>
-                          <th className="py-2.5 px-4 font-sans font-medium text-right">Amount</th>
-                          <th className="py-2.5 px-4 font-sans font-medium text-right">Ledger Journal ID</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-[#202B34]">
-                        {summary.payoutHistory.map(row => (
-                          <tr key={row.id} className="hover:bg-[#17212B]">
-                            <td className="py-2.5 px-4 text-[#A1AFB8] whitespace-nowrap">
-                              {formatDateTime(row.claimedAt)}
-                            </td>
-                            <td className="py-2.5 px-4 font-sans text-[#8DA5B1] whitespace-nowrap">
-                              {row.type === 'TASK_REWARD' ? 'Task Reward' : 'Referral Rebate'}
-                            </td>
-                            <td className="py-2.5 px-4 font-sans text-[#E4EBEF]">{row.title}</td>
-                            <td className="py-2.5 px-4 text-right font-semibold text-[#16A879] whitespace-nowrap">
-                              {row.amountDisplay}
-                            </td>
-                            <td className="py-2.5 px-4 text-right text-[#71818B] whitespace-nowrap">
-                              {row.journalId.slice(0, 14)}…
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         )}
 
@@ -1064,6 +1547,203 @@ export const RewardsVipView: React.FC<Props> = ({
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* ================================================================= */}
+        {/* TAB 4: DEDICATED REWARDS HISTORY (GET /api/rewards/history)       */}
+        {/* ================================================================= */}
+        {activeTab === 'HISTORY' && (
+          <div className="space-y-6">
+            {!user ? (
+              <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] py-12 px-4 text-center space-y-3">
+                <History className="w-7 h-7 text-[#53616A] mx-auto" />
+                <p className="text-sm font-medium text-[#E4EBEF]">
+                  Sign in to inspect your Rewards History
+                </p>
+                <p className="text-xs text-[#71818B] max-w-md mx-auto">
+                  Every claimed task milestone, redeemed voucher, and referral commission payout is recorded permanently with its settlement timestamp and double-entry ledger journal ID.
+                </p>
+                <Button variant="primary" size="sm" onClick={onOpenAuthModal}>
+                  Sign In
+                </Button>
+              </div>
+            ) : (
+              <>
+                {/* History Summary Strip */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 font-mono tabular-nums">
+                  <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+                    <span className="text-xs font-sans text-[#71818B] block">Total Settled Payouts</span>
+                    <span className="text-xl font-semibold text-[#E4EBEF] mt-1 block">
+                      {historyData ? historyData.summary.totalCount : 0}
+                    </span>
+                  </div>
+                  <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+                    <span className="text-xs font-sans text-[#71818B] block">Total USDT Credited</span>
+                    <span className="text-xl font-semibold text-[#16A879] mt-1 block">
+                      {formatUsd(historyData ? historyData.summary.totalSettledUsdt : 0, 2)} USDT
+                    </span>
+                  </div>
+                  <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+                    <span className="text-xs font-sans text-[#71818B] block">Tasks &amp; Vouchers</span>
+                    <span className="text-xl font-semibold text-[#E4EBEF] mt-1 block">
+                      {historyData ? historyData.summary.taskCount : 0}{' '}
+                      <span className="text-xs font-sans font-normal text-[#71818B]">tasks ·</span>{' '}
+                      {historyData ? historyData.summary.voucherCount : 0}{' '}
+                      <span className="text-xs font-sans font-normal text-[#71818B]">vouchers</span>
+                    </span>
+                  </div>
+                  <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34]">
+                    <span className="text-xs font-sans text-[#71818B] block">Referral Rebates</span>
+                    <span className="text-xl font-semibold text-[#8DA5B1] mt-1 block">
+                      {historyData ? historyData.summary.referralCount : 0}
+                    </span>
+                  </div>
+                </div>
+
+                {/* History Table Container */}
+                <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
+                  <div className="p-4 border-b border-[#202B34] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-[#E4EBEF]">Rewards History</h3>
+                      <p className="text-xs text-[#71818B]">
+                        Authoritative claim &amp; redemption ledger fetched directly from DIMONEX backend settlement records.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {(
+                        [
+                          { id: 'ALL', label: 'All' },
+                          { id: 'TASK_REWARD', label: 'Tasks' },
+                          { id: 'VOUCHER_REDEMPTION', label: 'Vouchers' },
+                          { id: 'REFERRAL_COMMISSION', label: 'Referrals' }
+                        ] as const
+                      ).map(f => (
+                        <button
+                          key={f.id}
+                          type="button"
+                          onClick={() => {
+                            setHistoryFilter(f.id);
+                            setHistoryPage(1);
+                          }}
+                          className={`px-2.5 py-1.5 rounded-[6px] text-xs font-medium transition-colors cursor-pointer ${
+                            historyFilter === f.id
+                              ? 'bg-[#1D2832] text-[#E4EBEF] border border-[#40515D]'
+                              : 'bg-[#111820] text-[#A1AFB8] hover:text-[#E4EBEF] border border-[#202B34]'
+                          }`}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {historyError && (
+                    <div className="p-4 bg-[#401F27]/35 border-b border-[#EA5B65]/40 flex items-center justify-between text-xs text-[#F0757E]">
+                      <span>{historyError}</span>
+                      <Button variant="secondary" size="sm" onClick={fetchRewardsHistory}>
+                        Retry
+                      </Button>
+                    </div>
+                  )}
+
+                  {historyLoading && !historyData ? (
+                    <div className="p-6 space-y-3 animate-pulse">
+                      {[1, 2, 3, 4].map(n => (
+                        <div key={n} className="h-9 bg-[#111820] rounded-[6px]" />
+                      ))}
+                    </div>
+                  ) : !historyData || historyData.items.length === 0 ? (
+                    <div className="py-12 px-4 text-center space-y-1.5">
+                      <Gift className="w-6 h-6 text-[#53616A] mx-auto" />
+                      <p className="text-sm font-medium text-[#A1AFB8]">No reward claim records found</p>
+                      <p className="text-xs text-[#71818B]">
+                        Complete an eligible task, redeem a voucher code, or claim referral commissions to see settled entries here.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs font-mono tabular-nums">
+                          <thead>
+                            <tr className="bg-[#111820] text-[#71818B] border-b border-[#202B34]">
+                              <th className="py-2.5 px-4 font-sans font-medium">Timestamp</th>
+                              <th className="py-2.5 px-4 font-sans font-medium">Type</th>
+                              <th className="py-2.5 px-4 font-sans font-medium">Reward / Code</th>
+                              <th className="py-2.5 px-4 font-sans font-medium">Status</th>
+                              <th className="py-2.5 px-4 font-sans font-medium text-right">Amount</th>
+                              <th className="py-2.5 px-4 font-sans font-medium text-right">Ledger Journal ID</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[#202B34]">
+                            {historyData.items.map(row => (
+                              <tr key={row.id} className="hover:bg-[#17212B]">
+                                <td className="py-2.5 px-4 text-[#A1AFB8] whitespace-nowrap">
+                                  {formatDateTime(row.claimedAt)}
+                                </td>
+                                <td className="py-2.5 px-4 font-sans text-[#8DA5B1] whitespace-nowrap">
+                                  {row.type === 'TASK_REWARD'
+                                    ? 'Task Reward'
+                                    : row.type === 'VOUCHER_REDEMPTION'
+                                    ? 'Voucher Redemption'
+                                    : 'Referral Rebate'}
+                                </td>
+                                <td className="py-2.5 px-4 font-sans text-[#E4EBEF]">
+                                  <div>{row.title}</div>
+                                  {row.code && (
+                                    <div className="text-[10px] font-mono text-[#71818B]">{row.code}</div>
+                                  )}
+                                </td>
+                                <td className="py-2.5 px-4 font-sans whitespace-nowrap">
+                                  <span className="inline-flex items-center gap-1 text-[#16A879] font-medium">
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    {row.status}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-4 text-right font-semibold text-[#16A879] whitespace-nowrap">
+                                  {row.amountDisplay}
+                                </td>
+                                <td className="py-2.5 px-4 text-right text-[#71818B] whitespace-nowrap">
+                                  {row.journalId.slice(0, 14)}…
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {historyData.pagination.totalPages > 1 && (
+                        <div className="px-4 py-3 border-t border-[#202B34] flex items-center justify-between text-xs">
+                          <span className="text-[#71818B] font-mono">
+                            Page {historyData.pagination.page} of {historyData.pagination.totalPages} ({historyData.pagination.total} records)
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              disabled={historyData.pagination.page <= 1}
+                              onClick={() => setHistoryPage(p => Math.max(1, p - 1))}
+                            >
+                              <ChevronLeft className="w-3.5 h-3.5" />
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              disabled={historyData.pagination.page >= historyData.pagination.totalPages}
+                              onClick={() =>
+                                setHistoryPage(p => Math.min(historyData.pagination.totalPages, p + 1))
+                              }
+                            >
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>

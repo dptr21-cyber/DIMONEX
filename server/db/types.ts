@@ -46,7 +46,8 @@ export type JournalTxType =
   | 'FUTURES_FEE'
   | 'FUTURES_PNL'
   | 'REWARD_PAYOUT'
-  | 'REFERRAL_REBATE';
+  | 'REFERRAL_REBATE'
+  | 'VOUCHER_REDEMPTION';
 
 export type LedgerEntryType = 'DEBIT' | 'CREDIT';
 
@@ -1267,13 +1268,74 @@ export interface UserNotificationPreferences {
 // INSTITUTIONAL VIP, TRADER REWARDS & REFERRAL PROGRAM ENTITIES
 // ============================================================================
 
-export type RewardTaskId =
-  | 'SECURITY_2FA'
-  | 'FIRST_DEPOSIT'
-  | 'FIRST_SPOT_TRADE'
-  | 'FUTURES_VOLUME_2K'
-  | 'KYC_TIER_2'
-  | 'SPOT_VOLUME_50K';
+export type RewardTaskId = string;
+
+export type RewardTaskCategory = 'SECURITY' | 'FUNDING' | 'TRADING' | 'COMPLIANCE' | 'VIP';
+
+export type RewardTaskRuleType =
+  | 'ENABLE_2FA'
+  | 'DEPOSIT_USDT'
+  | 'SPOT_TRADES_COUNT'
+  | 'SPOT_VOLUME_USDT'
+  | 'FUTURES_VOLUME_USDT'
+  | 'COMBINED_VOLUME_30D_USDT'
+  | 'KYC_APPROVED';
+
+export type RewardTaskActionView = 'SECURITY' | 'DEPOSIT' | 'TRADE' | 'FUTURES' | 'KYC';
+
+export interface RewardTaskConfig {
+  id: string;
+  title: string;
+  description: string;
+  category: RewardTaskCategory;
+  ruleType: RewardTaskRuleType;
+  targetValue: number;
+  rewardCurrency: 'USDT';
+  rewardAmountUsdt: number;
+  actionLabel: string;
+  actionView: RewardTaskActionView;
+  isActive: boolean;
+  sortOrder: number;
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type RewardVoucherType = 'USDT_BONUS' | 'FEE_REBATE' | 'TRADING_CREDIT';
+
+export interface RewardVoucher {
+  id: string;
+  code: string;
+  title: string;
+  description: string;
+  voucherType: RewardVoucherType;
+  rewardCurrency: 'USDT';
+  rewardAmountUsdt: number;
+  minVipLevel: number;
+  maxRedemptions: number;
+  redeemedCount: number;
+  isActive: boolean;
+  expiresAt?: number;
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface VoucherRedemptionRecord {
+  id: string;
+  voucherId: string;
+  voucherCode: string;
+  voucherTitle: string;
+  voucherType: RewardVoucherType;
+  userId: string;
+  currency: 'USDT';
+  amountUnits: string; // BigInt unit string (6 decimals for USDT)
+  amountDisplay: string;
+  status: 'SETTLED';
+  journalId: string;
+  idempotencyKey: string;
+  redeemedAt: number;
+}
 
 export interface RewardClaimRecord {
   id: string;
@@ -1283,6 +1345,7 @@ export interface RewardClaimRecord {
   currency: string;
   amountUnits: string; // BigInt unit string (6 decimals for USDT)
   amountDisplay: string;
+  status?: 'SETTLED';
   journalId: string;
   idempotencyKey: string;
   claimedAt: number;
@@ -1302,11 +1365,13 @@ export interface ReferralPayoutRecord {
   currency: string;
   amountUnits: string; // BigInt unit string (6 decimals for USDT)
   amountDisplay: string;
+  status?: 'SETTLED';
   rebateRatePct: number;
   refereeCount: number;
   journalId: string;
   idempotencyKey: string;
   claimedAt: number;
 }
+
 
 

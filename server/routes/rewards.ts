@@ -3,17 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * server/routes/rewards.ts
- * Institutional VIP, Trader Rewards Task Center & Referral Program APIs.
+ * Institutional VIP, Dynamic Trader Task Center, Vouchers, Rewards History & Referral APIs.
  */
 
 import { Router, Request, Response } from 'express';
 import { requireAuth } from './auth.js';
 import { vipRewardsService } from '../services/rewards/VipRewardsService.js';
-import { RewardTaskId } from '../db/types.js';
 
 export const rewardsRouter = Router();
 
-// Sliding-window per-user rate limiter for reward claims & referral mutations
+// Sliding-window per-user rate limiter for reward claims, voucher redemptions & referral mutations
 const mutationRateBuckets = new Map<string, number[]>();
 function rateLimitMutation(keyPrefix: string, maxPerMinute: number) {
   return (req: Request, res: Response, next: Function) => {
@@ -30,21 +29,12 @@ function rateLimitMutation(keyPrefix: string, maxPerMinute: number) {
   };
 }
 
-const VALID_TASK_IDS = new Set<string>([
-  'SECURITY_2FA',
-  'FIRST_DEPOSIT',
-  'FIRST_SPOT_TRADE',
-  'FUTURES_VOLUME_2K',
-  'KYC_TIER_2',
-  'SPOT_VOLUME_50K'
-]);
-
-// GET /api/rewards/schedule (Public read-only VIP fee schedule & task catalog)
+// GET /api/rewards/schedule (Public read-only VIP fee schedule & active task catalog)
 rewardsRouter.get('/schedule', (_req, res) => {
   res.json(vipRewardsService.getPublicSchedule());
 });
 
-// GET /api/rewards/summary (Authenticated real user VIP status, tasks, referrals & payouts)
+// GET /api/rewards/summary (Authenticated real user VIP status, tasks, vouchers, referrals & payouts)
 rewardsRouter.get('/summary', requireAuth, (req, res) => {
   try {
     const user = (req as any).user;
@@ -55,7 +45,21 @@ rewardsRouter.get('/summary', requireAuth, (req, res) => {
   }
 });
 
-// POST /api/rewards/tasks/:taskId/claim (Atomic server-verified USDT reward claim)
+// GET /api/rewards/history (Authenticated paginated Rewards History for the current user)
+rewardsRouter.get('/history', requireAuth, (req, res) => {
+  try {
+    const user = (req as any).user;
+    const type = typeof req.query.type === 'string' ? req.query.type : 'ALL';
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 15;
+    const history = vipRewardsService.getUserRewardsHistory(user.id, { type, page, limit });
+    res.json(history);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Failed to fetch rewards history' });
+  }
+});
+
+// POST /api/rewards/tasks/:taskId/claim (Atomic server-verified USDT task reward claim)
 rewardsRouter.post(
   '/tasks/:taskId/claim',
   requireAuth,
@@ -64,14 +68,35 @@ rewardsRouter.post(
     try {
       const user = (req as any).user;
       const taskId = String(req.params.taskId || '').trim().toUpperCase();
-      if (!VALID_TASK_IDS.has(taskId)) {
+      if (!/^[A-Z0-9_-]{2,64}$/.test(taskId)) {
         return res.status(400).json({ error: 'Invalid reward task ID' });
       }
-      const claim = vipRewardsService.claimTaskReward(user.id, taskId as RewardTaskId);
+      const claim = vipRewardsService.claimTaskReward(user.id, taskId);
       const summary = vipRewardsService.getUserSummary(user.id);
       res.json({ success: true, claim, summary });
     } catch (err: any) {
       res.status(400).json({ error: err.message || 'Reward claim failed' });
+    }
+  }
+);
+
+// POST /api/rewards/vouchers/redeem (Atomic double-entry voucher code redemption)
+rewardsRouter.post(
+  '/vouchers/redeem',
+  requireAuth,
+  rateLimitMutation('voucher-redeem', 12),
+  (req, res) => {
+    try {
+      const user = (req as any).user;
+      const code = typeof req.body?.code === 'string' ? req.body.code : '';
+      if (!code.trim()) {
+        return res.status(400).json({ error: 'Voucher code is required.' });
+      }
+      const redemption = vipRewardsService.redeemVoucher(user.id, code);
+      const summary = vipRewardsService.getUserSummary(user.id);
+      res.json({ success: true, redemption, summary });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || 'Voucher redemption failed' });
     }
   }
 );

@@ -59,7 +59,10 @@ import {
   Calendar,
   RotateCcw,
   Newspaper,
-  Bell
+  Bell,
+  Gift,
+  Ticket,
+  History
 } from 'lucide-react';
 import { UserProfile, TradingPairItem, ExternalWsWhitelistEntry } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
@@ -73,6 +76,7 @@ import { AssetManagementSection } from './AssetManagementSection.js';
 import { NewsManagementSection } from './content/NewsManagementSection.js';
 import { NotificationCenterSection } from './content/NotificationCenterSection.js';
 import { MediaLibrarySection } from './content/MediaLibrarySection.js';
+import { VipRewardsAdminSection } from './rewards/VipRewardsAdminSection.js';
 
 interface Props {
   user: UserProfile | null;
@@ -96,7 +100,10 @@ type AdminTab =
   | 'AUDIT'
   | 'CMS_NEWS'
   | 'CMS_NOTIFICATIONS'
-  | 'CMS_MEDIA';
+  | 'CMS_MEDIA'
+  | 'VIP_TASKS'
+  | 'VIP_VOUCHERS'
+  | 'VIP_CLAIMS';
 
 export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs, onOpenAuthModal }) => {
   const [activeTab, setActiveTab] = useState<AdminTab>('OVERVIEW');
@@ -1245,6 +1252,14 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                 { id: 'CMS_NEWS' as AdminTab, label: 'News & Announcements', icon: Newspaper },
                 { id: 'CMS_NOTIFICATIONS' as AdminTab, label: 'Notification Center', icon: Bell },
                 { id: 'CMS_MEDIA' as AdminTab, label: 'Media Library', icon: ImageIcon },
+              ],
+            },
+            {
+              group: 'VIP & Rewards',
+              items: [
+                { id: 'VIP_TASKS' as AdminTab, label: 'Task Center Manager', icon: Gift },
+                { id: 'VIP_VOUCHERS' as AdminTab, label: 'Voucher Manager', icon: Ticket },
+                { id: 'VIP_CLAIMS' as AdminTab, label: 'Rewards & Payout Ledger', icon: History },
               ],
             },
             {
@@ -2751,6 +2766,13 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
       {activeTab === 'CMS_NEWS' && <NewsManagementSection user={user} />}
       {activeTab === 'CMS_NOTIFICATIONS' && <NotificationCenterSection />}
       {activeTab === 'CMS_MEDIA' && <MediaLibrarySection />}
+
+      {/* =========================================================================
+          INSTITUTIONAL VIP & TRADER REWARDS MANAGEMENT
+          ========================================================================= */}
+      {activeTab === 'VIP_TASKS' && <VipRewardsAdminSection mode="TASKS" />}
+      {activeTab === 'VIP_VOUCHERS' && <VipRewardsAdminSection mode="VOUCHERS" />}
+      {activeTab === 'VIP_CLAIMS' && <VipRewardsAdminSection mode="CLAIMS" />}
 
         </div>
       </div>
