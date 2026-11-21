@@ -34,6 +34,11 @@ import { priceAggregatorService } from './services/external/PriceAggregatorServi
 import { priceThresholdService } from './services/PriceThresholdService.js';
 import { futuresEngine } from './services/FuturesEngine.js';
 import { marketLifecycleScheduler } from './services/MarketLifecycleScheduler.js';
+import { newsAdminRouter } from './routes/newsAdmin.js';
+import { newsPublicRouter } from './routes/newsPublic.js';
+import { notificationsRouter } from './routes/notifications.js';
+import { newsCmsService } from './services/cms/NewsCmsService.js';
+import { notificationBroadcastService } from './services/cms/NotificationBroadcastService.js';
 
 export async function startServer() {
   const app = express();
@@ -49,8 +54,8 @@ export async function startServer() {
     10
   );
 
-  // JSON Body Parser (5mb limit supports admin crypto asset logo uploads)
-  app.use(express.json({ limit: '5mb' }));
+  // JSON Body Parser (10mb limit supports base64-encoded 5 MB cover & asset image uploads)
+  app.use(express.json({ limit: '10mb' }));
 
   // WebSocket Server for High-Speed Market Data
   const wss = new WebSocketServer({ server, path: '/ws' });
@@ -68,7 +73,10 @@ export async function startServer() {
   app.use('/api/api-keys', apiKeyRouter);
   app.use('/api/admin/listings', listingRouter);
   app.use('/api/listing', listingRouter);
+  app.use('/api/admin', newsAdminRouter);
   app.use('/api/admin', adminRouter);
+  app.use('/api/public', newsPublicRouter);
+  app.use('/api/notifications', notificationsRouter);
   app.use('/api/risk', riskRouter);
   app.use('/api/bot', botRouter);
   app.use('/api/mm', mmConsoleRouter);
@@ -166,10 +174,13 @@ export async function startServer() {
       }
     }, 1500);
 
-    // Start Price Threshold Alert Engine, Real Perpetual Futures Engine & Market Lifecycle Scheduler
+    // Start Price Threshold Alert Engine, Real Perpetual Futures Engine, Market Lifecycle Scheduler,
+    // News CMS Scheduler, and Global Notification Outbox Broadcast Worker (with crash recovery)
     priceThresholdService.start();
     futuresEngine.start();
     marketLifecycleScheduler.start();
+    newsCmsService.startScheduler();
+    notificationBroadcastService.start();
 
     // Background periodic live rate sync every 60 seconds
     setInterval(() => {

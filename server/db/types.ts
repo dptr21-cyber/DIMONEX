@@ -1045,3 +1045,217 @@ export interface FuturesPosition {
   closedAt?: number;
   updatedAt: number;
 }
+
+// -------------------------------------------------------------
+// NEWS & ANNOUNCEMENT CMS + GLOBAL NOTIFICATION SYSTEM
+// -------------------------------------------------------------
+export type AnnouncementCategory =
+  | 'ANNOUNCEMENT'
+  | 'PLATFORM_UPDATE'
+  | 'MAINTENANCE'
+  | 'NEW_LISTING'
+  | 'SECURITY_ALERT'
+  | 'TRADING_COMPETITION'
+  | 'DEPOSIT_WITHDRAWAL_UPDATE'
+  | 'IMPORTANT_NOTICE';
+
+export type AnnouncementStatus =
+  | 'DRAFT'
+  | 'PENDING_APPROVAL'
+  | 'SCHEDULED'
+  | 'PUBLISHED'
+  | 'ARCHIVED';
+
+export type NotificationChannel = 'IN_APP' | 'WEB_PUSH' | 'EMAIL';
+
+export type NotificationTargetSegment =
+  | 'ALL_USERS'
+  | 'VERIFIED_USERS'
+  | 'KYC_TIER'
+  | 'SEGMENT'
+  | 'SELECTED_USERS';
+
+export type NotificationCampaignStatus =
+  | 'QUEUED'
+  | 'PROCESSING'
+  | 'COMPLETED'
+  | 'PARTIALLY_FAILED'
+  | 'FAILED'
+  | 'CANCELLED';
+
+export type DeliveryStatus =
+  | 'QUEUED'
+  | 'PROCESSING'
+  | 'SENT'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'SKIPPED';
+
+export interface NotificationTargetConfig {
+  minKycTier?: number;
+  segmentKey?: string;
+  selectedUserIds?: string[];
+}
+
+export interface MediaAsset {
+  id: string;
+  filename: string;
+  originalName: string;
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+  sizeBytes: number;
+  sha256Hash: string;
+  url: string;
+  altText?: string;
+  uploadedBy: string;
+  createdAt: number;
+}
+
+export interface Announcement {
+  id: string;
+  title: string;
+  slug: string;
+  category: AnnouncementCategory;
+  shortDescription: string;
+  contentHtml: string;
+  contentText: string;
+  coverImageUrl?: string;
+  authorAdminId: string;
+  authorName?: string;
+  lastEditedBy?: string;
+  approvedBy?: string;
+  approvedAt?: number;
+  publishedBy?: string;
+  archivedBy?: string;
+  status: AnnouncementStatus;
+  isPinned: boolean;
+  requiresApproval: boolean;
+  notificationEnabled: boolean;
+  notificationChannels: NotificationChannel[];
+  targetSegment: NotificationTargetSegment;
+  targetConfig?: NotificationTargetConfig;
+  publishedAt?: number;
+  scheduledAt?: number;
+  archivedAt?: number;
+  version: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AnnouncementVersion {
+  id: string;
+  announcementId: string;
+  version: number;
+  title: string;
+  slug: string;
+  category: AnnouncementCategory;
+  shortDescription: string;
+  contentHtml: string;
+  coverImageUrl?: string;
+  status: AnnouncementStatus;
+  editedBy: string;
+  changeSummary?: string;
+  createdAt: number;
+}
+
+export interface CmsAuditLog {
+  id: string;
+  entityType: 'ANNOUNCEMENT' | 'CAMPAIGN' | 'MEDIA';
+  entityId: string;
+  action: string;
+  actorId: string;
+  actorEmail?: string;
+  actorRole: string;
+  ipAddress?: string;
+  details: Record<string, any>;
+  previousHash: string;
+  currentHash: string;
+  createdAt: number;
+}
+
+export interface NotificationCampaign {
+  id: string;
+  announcementId: string;
+  announcementSlug: string;
+  title: string;
+  summary: string;
+  category: AnnouncementCategory;
+  coverImageUrl?: string;
+  channels: NotificationChannel[];
+  targetSegment: NotificationTargetSegment;
+  targetConfig?: NotificationTargetConfig;
+  idempotencyKey: string;
+  status: NotificationCampaignStatus;
+  createdBy: string;
+  totalEligible: number;
+  queuedCount: number;
+  sentCount: number;
+  failedCount: number;
+  readCount: number;
+  scheduledAt?: number;
+  startedAt?: number;
+  completedAt?: number;
+  cancelledAt?: number;
+  cancelledBy?: string;
+  lastError?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface NotificationOutboxJob {
+  id: string;
+  campaignId: string;
+  idempotencyKey: string;
+  eventType: 'CAMPAIGN_DISPATCH' | 'CAMPAIGN_RETRY';
+  payload: Record<string, any>;
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  attempts: number;
+  maxAttempts: number;
+  nextRetryAt?: number;
+  lockedAt?: number;
+  lastError?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface NotificationDeliveryRecord {
+  id: string;
+  campaignId: string;
+  userId: string;
+  channel: NotificationChannel;
+  idempotencyKey: string; // `${campaignId}:${userId}:${channel}`
+  status: DeliveryStatus;
+  attempts: number;
+  maxAttempts: number;
+  nextRetryAt?: number;
+  sentAt?: number;
+  lastError?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UserNotification {
+  id: string;
+  userId: string;
+  campaignId?: string;
+  announcementId?: string;
+  announcementSlug?: string;
+  category: AnnouncementCategory;
+  title: string;
+  summary: string;
+  coverImageUrl?: string;
+  idempotencyKey: string;
+  isRead: boolean;
+  readAt?: number;
+  createdAt: number;
+}
+
+export interface UserNotificationPreferences {
+  userId: string;
+  inAppEnabled: boolean;
+  webPushEnabled: boolean;
+  webPushPermissionGranted: boolean;
+  emailEnabled: boolean;
+  emailConsentAt?: number;
+  updatedAt: number;
+}
+

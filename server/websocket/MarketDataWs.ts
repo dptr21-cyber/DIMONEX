@@ -248,6 +248,37 @@ export class MarketDataWebSocketService {
       }
     }
   }
+
+  broadcastUserNotification(userId: string, notification: any) {
+    const channel = `notifications:${userId}`;
+    const message = JSON.stringify({
+      type: 'user_notification',
+      channel,
+      data: notification
+    });
+    for (const client of this.clients) {
+      if (
+        (client.userId === userId || client.channels.has(channel)) &&
+        client.ws.readyState === WebSocket.OPEN &&
+        client.ws.bufferedAmount < 1024 * 1024
+      ) {
+        client.ws.send(message);
+      }
+    }
+  }
+
+  broadcastAnnouncementPublished(announcement: any) {
+    const message = JSON.stringify({
+      type: 'announcement_published',
+      channel: 'announcements',
+      data: announcement
+    });
+    for (const client of this.clients) {
+      if (client.ws.readyState === WebSocket.OPEN && client.ws.bufferedAmount < 1024 * 1024) {
+        client.ws.send(message);
+      }
+    }
+  }
 }
 
 export const marketWsService = new MarketDataWebSocketService();

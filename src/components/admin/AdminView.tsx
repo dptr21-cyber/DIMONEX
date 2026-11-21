@@ -57,7 +57,9 @@ import {
   Image as ImageIcon,
   Clock,
   Calendar,
-  RotateCcw
+  RotateCcw,
+  Newspaper,
+  Bell
 } from 'lucide-react';
 import { UserProfile, TradingPairItem, ExternalWsWhitelistEntry } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
@@ -68,6 +70,9 @@ import { ConfirmationDialog, DialogField } from '../ui/ConfirmationDialog.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
 import { ListingManagementView } from './listing/ListingManagementView.js';
 import { AssetManagementSection } from './AssetManagementSection.js';
+import { NewsManagementSection } from './content/NewsManagementSection.js';
+import { NotificationCenterSection } from './content/NotificationCenterSection.js';
+import { MediaLibrarySection } from './content/MediaLibrarySection.js';
 
 interface Props {
   user: UserProfile | null;
@@ -88,7 +93,10 @@ type AdminTab =
   | 'FX'
   | 'PRODUCTS'
   | 'RISK'
-  | 'AUDIT';
+  | 'AUDIT'
+  | 'CMS_NEWS'
+  | 'CMS_NOTIFICATIONS'
+  | 'CMS_MEDIA';
 
 export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs, onOpenAuthModal }) => {
   const [activeTab, setActiveTab] = useState<AdminTab>('OVERVIEW');
@@ -1218,46 +1226,83 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         </div>
       </div>
 
-      {/* Navigation Tabs Bar */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-2 border-b border-[#202B34]">
-        {[
-          { id: 'OVERVIEW', label: 'Ringkasan Eksekutif', icon: LayoutDashboard },
-          { id: 'ASSETS', label: 'Aset Kripto & Logo', icon: ImageIcon },
-          { id: 'PAIRS', label: `Pasar & Fee (${tradingPairs.length})`, icon: Coins },
-          { id: 'LISTING', label: 'Initial Token Listing', icon: Rocket },
-          { id: 'USERS', label: `Pengguna & KYC (${usersList.length})`, icon: Users, badge: pendingKycCount > 0 ? pendingKycCount : undefined },
-          { id: 'WITHDRAWALS', label: 'Antrean Penarikan', icon: ArrowUpRight, badge: pendingWithdrawalCount > 0 ? pendingWithdrawalCount : undefined },
-          { id: 'LEDGER', label: 'Buku Besar & Solvensi', icon: Wallet },
-          { id: 'BOTS', label: `Bot & MM (${botsList.length})`, icon: Bot },
-          { id: 'FX', label: `FX Engine & WS Pairs (${wsWhitelist.filter(w => w.enabled).length})`, icon: TrendingUp },
-          { id: 'PRODUCTS', label: 'Earn, Copy & VIP', icon: PiggyBank },
-          { id: 'RISK', label: `Risk & AML (${riskAlerts.length})`, icon: ShieldAlert },
-          { id: 'AUDIT', label: 'Audit Trail', icon: FileText }
-        ].map(t => {
-          const Icon = t.icon;
-          const isActive = activeTab === t.id;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setActiveTab(t.id as AdminTab)}
-              className={`flex items-center gap-2 px-3 py-2 rounded-[7px] text-xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
-                isActive
-                  ? 'bg-[#1D2832] text-[#E4EBEF] border border-[#40515D]'
-                  : 'text-[#A1AFB8] hover:text-[#E4EBEF] hover:bg-[#17212B] border border-transparent'
-              }`}
-            >
-              <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-[#8DA5B1]' : 'text-[#71818B]'}`} />
-              <span>{t.label}</span>
-              {t.badge !== undefined && (
-                <span className="px-1.5 py-0.5 rounded bg-[#D6A85C] text-[#090D12] text-[10px] font-bold font-mono">
-                  {t.badge}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
+      {/* Grouped Admin Console Sidebar + Main Content Workspace */}
+      <div className="flex flex-col lg:flex-row gap-5 items-start">
+        <aside className="w-full lg:w-60 shrink-0 rounded-[10px] bg-[#141C24] border border-[#202B34] p-3 space-y-4">
+          {[
+            {
+              group: 'Exchange Operations',
+              items: [
+                { id: 'OVERVIEW' as AdminTab, label: 'Ringkasan Eksekutif', icon: LayoutDashboard },
+                { id: 'ASSETS' as AdminTab, label: 'Aset Kripto & Logo', icon: ImageIcon },
+                { id: 'PAIRS' as AdminTab, label: `Pasar & Fee (${tradingPairs.length})`, icon: Coins },
+                { id: 'LISTING' as AdminTab, label: 'Initial Token Listing', icon: Rocket },
+              ],
+            },
+            {
+              group: 'Content Management',
+              items: [
+                { id: 'CMS_NEWS' as AdminTab, label: 'News & Announcements', icon: Newspaper },
+                { id: 'CMS_NOTIFICATIONS' as AdminTab, label: 'Notification Center', icon: Bell },
+                { id: 'CMS_MEDIA' as AdminTab, label: 'Media Library', icon: ImageIcon },
+              ],
+            },
+            {
+              group: 'Users & Finance',
+              items: [
+                { id: 'USERS' as AdminTab, label: `Pengguna & KYC (${usersList.length})`, icon: Users, badge: pendingKycCount > 0 ? pendingKycCount : undefined },
+                { id: 'WITHDRAWALS' as AdminTab, label: 'Antrean Penarikan', icon: ArrowUpRight, badge: pendingWithdrawalCount > 0 ? pendingWithdrawalCount : undefined },
+                { id: 'LEDGER' as AdminTab, label: 'Buku Besar & Solvensi', icon: Wallet },
+                { id: 'PRODUCTS' as AdminTab, label: 'Earn, Copy & VIP', icon: PiggyBank },
+              ],
+            },
+            {
+              group: 'Liquidity & Governance',
+              items: [
+                { id: 'BOTS' as AdminTab, label: `Bot & MM (${botsList.length})`, icon: Bot },
+                { id: 'FX' as AdminTab, label: `FX & WS Pairs (${wsWhitelist.filter(w => w.enabled).length})`, icon: TrendingUp },
+                { id: 'RISK' as AdminTab, label: `Risk & AML (${riskAlerts.length})`, icon: ShieldAlert },
+                { id: 'AUDIT' as AdminTab, label: 'Audit Trail', icon: FileText },
+              ],
+            },
+          ].map(section => (
+            <div key={section.group} className="space-y-1">
+              <div className="px-2.5 text-[10px] font-mono font-semibold uppercase tracking-wider text-[#71818B]">
+                {section.group}
+              </div>
+              <div className="flex lg:flex-col gap-1 overflow-x-auto lg:overflow-visible pb-1 lg:pb-0">
+                {section.items.map(t => {
+                  const Icon = t.icon;
+                  const isActive = activeTab === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setActiveTab(t.id)}
+                      className={`flex items-center justify-between gap-2 px-2.5 py-2 rounded-[7px] text-xs font-medium whitespace-nowrap transition-colors cursor-pointer lg:w-full text-left ${
+                        isActive
+                          ? 'bg-[#1D2832] text-[#E4EBEF] font-semibold border border-[#40515D]'
+                          : 'text-[#A1AFB8] hover:text-[#E4EBEF] hover:bg-[#17212B] border border-transparent'
+                      }`}
+                    >
+                      <span className="flex items-center gap-2 min-w-0">
+                        <Icon className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-[#8DA5B1]' : 'text-[#71818B]'}`} />
+                        <span className="truncate">{t.label}</span>
+                      </span>
+                      {'badge' in t && t.badge !== undefined && (
+                        <span className="px-1.5 py-0.5 rounded bg-[#D6A85C] text-[#090D12] text-[10px] font-bold font-mono">
+                          {t.badge}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </aside>
+
+        <div className="flex-1 min-w-0 w-full space-y-6">
 
       {/* =========================================================================
           TAB 1: EXECUTIVE OVERVIEW & HEALTH METRICS
@@ -2699,6 +2744,16 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
           </div>
         </div>
       )}
+
+      {/* =========================================================================
+          CONTENT MANAGEMENT: NEWS & ANNOUNCEMENTS, NOTIFICATION CENTER, MEDIA LIBRARY
+          ========================================================================= */}
+      {activeTab === 'CMS_NEWS' && <NewsManagementSection user={user} />}
+      {activeTab === 'CMS_NOTIFICATIONS' && <NotificationCenterSection />}
+      {activeTab === 'CMS_MEDIA' && <MediaLibrarySection />}
+
+        </div>
+      </div>
 
       {/* =========================================================================
           MODAL: CREATE NEW TRADING PAIR

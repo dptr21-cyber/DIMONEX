@@ -36,6 +36,8 @@ import { RewardsVipView } from './components/rewards/RewardsVipView.js';
 import { AuthModal } from './components/auth/AuthModal.js';
 import { ListingPortalPage } from './components/listing/ListingPortalPage.js';
 import { MobileHomeView } from './components/mobile/MobileHomeView.js';
+import { ArticleDetailView } from './components/news/ArticleDetailView.js';
+import { NotificationsView } from './components/notifications/NotificationsView.js';
 import { AssetIcon } from './components/ui/AssetIcon.js';
 import { PercentageChange } from './components/ui/PriceDisplay.js';
 import { StatusBadge } from './components/ui/StatusBadge.js';
@@ -68,10 +70,21 @@ export type ActiveViewType =
   | 'SECURITY'
   | 'KYC'
   | 'ADMIN'
-  | 'MOBILE_HOME';
+  | 'MOBILE_HOME'
+  | 'ARTICLE'
+  | 'NOTIFICATIONS';
 
 function AppContent() {
+  const initialNewsSlug =
+    typeof window !== 'undefined' && window.location.pathname.startsWith('/news/')
+      ? decodeURIComponent(window.location.pathname.slice('/news/'.length))
+      : '';
+
+  const [activeArticleSlug, setActiveArticleSlug] = useState<string>(initialNewsSlug);
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState<number>(0);
+
   const [currentView, setCurrentViewState] = useState<ActiveViewType>(() => {
+    if (initialNewsSlug) return 'ARTICLE';
     const saved = localStorage.getItem('dimonex_view');
     if (saved) return saved as ActiveViewType;
     return 'TRADE';
@@ -151,8 +164,37 @@ function AppContent() {
 
   const handleSelectView = (view: ActiveViewType) => {
     setCurrentViewState(view);
-    localStorage.setItem('dimonex_view', view);
+    if (view !== 'ARTICLE') {
+      localStorage.setItem('dimonex_view', view);
+      if (typeof window !== 'undefined' && window.location.pathname.startsWith('/news/')) {
+        window.history.pushState({}, '', '/');
+      }
+    }
   };
+
+  const handleOpenArticle = (slug: string) => {
+    setActiveArticleSlug(slug);
+    setCurrentViewState('ARTICLE');
+    if (typeof window !== 'undefined') {
+      window.history.pushState({}, '', `/news/${encodeURIComponent(slug)}`);
+    }
+  };
+
+  const refreshUnreadNotifications = useCallback(async () => {
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!token) {
+      setUnreadNotificationsCount(0);
+      return;
+    }
+    try {
+      const res = await safeFetchJson<{ unreadCount: number }>('/api/notifications/unread-count', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok && typeof res.data?.unreadCount === 'number') {
+        setUnreadNotificationsCount(res.data.unreadCount);
+      }
+    } catch {}
+  }, []);
 
   const handleSelectPair = (pairId: string) => {
     setSelectedPairIdState(pairId);
@@ -223,6 +265,7 @@ function AppContent() {
     setBalances([]);
     setOpenOrders([]);
     setOrderHistory([]);
+    setUnreadNotificationsCount(0);
     const guestPrefs = readLocalSpotPrefs();
     setSpotLayout(guestPrefs.spotLayout);
     setHideRecentTradesInChartFocus(guestPrefs.hideRecentTradesInChartFocus);
@@ -325,16 +368,18 @@ function AppContent() {
           );
           refreshBalances();
           refreshUserOrders();
+          refreshUnreadNotifications();
         } else if (res.status === 401) {
           localStorage.removeItem('dimonex_auth_token');
           setUser(null);
+          setUnreadNotificationsCount(0);
           const guestPrefs = readLocalSpotPrefs();
           setSpotLayout(guestPrefs.spotLayout);
           setHideRecentTradesInChartFocus(guestPrefs.hideRecentTradesInChartFocus);
         }
       } catch (e) {}
     }
-  }, [refreshBalances, refreshUserOrders]);
+  }, [refreshBalances, refreshUserOrders, refreshUnreadNotifications]);
 
   const fetchPairMarketData = useCallback(async () => {
     if (!selectedPairId) return;
@@ -391,6 +436,15 @@ function AppContent() {
           socket.send(JSON.stringify({ action: 'subscribe', channel: `depth:${selectedPairId}` }));
           socket.send(JSON.stringify({ action: 'subscribe', channel: `trades:${selectedPairId}` }));
           socket.send(JSON.stringify({ action: 'subscribe', channel: 'ticker' }));
+          if (user?.id) {
+            socket.send(
+              JSON.stringify({
+                action: 'subscribe',
+                channel: `notifications:${user.id}`,
+                userId: user.id,
+              })
+            );
+          }
         };
 
         socket.onerror = () => {
@@ -421,6 +475,8 @@ function AppContent() {
               safeFetchJson<TradingPairItem[]>('/api/trading/pairs').then((res) => {
                 if (res.ok && Array.isArray(res.data)) setPairs(res.data);
               }).catch(() => {});
+            } else if (msg.type === 'user_notification') {
+              refreshUnreadNotifications();
             }
           } catch {}
         };
@@ -434,7 +490,7 @@ function AppContent() {
       isDisposed = true;
       if (socket) socket.close();
     };
-  }, [selectedPairId]);
+  }, [selectedPairId, user?.id, refreshUnreadNotifications]);
 
   const { showToast } = useToast();
 
@@ -592,6 +648,9 @@ function AppContent() {
         onQuickLogin={quickLogin}
         displayCurrency={displayCurrency}
         onToggleCurrency={handleToggleCurrency}
+        unreadNotificationsCount={unreadNotificationsCount}
+        onUnreadCountChange={setUnreadNotificationsCount}
+        onOpenArticle={handleOpenArticle}
       />
 
       <div className="flex-1 flex overflow-hidden">
@@ -612,6 +671,24 @@ function AppContent() {
                 handleSelectView(v as ActiveViewType);
               }}
               onOpenAuthModal={() => setIsAuthModalOpen(true)}
+              onOpenArticle={handleOpenArticle}
+            />
+          )}
+
+          {currentView === 'ARTICLE' && activeArticleSlug && (
+            <ArticleDetailView
+              slug={activeArticleSlug}
+              onBack={() => handleSelectView('OVERVIEW')}
+              onOpenArticle={handleOpenArticle}
+            />
+          )}
+
+          {currentView === 'NOTIFICATIONS' && (
+            <NotificationsView
+              user={user}
+              onOpenAuthModal={() => setIsAuthModalOpen(true)}
+              onOpenArticle={handleOpenArticle}
+              onUnreadCountChange={setUnreadNotificationsCount}
             />
           )}
 

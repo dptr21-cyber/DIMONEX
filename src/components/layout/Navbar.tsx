@@ -6,7 +6,7 @@
  * DIMONEX Top Navigation Bar — Obsidian Iridium Institutional Architecture
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Search,
   Bell,
@@ -19,9 +19,18 @@ import {
   Cpu,
   Wallet,
   TrendingUp,
+  CheckCheck,
+  ArrowUpRight,
 } from 'lucide-react';
-import { UserProfile, AppLanguage, TradingPairItem } from '../../types/index.js';
+import {
+  ANNOUNCEMENT_CATEGORY_META,
+  UserProfile,
+  AppLanguage,
+  TradingPairItem,
+  UserNotificationItem,
+} from '../../types/index.js';
 import { formatQuotePrice } from '../../lib/formatters.js';
+import { safeFetchJson } from '../../lib/safeFetch.js';
 import { AssetIcon } from '../ui/AssetIcon.js';
 import { DimonexIcon } from '../ui/DimonexBrand.js';
 import { PercentageChange } from '../ui/PriceDisplay.js';
@@ -40,6 +49,9 @@ interface Props {
   onQuickLogin: (email: string, pass: string) => void;
   displayCurrency: 'USDT' | 'IDR';
   onToggleCurrency: () => void;
+  unreadNotificationsCount?: number;
+  onUnreadCountChange?: (count: number) => void;
+  onOpenArticle?: (slug: string) => void;
 }
 
 export const Navbar: React.FC<Props> = ({
@@ -52,11 +64,78 @@ export const Navbar: React.FC<Props> = ({
   onSelectPair,
   displayCurrency,
   onToggleCurrency,
+  unreadNotificationsCount = 0,
+  onUnreadCountChange,
+  onOpenArticle,
 }) => {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [userNotifications, setUserNotifications] = useState<UserNotificationItem[]>([]);
+  const [isLoadingNotifs, setIsLoadingNotifs] = useState(false);
+
+  const loadRecentNotifications = useCallback(async () => {
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!token || !user) {
+      setUserNotifications([]);
+      return;
+    }
+    setIsLoadingNotifs(true);
+    try {
+      const res = await safeFetchJson<{ items: UserNotificationItem[]; unreadCount: number }>(
+        '/api/notifications?limit=6',
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.ok && res.data) {
+        setUserNotifications(res.data.items || []);
+        onUnreadCountChange?.(res.data.unreadCount || 0);
+      }
+    } finally {
+      setIsLoadingNotifs(false);
+    }
+  }, [user, onUnreadCountChange]);
+
+  useEffect(() => {
+    if (isNotifOpen && user) {
+      loadRecentNotifications();
+    }
+  }, [isNotifOpen, user, loadRecentNotifications]);
+
+  const handleMarkSingleRead = async (notif: UserNotificationItem) => {
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (token && !notif.isRead) {
+      const res = await safeFetchJson<{ unreadCount: number }>(
+        `/api/notifications/${notif.id}/read`,
+        { method: 'POST', headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.ok && res.data) {
+        setUserNotifications(prev =>
+          prev.map(i => (i.id === notif.id ? { ...i, isRead: true } : i))
+        );
+        onUnreadCountChange?.(res.data.unreadCount);
+      }
+    }
+    setIsNotifOpen(false);
+    if (notif.announcementSlug && onOpenArticle) {
+      onOpenArticle(notif.announcementSlug);
+    } else {
+      onSelectView('NOTIFICATIONS');
+    }
+  };
+
+  const handleMarkAllReadQuick = async () => {
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!token) return;
+    const res = await safeFetchJson<{ unreadCount: number }>('/api/notifications/read-all', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      setUserNotifications(prev => prev.map(i => ({ ...i, isRead: true })));
+      onUnreadCountChange?.(0);
+    }
+  };
 
   const filteredPairs = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -288,52 +367,136 @@ export const Navbar: React.FC<Props> = ({
           {displayCurrency}
         </button>
 
-        {/* System Status & Alerts */}
+        {/* Global Notification Bell & Real Inbox Dropdown */}
         <div className="relative">
           <button
             type="button"
             onClick={() => setIsNotifOpen(prev => !prev)}
             className="w-8 h-8 rounded-[7px] bg-[#141C24] border border-[#202B34] hover:border-[#2B3944] flex items-center justify-center text-[#A1AFB8] hover:text-[#E4EBEF] transition-colors relative cursor-pointer"
-            title="System Notices"
-            aria-label="System Notices"
+            title="Notifications"
+            aria-label="Notifications"
           >
             <Bell className="w-4 h-4" />
-            {systemNotices.some(n => n.tag === 'HALT' || n.tag === 'NEW') && (
-              <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-[#8DA5B1]" />
+            {user && unreadNotificationsCount > 0 ? (
+              <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-[#EA5B65] text-white text-[9px] font-mono font-bold flex items-center justify-center">
+                {unreadNotificationsCount > 99 ? '99+' : unreadNotificationsCount}
+              </span>
+            ) : (
+              systemNotices.some(n => n.tag === 'HALT' || n.tag === 'NEW') && (
+                <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-[#8DA5B1]" />
+              )
             )}
           </button>
 
           {isNotifOpen && (
             <>
               <div className="fixed inset-0 z-20" onClick={() => setIsNotifOpen(false)} />
-              <div className="absolute right-0 mt-2 w-80 rounded-[10px] bg-[#141C24] border border-[#2B3944] shadow-2xl p-3.5 z-30 space-y-2.5">
+              <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-[10px] bg-[#141C24] border border-[#2B3944] shadow-2xl p-3.5 z-30 space-y-2.5">
                 <div className="flex items-center justify-between pb-2 border-b border-[#202B34]">
-                  <span className="font-semibold text-xs text-[#E4EBEF]">Exchange Notices</span>
-                  <span className="text-[10px] font-mono text-[#8DA5B1]">{systemNotices.length} Active</span>
-                </div>
-                <div className="space-y-2 max-h-72 overflow-y-auto">
-                  {systemNotices.map(n => (
-                    <div
-                      key={n.id}
-                      onClick={() => {
-                        if (n.pairId) onSelectPair(n.pairId);
-                        if (n.actionView) onSelectView(n.actionView);
-                        setIsNotifOpen(false);
-                      }}
-                      className={`p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34] text-xs space-y-1 ${
-                        n.actionView ? 'hover:bg-[#17212B] cursor-pointer' : ''
-                      }`}
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-xs text-[#E4EBEF]">Notifications</span>
+                    {user && unreadNotificationsCount > 0 && (
+                      <span className="px-1.5 py-0.5 rounded bg-[#16A879]/20 text-[#35B887] text-[10px] font-mono font-semibold">
+                        {unreadNotificationsCount} unread
+                      </span>
+                    )}
+                  </div>
+                  {user && unreadNotificationsCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleMarkAllReadQuick}
+                      className="text-[10px] text-[#8DA5B1] hover:text-[#E4EBEF] inline-flex items-center gap-1 cursor-pointer"
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-semibold text-[#E4EBEF] truncate">{n.title}</span>
-                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-[#17212B] text-[#8DA5B1] border border-[#2B3944]">
-                          {n.tag}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-[#71818B] leading-relaxed">{n.desc}</p>
-                    </div>
-                  ))}
+                      <CheckCheck className="w-3 h-3" />
+                      Mark all read
+                    </button>
+                  )}
                 </div>
+
+                {user ? (
+                  <div className="space-y-2 max-h-72 overflow-y-auto">
+                    {isLoadingNotifs ? (
+                      <div className="py-6 text-center text-xs text-[#71818B]">
+                        Loading notifications...
+                      </div>
+                    ) : userNotifications.length === 0 ? (
+                      <div className="py-6 text-center text-xs text-[#71818B]">
+                        No notifications yet.
+                      </div>
+                    ) : (
+                      userNotifications.map(n => {
+                        const cat = ANNOUNCEMENT_CATEGORY_META[n.category];
+                        return (
+                          <button
+                            key={n.id}
+                            type="button"
+                            onClick={() => handleMarkSingleRead(n)}
+                            className={`w-full text-left p-2.5 rounded-[7px] border text-xs space-y-1 transition-colors cursor-pointer ${
+                              !n.isRead
+                                ? 'bg-[#17212B] border-[#2B3944] hover:border-[#8DA5B1]'
+                                : 'bg-[#111820] border-[#202B34] hover:bg-[#17212B]'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-semibold text-[#E4EBEF] truncate flex items-center gap-1.5">
+                                {!n.isRead && (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-[#16A879] shrink-0" />
+                                )}
+                                {n.title}
+                              </span>
+                              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-[#141C24] text-[#8DA5B1] border border-[#2B3944] shrink-0">
+                                {cat?.label || n.category}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-[#A1AFB8] line-clamp-2 leading-relaxed">
+                              {n.summary}
+                            </p>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-60 overflow-y-auto">
+                    {systemNotices.map(n => (
+                      <div
+                        key={n.id}
+                        onClick={() => {
+                          if (n.pairId) onSelectPair(n.pairId);
+                          if (n.actionView) onSelectView(n.actionView);
+                          setIsNotifOpen(false);
+                        }}
+                        className={`p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34] text-xs space-y-1 ${
+                          n.actionView ? 'hover:bg-[#17212B] cursor-pointer' : ''
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-[#E4EBEF] truncate">{n.title}</span>
+                          <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-[#17212B] text-[#8DA5B1] border border-[#2B3944]">
+                            {n.tag}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-[#71818B] leading-relaxed">{n.desc}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {user && (
+                  <div className="pt-2 border-t border-[#202B34]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsNotifOpen(false);
+                        onSelectView('NOTIFICATIONS');
+                      }}
+                      className="w-full py-1.5 rounded-[6px] bg-[#111820] hover:bg-[#1D2832] border border-[#2B3944] text-xs font-medium text-[#E4EBEF] inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <span>View All Notifications &amp; Preferences</span>
+                      <ArrowUpRight className="w-3.5 h-3.5 text-[#8DA5B1]" />
+                    </button>
+                  </div>
+                )}
               </div>
             </>
           )}

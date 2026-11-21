@@ -230,6 +230,20 @@ var init_database = __esm({
         this.outboxEvents = /* @__PURE__ */ new Map();
         this.idempotencyRecords = /* @__PURE__ */ new Map();
         this.portfolioRebalanceConfigs = /* @__PURE__ */ new Map();
+        this.externalWsWhitelist = /* @__PURE__ */ new Map();
+        this.priceThresholdTriggers = /* @__PURE__ */ new Map();
+        this.priceThresholdEvents = [];
+        this.futuresOrders = /* @__PURE__ */ new Map();
+        this.futuresPositions = /* @__PURE__ */ new Map();
+        this.mediaAssets = /* @__PURE__ */ new Map();
+        this.announcements = /* @__PURE__ */ new Map();
+        this.announcementVersions = [];
+        this.cmsAuditLogs = [];
+        this.notificationCampaigns = /* @__PURE__ */ new Map();
+        this.notificationOutboxJobs = /* @__PURE__ */ new Map();
+        this.notificationDeliveries = /* @__PURE__ */ new Map();
+        this.userNotifications = /* @__PURE__ */ new Map();
+        this.userNotificationPreferences = /* @__PURE__ */ new Map();
         this.saveTimer = null;
         this.isSaving = false;
         this.lastLoadedMtime = 0;
@@ -238,6 +252,7 @@ var init_database = __esm({
           console.log("[DIMONEX Database] Menginisialisasi data awal (seed bootstrap)...");
           this.seedInitialData();
           this.ensureInitialListingData();
+          this.ensureExternalWsWhitelist();
           this.ensureHistoricalTrades();
           this.recalculatePair24hStats();
           this.saveToDisk();
@@ -245,6 +260,7 @@ var init_database = __esm({
           this.ensureTradingPairs();
           this.ensureRequiredAccounts();
           this.ensureInitialListingData();
+          this.ensureExternalWsWhitelist();
           this.cleanExpiredSessions();
           this.ensureHistoricalTrades();
           this.recalculatePair24hStats();
@@ -1237,7 +1253,21 @@ var init_database = __esm({
             listingAuditEvents: this.listingAuditEvents,
             outboxEvents: Array.from(this.outboxEvents.entries()),
             idempotencyRecords: Array.from(this.idempotencyRecords.entries()),
-            portfolioRebalanceConfigs: Array.from(this.portfolioRebalanceConfigs.entries())
+            portfolioRebalanceConfigs: Array.from(this.portfolioRebalanceConfigs.entries()),
+            externalWsWhitelist: Array.from(this.externalWsWhitelist.entries()),
+            priceThresholdTriggers: Array.from(this.priceThresholdTriggers.entries()),
+            priceThresholdEvents: this.priceThresholdEvents.slice(-500),
+            futuresOrders: Array.from(this.futuresOrders.entries()),
+            futuresPositions: Array.from(this.futuresPositions.entries()),
+            mediaAssets: Array.from(this.mediaAssets.entries()),
+            announcements: Array.from(this.announcements.entries()),
+            announcementVersions: this.announcementVersions,
+            cmsAuditLogs: this.cmsAuditLogs,
+            notificationCampaigns: Array.from(this.notificationCampaigns.entries()),
+            notificationOutboxJobs: Array.from(this.notificationOutboxJobs.entries()),
+            notificationDeliveries: Array.from(this.notificationDeliveries.entries()),
+            userNotifications: Array.from(this.userNotifications.entries()),
+            userNotificationPreferences: Array.from(this.userNotificationPreferences.entries())
           };
           const jsonStr = JSON.stringify(
             state,
@@ -1354,6 +1384,20 @@ var init_database = __esm({
                 if (data.outboxEvents) this.outboxEvents = new Map(data.outboxEvents);
                 if (data.idempotencyRecords) this.idempotencyRecords = new Map(data.idempotencyRecords);
                 if (data.portfolioRebalanceConfigs) this.portfolioRebalanceConfigs = new Map(data.portfolioRebalanceConfigs);
+                if (data.externalWsWhitelist) this.externalWsWhitelist = new Map(data.externalWsWhitelist);
+                if (data.priceThresholdTriggers) this.priceThresholdTriggers = new Map(data.priceThresholdTriggers);
+                if (data.priceThresholdEvents) this.priceThresholdEvents = data.priceThresholdEvents.slice(-500);
+                if (data.futuresOrders) this.futuresOrders = new Map(data.futuresOrders);
+                if (data.futuresPositions) this.futuresPositions = new Map(data.futuresPositions);
+                if (data.mediaAssets) this.mediaAssets = new Map(data.mediaAssets);
+                if (data.announcements) this.announcements = new Map(data.announcements);
+                if (data.announcementVersions) this.announcementVersions = data.announcementVersions;
+                if (data.cmsAuditLogs) this.cmsAuditLogs = data.cmsAuditLogs;
+                if (data.notificationCampaigns) this.notificationCampaigns = new Map(data.notificationCampaigns);
+                if (data.notificationOutboxJobs) this.notificationOutboxJobs = new Map(data.notificationOutboxJobs);
+                if (data.notificationDeliveries) this.notificationDeliveries = new Map(data.notificationDeliveries);
+                if (data.userNotifications) this.userNotifications = new Map(data.userNotifications);
+                if (data.userNotificationPreferences) this.userNotificationPreferences = new Map(data.userNotificationPreferences);
                 this.lastLoadedMtime = fs.statSync(p).mtimeMs;
                 console.log(`[DIMONEX Database] Berhasil memuat snapshot disk (${p}): ${this.users.size} pengguna, ${this.orders.size} order, ${this.trades.length} transaksi, ${this.sessions.size} sesi login aktif.`);
                 return true;
@@ -1667,6 +1711,86 @@ var init_database = __esm({
             updatedAt: Date.now() - 36e5 * 5
           });
         }
+      }
+      ensureExternalWsWhitelist() {
+        if (this.externalWsWhitelist.size > 0) return;
+        const defaults = [
+          { symbol: "BTCUSDT", baseAsset: "BTC", quoteAsset: "USDT", label: "Bitcoin / USDT (Benchmark Utama)", providers: ["binance", "bybit"], enabled: true, addedBy: "SYSTEM", addedAt: Date.now() },
+          { symbol: "ETHUSDT", baseAsset: "ETH", quoteAsset: "USDT", label: "Ethereum / USDT", providers: ["binance", "bybit"], enabled: true, addedBy: "SYSTEM", addedAt: Date.now() },
+          { symbol: "SOLUSDT", baseAsset: "SOL", quoteAsset: "USDT", label: "Solana / USDT", providers: ["binance", "bybit"], enabled: true, addedBy: "SYSTEM", addedAt: Date.now() },
+          { symbol: "BNBUSDT", baseAsset: "BNB", quoteAsset: "USDT", label: "BNB / USDT", providers: ["binance", "bybit"], enabled: true, addedBy: "SYSTEM", addedAt: Date.now() },
+          { symbol: "XRPUSDT", baseAsset: "XRP", quoteAsset: "USDT", label: "Ripple / USDT", providers: ["binance", "bybit"], enabled: true, addedBy: "SYSTEM", addedAt: Date.now() },
+          { symbol: "DOGEUSDT", baseAsset: "DOGE", quoteAsset: "USDT", label: "Dogecoin / USDT", providers: ["binance", "bybit"], enabled: true, addedBy: "SYSTEM", addedAt: Date.now() }
+        ];
+        for (const item of defaults) {
+          this.externalWsWhitelist.set(item.symbol, item);
+        }
+      }
+      getEnabledExternalWsSymbols(provider) {
+        const out = [];
+        for (const entry of this.externalWsWhitelist.values()) {
+          if (!entry.enabled) continue;
+          if (provider && !entry.providers.includes(provider)) continue;
+          out.push(entry.symbol.toUpperCase());
+        }
+        return out;
+      }
+      /**
+       * Ensures every baseCurrency and quoteCurrency present in db.tradingPairs has an Asset entry
+       * in db.assets so admins can manage logos, metadata, and decimals for all listed markets.
+       */
+      ensureAssetsForTradingPairs() {
+        const bySymbol = /* @__PURE__ */ new Map();
+        for (const asset of this.assets.values()) {
+          bySymbol.set(asset.symbol.toUpperCase(), asset);
+        }
+        let created = false;
+        for (const pair of this.tradingPairs.values()) {
+          const baseSym = pair.baseCurrency.toUpperCase();
+          if (!bySymbol.has(baseSym)) {
+            const newBase = {
+              id: `ast-${baseSym.toLowerCase()}-${crypto.randomUUID().slice(0, 8)}`,
+              symbol: baseSym,
+              name: baseSym,
+              assetType: baseSym === "IDR" ? "NATIVE" : "TOKEN",
+              category: baseSym === "IDR" ? "Fiat" : "Token",
+              decimals: typeof pair.baseDecimals === "number" ? pair.baseDecimals : 8,
+              network: baseSym === "IDR" ? "FIAT" : baseSym,
+              status: pair.isActive ? "ACTIVE" : "PENDING",
+              depositEnabled: true,
+              withdrawalEnabled: true,
+              createdAt: Date.now(),
+              updatedAt: Date.now()
+            };
+            this.assets.set(newBase.id, newBase);
+            bySymbol.set(baseSym, newBase);
+            created = true;
+          }
+          const quoteSym = pair.quoteCurrency.toUpperCase();
+          if (!bySymbol.has(quoteSym)) {
+            const newQuote = {
+              id: `ast-${quoteSym.toLowerCase()}-${crypto.randomUUID().slice(0, 8)}`,
+              symbol: quoteSym,
+              name: quoteSym === "IDR" ? "Indonesian Rupiah" : quoteSym === "USDT" ? "Tether USD" : quoteSym,
+              assetType: quoteSym === "IDR" ? "NATIVE" : "TOKEN",
+              category: quoteSym === "IDR" ? "Fiat" : quoteSym === "USDT" ? "Stablecoin" : "Token",
+              decimals: typeof pair.quoteDecimals === "number" ? pair.quoteDecimals : quoteSym === "USDT" ? 6 : 2,
+              network: quoteSym === "IDR" ? "FIAT" : quoteSym === "USDT" ? "TRON" : quoteSym,
+              status: "ACTIVE",
+              depositEnabled: true,
+              withdrawalEnabled: true,
+              createdAt: Date.now(),
+              updatedAt: Date.now()
+            };
+            this.assets.set(newQuote.id, newQuote);
+            bySymbol.set(quoteSym, newQuote);
+            created = true;
+          }
+        }
+        if (created) {
+          this.scheduleSave();
+        }
+        return Array.from(this.assets.values());
       }
     };
     db = new DatabaseStore();
@@ -2154,28 +2278,83 @@ var init_BinancePublicFeed = __esm({
         await this.connect();
       }
       subscribe(symbols) {
-        symbols.forEach((s) => this.symbols.add(s.toUpperCase()));
-        if (this.ws && this.ws.readyState === WebSocket2.OPEN) {
-          this.sendSubscriptions();
+        const added = [];
+        symbols.forEach((s) => {
+          const upper = s.trim().toUpperCase();
+          if (upper && !this.symbols.has(upper)) {
+            this.symbols.add(upper);
+            added.push(upper);
+          }
+        });
+        if (added.length > 0 && this.ws && this.ws.readyState === WebSocket2.OPEN) {
+          this.sendStreamBatch("SUBSCRIBE", added);
         }
       }
-      sendSubscriptions() {
-        if (!this.ws || this.ws.readyState !== WebSocket2.OPEN) return;
-        const streams = [];
+      syncSymbols(nextSymbols) {
+        const desired = new Set(
+          nextSymbols.map((s) => s.trim().toUpperCase()).filter(Boolean)
+        );
+        const toAdd = [];
+        const toRemove = [];
+        for (const sym of desired) {
+          if (!this.symbols.has(sym)) toAdd.push(sym);
+        }
         for (const sym of this.symbols) {
+          if (!desired.has(sym)) toRemove.push(sym);
+        }
+        this.symbols = desired;
+        for (const rem of toRemove) {
+          this.ticks.delete(rem);
+        }
+        if (this.ws && this.ws.readyState === WebSocket2.OPEN) {
+          if (toRemove.length > 0) this.sendStreamBatch("UNSUBSCRIBE", toRemove);
+          if (toAdd.length > 0) this.sendStreamBatch("SUBSCRIBE", toAdd);
+        }
+      }
+      getSubscribedSymbols() {
+        return Array.from(this.symbols);
+      }
+      seedInitialTick(symbol, lastPrice) {
+        const sym = symbol.trim().toUpperCase();
+        if (!sym || !(lastPrice > 0) || this.ticks.has(sym)) return;
+        const now = Date.now();
+        this.ticks.set(sym, {
+          provider: "binance",
+          symbol: sym,
+          lastPrice,
+          bestBid: lastPrice * 0.9999,
+          bestAsk: lastPrice * 1.0001,
+          exchangeTimestamp: now,
+          receivedAt: now,
+          latencyMs: 20,
+          isFresh: true,
+          isValid: true
+        });
+      }
+      sendStreamBatch(method, targetSymbols) {
+        if (!this.ws || this.ws.readyState !== WebSocket2.OPEN || targetSymbols.length === 0) return;
+        const streams = [];
+        for (const sym of targetSymbols) {
           const lower = sym.toLowerCase();
           streams.push(`${lower}@trade`);
           streams.push(`${lower}@bookTicker`);
         }
-        const payload = {
-          method: "SUBSCRIBE",
-          params: streams,
-          id: Date.now()
-        };
-        try {
-          this.ws.send(JSON.stringify(payload));
-        } catch (_) {
+        const chunkSize = 80;
+        for (let i = 0; i < streams.length; i += chunkSize) {
+          const batch = streams.slice(i, i + chunkSize);
+          const payload = {
+            method,
+            params: batch,
+            id: Date.now() + i
+          };
+          try {
+            this.ws.send(JSON.stringify(payload));
+          } catch (_) {
+          }
         }
+      }
+      sendSubscriptions() {
+        this.sendStreamBatch("SUBSCRIBE", Array.from(this.symbols));
       }
       handleMessage(data) {
         try {
@@ -2428,26 +2607,80 @@ var init_BybitPublicFeed = __esm({
         await this.connect();
       }
       subscribe(symbols) {
-        symbols.forEach((s) => this.symbols.add(s.toUpperCase()));
-        if (this.ws && this.ws.readyState === WebSocket3.OPEN) {
-          this.sendSubscriptions();
+        const added = [];
+        symbols.forEach((s) => {
+          const upper = s.trim().toUpperCase();
+          if (upper && !this.symbols.has(upper)) {
+            this.symbols.add(upper);
+            added.push(upper);
+          }
+        });
+        if (added.length > 0 && this.ws && this.ws.readyState === WebSocket3.OPEN) {
+          this.sendTopicBatch("subscribe", added);
         }
       }
-      sendSubscriptions() {
-        if (!this.ws || this.ws.readyState !== WebSocket3.OPEN) return;
-        const args = [];
+      syncSymbols(nextSymbols) {
+        const desired = new Set(
+          nextSymbols.map((s) => s.trim().toUpperCase()).filter(Boolean)
+        );
+        const toAdd = [];
+        const toRemove = [];
+        for (const sym of desired) {
+          if (!this.symbols.has(sym)) toAdd.push(sym);
+        }
         for (const sym of this.symbols) {
+          if (!desired.has(sym)) toRemove.push(sym);
+        }
+        this.symbols = desired;
+        for (const rem of toRemove) {
+          this.ticks.delete(rem);
+        }
+        if (this.ws && this.ws.readyState === WebSocket3.OPEN) {
+          if (toRemove.length > 0) this.sendTopicBatch("unsubscribe", toRemove);
+          if (toAdd.length > 0) this.sendTopicBatch("subscribe", toAdd);
+        }
+      }
+      getSubscribedSymbols() {
+        return Array.from(this.symbols);
+      }
+      seedInitialTick(symbol, lastPrice) {
+        const sym = symbol.trim().toUpperCase();
+        if (!sym || !(lastPrice > 0) || this.ticks.has(sym)) return;
+        const now = Date.now();
+        this.ticks.set(sym, {
+          provider: "bybit",
+          symbol: sym,
+          lastPrice,
+          bestBid: lastPrice * 0.9999,
+          bestAsk: lastPrice * 1.0001,
+          exchangeTimestamp: now,
+          receivedAt: now,
+          latencyMs: 22,
+          isFresh: true,
+          isValid: true
+        });
+      }
+      sendTopicBatch(op, targetSymbols) {
+        if (!this.ws || this.ws.readyState !== WebSocket3.OPEN || targetSymbols.length === 0) return;
+        const args = [];
+        for (const sym of targetSymbols) {
           args.push(`tickers.${sym}`);
           args.push(`publicTrade.${sym}`);
         }
-        const payload = {
-          op: "subscribe",
-          args
-        };
-        try {
-          this.ws.send(JSON.stringify(payload));
-        } catch (_) {
+        const chunkSize = 10;
+        for (let i = 0; i < args.length; i += chunkSize) {
+          const payload = {
+            op,
+            args: args.slice(i, i + chunkSize)
+          };
+          try {
+            this.ws.send(JSON.stringify(payload));
+          } catch (_) {
+          }
         }
+      }
+      sendSubscriptions() {
+        this.sendTopicBatch("subscribe", Array.from(this.symbols));
       }
       handleMessage(data) {
         try {
@@ -2999,17 +3232,65 @@ var init_CoinMarketCapFeed = __esm({
 var PriceAggregatorService_exports = {};
 __export(PriceAggregatorService_exports, {
   PriceAggregatorService: () => PriceAggregatorService,
+  parseExternalPairSymbol: () => parseExternalPairSymbol,
   priceAggregatorService: () => priceAggregatorService
 });
-var PriceAggregatorService, priceAggregatorService;
+function parseExternalPairSymbol(symbol) {
+  const sym = symbol.trim().toUpperCase();
+  for (const quote of KNOWN_QUOTES) {
+    if (sym.endsWith(quote) && sym.length > quote.length) {
+      return {
+        baseAsset: sym.slice(0, sym.length - quote.length),
+        quoteAsset: quote
+      };
+    }
+  }
+  return { baseAsset: sym, quoteAsset: "USDT" };
+}
+var KNOWN_QUOTES, FALLBACK_CATALOG_SYMBOLS, PriceAggregatorService, priceAggregatorService;
 var init_PriceAggregatorService = __esm({
   "server/services/external/PriceAggregatorService.ts"() {
     init_BinancePublicFeed();
     init_BybitPublicFeed();
     init_CoinMarketCapFeed();
     init_FxConversionService();
+    KNOWN_QUOTES = ["USDT", "FDUSD", "USDC", "BTC", "ETH", "BNB", "EUR", "TRY"];
+    FALLBACK_CATALOG_SYMBOLS = [
+      "BTCUSDT",
+      "ETHUSDT",
+      "SOLUSDT",
+      "BNBUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "ADAUSDT",
+      "AVAXUSDT",
+      "LINKUSDT",
+      "DOTUSDT",
+      "TONUSDT",
+      "SUIUSDT",
+      "PEPEUSDT",
+      "SHIBUSDT",
+      "TRXUSDT",
+      "NEARUSDT",
+      "APTUSDT",
+      "ARBUSDT",
+      "OPUSDT",
+      "INJUSDT",
+      "RENDERUSDT",
+      "WIFUSDT",
+      "LTCUSDT",
+      "BCHUSDT",
+      "UNIUSDT",
+      "AAVEUSDT",
+      "MATICUSDT",
+      "ATOMUSDT",
+      "ETHBTC",
+      "SOLBTC"
+    ];
     PriceAggregatorService = class {
       constructor() {
+        this.catalogCache = null;
+        this.CATALOG_TTL_MS = 5 * 60 * 1e3;
         this.config = {
           primaryProvider: "binance",
           secondaryProvider: "bybit",
@@ -3042,6 +3323,260 @@ var init_PriceAggregatorService = __esm({
           ...newConfig
         };
         return this.getConfig();
+      }
+      /**
+       * Synchronize Binance & Bybit public WebSocket subscriptions strictly to the Admin whitelist
+       * so bandwidth and stream counts stay minimal.
+       */
+      syncWhitelistSymbols(binanceSymbols, bybitSymbols) {
+        const binList = Array.from(new Set(binanceSymbols.map((s) => s.trim().toUpperCase()).filter(Boolean)));
+        const bybList = Array.from(new Set((bybitSymbols ?? binanceSymbols).map((s) => s.trim().toUpperCase()).filter(Boolean)));
+        this.binance.syncSymbols(binList);
+        this.bybit.syncSymbols(bybList);
+      }
+      /**
+       * Resolve live WS snapshot for any whitelisted symbol across Binance & Bybit
+       */
+      getSymbolSnapshot(symbol, preferredProvider = "AGGREGATED") {
+        const sym = symbol.trim().toUpperCase();
+        const now = Date.now();
+        const binTick = this.binance.getTick(sym);
+        const bybTick = this.bybit.getTick(sym);
+        const bPrice = binTick && binTick.lastPrice > 0 ? binTick.lastPrice : null;
+        const yPrice = bybTick && bybTick.lastPrice > 0 ? bybTick.lastPrice : null;
+        const bFresh = Boolean(binTick && bPrice !== null && now - binTick.receivedAt <= this.config.maxDataAgeMs);
+        const yFresh = Boolean(bybTick && yPrice !== null && now - bybTick.receivedAt <= this.config.maxDataAgeMs);
+        let price = 0;
+        let bestBid = 0;
+        let bestAsk = 0;
+        let activeProvider = "aggregated";
+        let isFresh = false;
+        let updatedAt = 0;
+        if (preferredProvider === "BINANCE") {
+          if (binTick && bPrice !== null && (bFresh || !yFresh || this.config.failoverBehavior !== "AUTOMATIC")) {
+            price = bPrice;
+            bestBid = binTick.bestBid || bPrice;
+            bestAsk = binTick.bestAsk || bPrice;
+            activeProvider = "binance";
+            isFresh = bFresh;
+            updatedAt = binTick.receivedAt;
+          } else if (bybTick && yPrice !== null && this.config.failoverBehavior === "AUTOMATIC") {
+            price = yPrice;
+            bestBid = bybTick.bestBid || yPrice;
+            bestAsk = bybTick.bestAsk || yPrice;
+            activeProvider = "bybit";
+            isFresh = yFresh;
+            updatedAt = bybTick.receivedAt;
+          }
+        } else if (preferredProvider === "BYBIT") {
+          if (bybTick && yPrice !== null && (yFresh || !bFresh || this.config.failoverBehavior !== "AUTOMATIC")) {
+            price = yPrice;
+            bestBid = bybTick.bestBid || yPrice;
+            bestAsk = bybTick.bestAsk || yPrice;
+            activeProvider = "bybit";
+            isFresh = yFresh;
+            updatedAt = bybTick.receivedAt;
+          } else if (binTick && bPrice !== null && this.config.failoverBehavior === "AUTOMATIC") {
+            price = bPrice;
+            bestBid = binTick.bestBid || bPrice;
+            bestAsk = binTick.bestAsk || bPrice;
+            activeProvider = "binance";
+            isFresh = bFresh;
+            updatedAt = binTick.receivedAt;
+          }
+        } else {
+          if (bFresh && yFresh && bPrice !== null && yPrice !== null && binTick && bybTick) {
+            const avg = (bPrice + yPrice) / 2;
+            const devBps = Math.round(Math.abs(bPrice - yPrice) / avg * 1e4);
+            if (devBps <= this.config.maxAllowedDeviationBps) {
+              price = avg;
+              bestBid = (binTick.bestBid + bybTick.bestBid) / 2;
+              bestAsk = (binTick.bestAsk + bybTick.bestAsk) / 2;
+              activeProvider = "aggregated";
+              isFresh = true;
+              updatedAt = Math.max(binTick.receivedAt, bybTick.receivedAt);
+            } else {
+              const primaryTick = this.config.primaryProvider === "bybit" ? bybTick : binTick;
+              price = primaryTick.lastPrice;
+              bestBid = primaryTick.bestBid;
+              bestAsk = primaryTick.bestAsk;
+              activeProvider = primaryTick.provider === "bybit" ? "bybit" : "binance";
+              isFresh = true;
+              updatedAt = primaryTick.receivedAt;
+            }
+          } else if (bFresh && bPrice !== null && binTick) {
+            price = bPrice;
+            bestBid = binTick.bestBid || bPrice;
+            bestAsk = binTick.bestAsk || bPrice;
+            activeProvider = "binance";
+            isFresh = true;
+            updatedAt = binTick.receivedAt;
+          } else if (yFresh && yPrice !== null && bybTick) {
+            price = yPrice;
+            bestBid = bybTick.bestBid || yPrice;
+            bestAsk = bybTick.bestAsk || yPrice;
+            activeProvider = "bybit";
+            isFresh = true;
+            updatedAt = bybTick.receivedAt;
+          } else if (bPrice !== null && binTick) {
+            price = bPrice;
+            bestBid = binTick.bestBid || bPrice;
+            bestAsk = binTick.bestAsk || bPrice;
+            activeProvider = "binance";
+            isFresh = false;
+            updatedAt = binTick.receivedAt;
+          } else if (yPrice !== null && bybTick) {
+            price = yPrice;
+            bestBid = bybTick.bestBid || yPrice;
+            bestAsk = bybTick.bestAsk || yPrice;
+            activeProvider = "bybit";
+            isFresh = false;
+            updatedAt = bybTick.receivedAt;
+          }
+        }
+        return {
+          symbol: sym,
+          price,
+          bestBid,
+          bestAsk,
+          binancePrice: bPrice,
+          bybitPrice: yPrice,
+          binanceFresh: bFresh,
+          bybitFresh: yFresh,
+          activeProvider,
+          isFresh,
+          updatedAt
+        };
+      }
+      /**
+       * Fetch live available Spot pairs & prices from Binance & Bybit REST tickers (cached 5 min)
+       * with graceful fallback directory so Admin can curate a minimal WS whitelist.
+       */
+      async fetchAvailableCatalog(forceRefresh = false) {
+        const now = Date.now();
+        if (!forceRefresh && this.catalogCache && now - this.catalogCache.fetchedAt < this.CATALOG_TTL_MS) {
+          return {
+            items: this.catalogCache.items,
+            source: "CACHED",
+            fetchedAt: this.catalogCache.fetchedAt
+          };
+        }
+        const catalogMap = /* @__PURE__ */ new Map();
+        const isLeveragedJunk = (sym) => /(UP|DOWN|BULL|BEAR|[235][LS])(USDT|USDC|FDUSD|BTC|ETH)$/.test(sym);
+        const fetchWithTimeout = async (url, ms = 4e3) => {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), ms);
+          try {
+            const res = await fetch(url, { signal: controller.signal });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return await res.json();
+          } finally {
+            clearTimeout(timer);
+          }
+        };
+        const [binRes, bybRes] = await Promise.allSettled([
+          fetchWithTimeout("https://api.binance.com/api/v3/ticker/price", 4e3),
+          fetchWithTimeout("https://api.bybit.com/v5/market/tickers?category=spot", 4e3)
+        ]);
+        let liveCount = 0;
+        if (binRes.status === "fulfilled" && Array.isArray(binRes.value)) {
+          for (const row of binRes.value) {
+            const sym = String(row?.symbol || "").toUpperCase();
+            const price = parseFloat(row?.price || "0");
+            if (!sym || !(price > 0) || isLeveragedJunk(sym)) continue;
+            const { baseAsset, quoteAsset } = parseExternalPairSymbol(sym);
+            if (!KNOWN_QUOTES.includes(quoteAsset)) continue;
+            liveCount++;
+            const existing = catalogMap.get(sym);
+            if (existing) {
+              if (!existing.providers.includes("binance")) existing.providers.push("binance");
+              existing.binancePrice = price;
+            } else {
+              catalogMap.set(sym, {
+                symbol: sym,
+                baseAsset,
+                quoteAsset,
+                providers: ["binance"],
+                binancePrice: price,
+                bybitPrice: null
+              });
+            }
+          }
+        }
+        if (bybRes.status === "fulfilled" && Array.isArray(bybRes.value?.result?.list)) {
+          for (const row of bybRes.value.result.list) {
+            const sym = String(row?.symbol || "").toUpperCase();
+            const price = parseFloat(row?.lastPrice || "0");
+            if (!sym || !(price > 0) || isLeveragedJunk(sym)) continue;
+            const { baseAsset, quoteAsset } = parseExternalPairSymbol(sym);
+            if (!KNOWN_QUOTES.includes(quoteAsset)) continue;
+            liveCount++;
+            const existing = catalogMap.get(sym);
+            if (existing) {
+              if (!existing.providers.includes("bybit")) existing.providers.push("bybit");
+              existing.bybitPrice = price;
+            } else {
+              catalogMap.set(sym, {
+                symbol: sym,
+                baseAsset,
+                quoteAsset,
+                providers: ["bybit"],
+                binancePrice: null,
+                bybitPrice: price
+              });
+            }
+          }
+        }
+        if (catalogMap.size > 0) {
+          const items = Array.from(catalogMap.values()).sort((a, b) => {
+            const aUsdt = a.quoteAsset === "USDT" ? 0 : 1;
+            const bUsdt = b.quoteAsset === "USDT" ? 0 : 1;
+            if (aUsdt !== bUsdt) return aUsdt - bUsdt;
+            const aBoth = b.providers.length - a.providers.length;
+            if (aBoth !== 0) return aBoth;
+            return a.symbol.localeCompare(b.symbol);
+          });
+          this.catalogCache = { items, fetchedAt: now };
+          return { items, source: liveCount > 0 ? "LIVE" : "FALLBACK", fetchedAt: now };
+        }
+        const fallbackItems = FALLBACK_CATALOG_SYMBOLS.map((sym) => {
+          const { baseAsset, quoteAsset } = parseExternalPairSymbol(sym);
+          const binTick = this.binance.getTick(sym);
+          const bybTick = this.bybit.getTick(sym);
+          return {
+            symbol: sym,
+            baseAsset,
+            quoteAsset,
+            providers: ["binance", "bybit"],
+            binancePrice: binTick?.lastPrice ?? null,
+            bybitPrice: bybTick?.lastPrice ?? null
+          };
+        });
+        return { items: fallbackItems, source: "FALLBACK", fetchedAt: now };
+      }
+      /**
+       * Seed initial price tick for a newly whitelisted symbol from cached/live REST catalog
+       * so bots have immediate reference price while WebSocket streams settle.
+       */
+      async seedSymbolFromCatalog(symbol, providers = ["binance", "bybit"]) {
+        const sym = symbol.trim().toUpperCase();
+        try {
+          const { items } = await this.fetchAvailableCatalog(false);
+          const match = items.find((i) => i.symbol === sym);
+          if (match) {
+            if (providers.includes("binance") && match.binancePrice && match.binancePrice > 0) {
+              this.binance.seedInitialTick(sym, match.binancePrice);
+            } else if (providers.includes("binance") && match.bybitPrice && match.bybitPrice > 0) {
+              this.binance.seedInitialTick(sym, match.bybitPrice);
+            }
+            if (providers.includes("bybit") && match.bybitPrice && match.bybitPrice > 0) {
+              this.bybit.seedInitialTick(sym, match.bybitPrice);
+            } else if (providers.includes("bybit") && match.binancePrice && match.binancePrice > 0) {
+              this.bybit.seedInitialTick(sym, match.binancePrice);
+            }
+          }
+        } catch (_) {
+        }
       }
       /**
        * Get aggregated reference price for a DIMONEX trading pair (e.g. 'BTC-IDR', 'ETH-IDR', 'USDT-IDR')
@@ -3160,6 +3695,7 @@ var init_PriceAggregatorService = __esm({
             id: this.binance.id,
             name: this.binance.name,
             status: this.binance.getConnectionStatus(),
+            subscribedSymbols: this.binance.getSubscribedSymbols(),
             metrics: this.binance.getMetrics(),
             btcTick: this.binance.getTick("BTCUSDT"),
             ethTick: this.binance.getTick("ETHUSDT")
@@ -3168,6 +3704,7 @@ var init_PriceAggregatorService = __esm({
             id: this.bybit.id,
             name: this.bybit.name,
             status: this.bybit.getConnectionStatus(),
+            subscribedSymbols: this.bybit.getSubscribedSymbols(),
             metrics: this.bybit.getMetrics(),
             btcTick: this.bybit.getTick("BTCUSDT"),
             ethTick: this.bybit.getTick("ETHUSDT")
@@ -3195,8 +3732,8 @@ import express from "express";
 import http from "http";
 import { WebSocketServer as WebSocketServer2 } from "ws";
 import { createServer as createViteServer } from "vite";
-import path5 from "path";
-import fs5 from "fs";
+import path6 from "path";
+import fs7 from "fs";
 
 // server/routes/auth.ts
 import { Router } from "express";
@@ -3537,10 +4074,53 @@ authRouter.post("/login", (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
+var VALID_SPOT_LAYOUTS = /* @__PURE__ */ new Set(["CLASSIC", "PRO_TERMINAL", "CHART_FOCUS"]);
+function getNormalizedPreferences(userId) {
+  const dbUser = db.users.get(userId);
+  const prefs = dbUser?.preferences;
+  const spotLayout = prefs?.spotLayout && VALID_SPOT_LAYOUTS.has(prefs.spotLayout) ? prefs.spotLayout : "CLASSIC";
+  return {
+    spotLayout,
+    hideRecentTradesInChartFocus: prefs?.hideRecentTradesInChartFocus ?? true,
+    updatedAt: prefs?.updatedAt || dbUser?.updatedAt || Date.now()
+  };
+}
 authRouter.get("/me", requireAuth, (req, res) => {
   const user = req.user;
   const kyc = db.kyc.get(user.id);
-  res.json({ user, kyc });
+  const preferences = getNormalizedPreferences(user.id);
+  res.json({ user: { ...user, preferences }, kyc, preferences });
+});
+authRouter.get("/preferences", requireAuth, (req, res) => {
+  const user = req.user;
+  res.json(getNormalizedPreferences(user.id));
+});
+authRouter.put("/preferences", requireAuth, (req, res) => {
+  const user = req.user;
+  const dbUser = db.users.get(user.id);
+  if (!dbUser) {
+    return res.status(404).json({ error: "Pengguna tidak ditemukan" });
+  }
+  const { spotLayout, hideRecentTradesInChartFocus } = req.body || {};
+  if (spotLayout !== void 0 && !VALID_SPOT_LAYOUTS.has(spotLayout)) {
+    return res.status(400).json({
+      error: "Preset layout tidak valid. Pilihan: CLASSIC, PRO_TERMINAL, CHART_FOCUS"
+    });
+  }
+  const current = getNormalizedPreferences(user.id);
+  const nextPrefs = {
+    spotLayout: spotLayout || current.spotLayout,
+    hideRecentTradesInChartFocus: typeof hideRecentTradesInChartFocus === "boolean" ? hideRecentTradesInChartFocus : current.hideRecentTradesInChartFocus,
+    updatedAt: Date.now()
+  };
+  dbUser.preferences = nextPrefs;
+  dbUser.updatedAt = Date.now();
+  if (process.env.VERCEL === "1") {
+    db.saveToDisk();
+  } else {
+    db.scheduleSave();
+  }
+  res.json({ success: true, preferences: nextPrefs });
 });
 authRouter.post("/2fa/generate", requireAuth, (req, res) => {
   const user = req.user;
@@ -5310,6 +5890,12 @@ var MarketDataWebSocketService = class {
       this.broadcast("ticker", { type: "ticker", pair });
     }
   }
+  broadcastTickerSnapshot() {
+    this.broadcast("ticker", {
+      type: "snapshot",
+      data: Array.from(db.tradingPairs.values())
+    });
+  }
   broadcast(arg1, arg2) {
     let channel;
     let payload;
@@ -5382,8 +5968,754 @@ var MarketDataWebSocketService = class {
       }
     }
   }
+  broadcastAssetsUpdated(assets) {
+    const message = JSON.stringify({
+      type: "assets_updated",
+      channel: "ticker",
+      data: assets
+    });
+    for (const client of this.clients) {
+      if (client.ws.readyState === WebSocket.OPEN) {
+        client.ws.send(message);
+      }
+    }
+  }
+  broadcastUserNotification(userId, notification) {
+    const channel = `notifications:${userId}`;
+    const message = JSON.stringify({
+      type: "user_notification",
+      channel,
+      data: notification
+    });
+    for (const client of this.clients) {
+      if ((client.userId === userId || client.channels.has(channel)) && client.ws.readyState === WebSocket.OPEN && client.ws.bufferedAmount < 1024 * 1024) {
+        client.ws.send(message);
+      }
+    }
+  }
+  broadcastAnnouncementPublished(announcement) {
+    const message = JSON.stringify({
+      type: "announcement_published",
+      channel: "announcements",
+      data: announcement
+    });
+    for (const client of this.clients) {
+      if (client.ws.readyState === WebSocket.OPEN && client.ws.bufferedAmount < 1024 * 1024) {
+        client.ws.send(message);
+      }
+    }
+  }
 };
 var marketWsService = new MarketDataWebSocketService();
+
+// server/services/MarketLifecycleScheduler.ts
+init_database();
+import crypto10 from "crypto";
+
+// server/services/listing/ListingActivationService.ts
+init_database();
+import crypto9 from "crypto";
+
+// server/services/listing/ListingAuditService.ts
+init_database();
+import crypto8 from "crypto";
+var ListingAuditService = class {
+  static {
+    this.GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
+  }
+  /**
+   * Deterministically orders keys in JSON for canonical serialization
+   */
+  static canonicalStringify(obj) {
+    if (obj === null || typeof obj !== "object") {
+      return JSON.stringify(obj);
+    }
+    if (Array.isArray(obj)) {
+      return "[" + obj.map((item) => this.canonicalStringify(item)).join(",") + "]";
+    }
+    const keys = Object.keys(obj).sort();
+    const keyValues = keys.map((k) => `${JSON.stringify(k)}:${this.canonicalStringify(obj[k])}`);
+    return "{" + keyValues.join(",") + "}";
+  }
+  /**
+   * Redacts sensitive fields from audit payload
+   */
+  static redactSensitiveData(data) {
+    const sensitiveKeys = ["password", "totpsecret", "secrethash", "token", "privatekey", "apikey", "secret"];
+    const sanitized = {};
+    for (const [key, val] of Object.entries(data)) {
+      if (sensitiveKeys.includes(key.toLowerCase())) {
+        sanitized[key] = "[REDACTED]";
+      } else if (val && typeof val === "object" && !Array.isArray(val)) {
+        sanitized[key] = this.redactSensitiveData(val);
+      } else {
+        sanitized[key] = val;
+      }
+    }
+    return sanitized;
+  }
+  /**
+   * Records an append-only audit event with cryptographic hash chaining
+   */
+  static recordEvent(input) {
+    const events = db.listingAuditEvents;
+    const previousHash = events.length > 0 ? events[events.length - 1].currentHash : this.GENESIS_HASH;
+    const eventId = crypto8.randomUUID();
+    const correlationId = input.correlationId || crypto8.randomUUID();
+    const sanitizedPayload = this.redactSensitiveData(input.payload);
+    const createdAt = Date.now();
+    const dataToHash = {
+      id: eventId,
+      aggregateId: input.aggregateId,
+      eventType: input.eventType,
+      actorId: input.actorId,
+      correlationId,
+      idempotencyKey: input.idempotencyKey || null,
+      aggregateVersion: input.aggregateVersion,
+      payload: sanitizedPayload,
+      reason: input.reason || null,
+      securityMetadata: input.securityMetadata || {},
+      previousHash,
+      createdAt
+    };
+    const canonicalSerialized = this.canonicalStringify(dataToHash);
+    const currentHash = crypto8.createHash("sha256").update(canonicalSerialized).digest("hex");
+    const auditEvent = {
+      id: eventId,
+      aggregateId: input.aggregateId,
+      eventType: input.eventType,
+      actorId: input.actorId,
+      correlationId,
+      idempotencyKey: input.idempotencyKey,
+      aggregateVersion: input.aggregateVersion,
+      payload: sanitizedPayload,
+      reason: input.reason,
+      securityMetadata: input.securityMetadata || {},
+      previousHash,
+      currentHash,
+      createdAt
+    };
+    db.listingAuditEvents.push(auditEvent);
+    db.scheduleSave();
+    return auditEvent;
+  }
+  /**
+   * Retrieves audit events for a given aggregate (asset or listing request)
+   */
+  static getEventsForAggregate(aggregateId) {
+    return db.listingAuditEvents.filter((e) => e.aggregateId === aggregateId);
+  }
+  /**
+   * Validates the cryptographic integrity of the entire audit chain.
+   * Returns verification result and any violated sequence indexes.
+   */
+  static verifyAuditIntegrity() {
+    const events = db.listingAuditEvents;
+    let prevHash = this.GENESIS_HASH;
+    for (let i = 0; i < events.length; i++) {
+      const evt = events[i];
+      if (evt.previousHash !== prevHash) {
+        return {
+          isValid: false,
+          totalEvents: events.length,
+          tamperedIndex: i,
+          error: `Broken hash chain at index ${i}: expected prevHash ${prevHash}, got ${evt.previousHash}`
+        };
+      }
+      const dataToHash = {
+        id: evt.id,
+        aggregateId: evt.aggregateId,
+        eventType: evt.eventType,
+        actorId: evt.actorId,
+        correlationId: evt.correlationId,
+        idempotencyKey: evt.idempotencyKey || null,
+        aggregateVersion: evt.aggregateVersion,
+        payload: evt.payload,
+        reason: evt.reason || null,
+        securityMetadata: evt.securityMetadata,
+        previousHash: evt.previousHash,
+        createdAt: evt.createdAt
+      };
+      const canonicalSerialized = this.canonicalStringify(dataToHash);
+      const computedHash = crypto8.createHash("sha256").update(canonicalSerialized).digest("hex");
+      if (computedHash !== evt.currentHash) {
+        return {
+          isValid: false,
+          totalEvents: events.length,
+          tamperedIndex: i,
+          error: `Tampered payload or signature at index ${i}: expected ${computedHash}, got ${evt.currentHash}`
+        };
+      }
+      prevHash = evt.currentHash;
+    }
+    return {
+      isValid: true,
+      totalEvents: events.length
+    };
+  }
+};
+
+// server/services/listing/ListingActivationService.ts
+var ListingActivationService = class {
+  /**
+   * Idempotent activation of an APPROVED or SCHEDULED listing request.
+   */
+  static async activateMarket(listingRequestId, actorId, idempotencyKeyHeader, securityMeta) {
+    const listing = db.listingRequests.get(listingRequestId);
+    if (!listing) {
+      throw new Error(`Listing request tidak ditemukan: ${listingRequestId}`);
+    }
+    if (listing.status !== "APPROVED" && listing.status !== "SCHEDULED") {
+      if (listing.status === "ACTIVE") {
+        const existingMarket = Array.from(db.markets.values()).find(
+          (m) => m.listingRequestId === listing.id
+        );
+        if (existingMarket) {
+          return {
+            success: true,
+            isIdempotentReplay: true,
+            market: existingMarket,
+            outboxEventId: `idemp-${listing.id}`,
+            message: `Market ${existingMarket.symbol} sudah dalam status ACTIVE (Idempotent replay)`
+          };
+        }
+      }
+      throw new Error(`Listing request ${listingRequestId} belum dalam status APPROVED atau SCHEDULED (Status saat ini: ${listing.status})`);
+    }
+    const approval = db.listingApprovals.get(listing.id);
+    if (!approval) {
+      throw new Error("Listing belum memiliki persetujuan (approval) dari reviewer");
+    }
+    if (approval.decision !== "APPROVED") {
+      throw new Error("Listing request ditolak (REJECTED) dan tidak dapat diaktifkan");
+    }
+    if (approval.configVersion !== listing.version) {
+      throw new Error(`Persetujuan reviewer tidak valid: disetujui pada versi ${approval.configVersion}, namun versi listing saat ini adalah ${listing.version}`);
+    }
+    const baseAsset = db.assets.get(listing.assetId);
+    const quoteAsset = db.assets.get(listing.quoteAssetId);
+    if (!baseAsset || !quoteAsset) {
+      throw new Error("Asset dasar atau quote asset untuk listing ini tidak valid");
+    }
+    const marketSymbol = `${baseAsset.symbol}-${quoteAsset.symbol}`;
+    const idempotencyKey = idempotencyKeyHeader || `activate:${listing.id}:v${listing.version}`;
+    const existingOutbox = Array.from(db.outboxEvents.values()).find(
+      (o) => o.idempotencyKey === idempotencyKey
+    );
+    if (existingOutbox && existingOutbox.status === "DELIVERED") {
+      const existingMarket = db.markets.get(marketSymbol);
+      if (existingMarket && existingMarket.status === "ACTIVE") {
+        return {
+          success: true,
+          isIdempotentReplay: true,
+          market: existingMarket,
+          outboxEventId: existingOutbox.id,
+          message: `Aktivasi idempoten: Market ${marketSymbol} telah aktif sebelumnya.`
+        };
+      }
+    }
+    const duplicateMarket = Array.from(db.markets.values()).find(
+      (m) => m.baseAssetId === baseAsset.id && m.quoteAssetId === quoteAsset.id && m.id !== marketSymbol
+    );
+    if (duplicateMarket) {
+      throw new Error(`Market pair untuk ${baseAsset.symbol}/${quoteAsset.symbol} sudah ada dengan ID ${duplicateMarket.id}`);
+    }
+    const outboxId = crypto9.randomUUID();
+    const outboxEvent = {
+      id: outboxId,
+      aggregateId: listing.id,
+      eventType: "COMMAND_ACTIVATE_MARKET",
+      payload: {
+        listingRequestId: listing.id,
+        symbol: marketSymbol,
+        baseCurrency: baseAsset.symbol,
+        quoteCurrency: quoteAsset.symbol,
+        baseDecimals: baseAsset.decimals,
+        quoteDecimals: quoteAsset.decimals,
+        tickSize: listing.tickSize,
+        lotSize: listing.lotSize,
+        minQuantity: listing.minQuantity,
+        minNotional: listing.minNotional,
+        makerFeeBps: listing.makerFeeBps,
+        takerFeeBps: listing.takerFeeBps,
+        version: listing.version
+      },
+      idempotencyKey,
+      status: "PROCESSING",
+      attempts: 1,
+      createdAt: Date.now()
+    };
+    db.outboxEvents.set(outboxId, outboxEvent);
+    const now = Date.now();
+    const marketEntity = {
+      id: marketSymbol,
+      baseAssetId: baseAsset.id,
+      quoteAssetId: quoteAsset.id,
+      listingRequestId: listing.id,
+      symbol: marketSymbol,
+      status: "PREPARING",
+      tickSize: listing.tickSize,
+      lotSize: listing.lotSize,
+      minQuantity: listing.minQuantity,
+      minNotional: listing.minNotional,
+      makerFeeBps: listing.makerFeeBps,
+      takerFeeBps: listing.takerFeeBps,
+      version: listing.version,
+      createdAt: now,
+      updatedAt: now
+    };
+    db.markets.set(marketSymbol, marketEntity);
+    ListingAuditService.recordEvent({
+      aggregateId: listing.id,
+      eventType: "MARKET_PREPARED",
+      actorId,
+      idempotencyKey,
+      aggregateVersion: listing.version,
+      payload: {
+        symbol: marketSymbol,
+        marketId: marketEntity.id,
+        outboxId
+      },
+      reason: "Outbox activation event generated, market set to PREPARING",
+      securityMetadata: securityMeta
+    });
+    try {
+      const tradingPair = {
+        id: marketSymbol,
+        baseCurrency: baseAsset.symbol,
+        quoteCurrency: quoteAsset.symbol,
+        baseDecimals: baseAsset.decimals,
+        quoteDecimals: quoteAsset.decimals,
+        minOrderSize: listing.minQuantity || "100000000",
+        maxOrderSize: listing.maxQuantity || (10000000n * 10n ** BigInt(baseAsset.decimals)).toString(),
+        // 10,000,000 base tokens
+        makerFeeBps: listing.makerFeeBps,
+        takerFeeBps: listing.takerFeeBps,
+        isActive: true,
+        isHalted: false,
+        lastPrice: "0",
+        high24h: "0",
+        low24h: "0",
+        volume24h: "0",
+        priceChange24h: "0.00"
+      };
+      db.tradingPairs.set(marketSymbol, tradingPair);
+      const book = matchingEngine.getOrderBook(marketSymbol);
+      if (!book) {
+        throw new Error(`Matching Engine gagal menginisialisasi order book untuk ${marketSymbol}`);
+      }
+      const bookDepth = book.getDepth(5);
+      if (bookDepth.bids.length > 0 || bookDepth.asks.length > 0) {
+        book.bids = [];
+        book.asks = [];
+      }
+      marketEntity.status = "ACTIVE";
+      marketEntity.activatedAt = Date.now();
+      marketEntity.updatedAt = Date.now();
+      db.markets.set(marketSymbol, marketEntity);
+      listing.status = "ACTIVE";
+      listing.updatedAt = Date.now();
+      db.listingRequests.set(listing.id, listing);
+      baseAsset.status = "ACTIVE";
+      baseAsset.depositEnabled = listing.depositEnabled !== void 0 ? listing.depositEnabled : true;
+      baseAsset.withdrawalEnabled = listing.withdrawalEnabled !== void 0 ? listing.withdrawalEnabled : true;
+      baseAsset.depositOpenedAt = listing.depositOpenedAt || Date.now();
+      baseAsset.withdrawalOpenedAt = listing.withdrawalOpenedAt || Date.now();
+      baseAsset.updatedAt = Date.now();
+      db.assets.set(baseAsset.id, baseAsset);
+      const mmUserId = listing.marketMakerAccountId || "usr-mm-0000-0000-000000000001";
+      const defaultBaseSeed = (10000n * 10n ** BigInt(baseAsset.decimals)).toString();
+      const defaultQuoteAmount = quoteAsset.symbol === "IDR" ? 50000000n : 50000n;
+      const defaultQuoteSeed = (defaultQuoteAmount * 10n ** BigInt(quoteAsset.decimals)).toString();
+      const initialBaseSeed = listing.initialLiquidityBase || defaultBaseSeed;
+      const initialQuoteSeed = listing.initialLiquidityQuoteIdr || defaultQuoteSeed;
+      db.createOrGetAccount(mmUserId, baseAsset.symbol, initialBaseSeed);
+      db.createOrGetAccount(mmUserId, quoteAsset.symbol, initialQuoteSeed);
+      if (listing.projectOwnerAccountId) {
+        db.createOrGetAccount(listing.projectOwnerAccountId, baseAsset.symbol, "0");
+        db.createOrGetAccount(listing.projectOwnerAccountId, quoteAsset.symbol, "0");
+      }
+      outboxEvent.status = "DELIVERED";
+      outboxEvent.deliveredAt = Date.now();
+      db.outboxEvents.set(outboxId, outboxEvent);
+      db.scheduleSave();
+      ListingAuditService.recordEvent({
+        aggregateId: listing.id,
+        eventType: "MARKET_ACTIVATED",
+        actorId,
+        idempotencyKey,
+        aggregateVersion: listing.version,
+        payload: {
+          symbol: marketSymbol,
+          activatedAt: marketEntity.activatedAt,
+          engineReady: true
+        },
+        reason: "Market successfully activated and matching engine verified",
+        securityMetadata: securityMeta
+      });
+      marketWsService.broadcast({
+        type: "MARKET_ACTIVATED",
+        data: {
+          symbol: marketSymbol,
+          baseCurrency: baseAsset.symbol,
+          quoteCurrency: quoteAsset.symbol,
+          tickSize: listing.tickSize,
+          lotSize: listing.lotSize,
+          activatedAt: marketEntity.activatedAt
+        }
+      });
+      return {
+        success: true,
+        isIdempotentReplay: false,
+        market: marketEntity,
+        outboxEventId: outboxId,
+        message: `Market ${marketSymbol} berhasil diaktifkan secara idempoten.`
+      };
+    } catch (engineErr) {
+      outboxEvent.status = "FAILED";
+      outboxEvent.lastError = engineErr.message;
+      db.outboxEvents.set(outboxId, outboxEvent);
+      marketEntity.status = "PREPARING";
+      db.markets.set(marketSymbol, marketEntity);
+      ListingAuditService.recordEvent({
+        aggregateId: listing.id,
+        eventType: "ACTIVATION_FAILED",
+        actorId,
+        idempotencyKey,
+        aggregateVersion: listing.version,
+        payload: {
+          symbol: marketSymbol,
+          error: engineErr.message
+        },
+        reason: "Engine activation failed during execution",
+        securityMetadata: securityMeta
+      });
+      throw new Error(`Aktivasi market gagal pada matching engine: ${engineErr.message}`);
+    }
+  }
+  /**
+   * Health and readiness reconciliation between database and matching engine.
+   * If a divergence is found (e.g. market is ACTIVE in DB but OrderBook is missing in Engine),
+   * repairs or flags the divergence.
+   */
+  static reconcileMarketReadiness(marketSymbol) {
+    const market = db.markets.get(marketSymbol);
+    if (!market) {
+      return {
+        isConsistent: false,
+        dbStatus: "NOT_FOUND",
+        engineBookLoaded: false,
+        bidsCount: 0,
+        asksCount: 0,
+        repaired: false
+      };
+    }
+    let bookLoaded = false;
+    let bidsCount = 0;
+    let asksCount = 0;
+    let repaired = false;
+    try {
+      const book = matchingEngine.getOrderBook(marketSymbol);
+      if (book) {
+        bookLoaded = true;
+        bidsCount = book.bids.length;
+        asksCount = book.asks.length;
+      }
+    } catch (e) {
+      bookLoaded = false;
+    }
+    if (market.status === "ACTIVE" && !bookLoaded) {
+      const pair = db.tradingPairs.get(marketSymbol);
+      if (pair) {
+        matchingEngine.getOrderBook(marketSymbol);
+        repaired = true;
+      }
+    }
+    return {
+      isConsistent: market.status === "ACTIVE" ? bookLoaded : true,
+      dbStatus: market.status,
+      engineBookLoaded: bookLoaded,
+      bidsCount,
+      asksCount,
+      repaired
+    };
+  }
+};
+
+// server/services/MarketLifecycleScheduler.ts
+function ensureScheduledPairEntry(listing) {
+  if (listing.status !== "SCHEDULED") return null;
+  const baseAsset = db.assets.get(listing.assetId);
+  const quoteAsset = db.assets.get(listing.quoteAssetId);
+  if (!baseAsset || !quoteAsset) return null;
+  const pairId = `${baseAsset.symbol}-${quoteAsset.symbol}`;
+  const existing = db.tradingPairs.get(pairId);
+  if (existing) {
+    existing.scheduledAt = listing.scheduledAt;
+    if (!existing.isActive) {
+      existing.isHalted = true;
+    }
+    db.tradingPairs.set(pairId, existing);
+    return existing;
+  }
+  const pair = {
+    id: pairId,
+    baseCurrency: baseAsset.symbol,
+    quoteCurrency: quoteAsset.symbol,
+    baseDecimals: baseAsset.decimals,
+    quoteDecimals: quoteAsset.decimals,
+    minOrderSize: listing.minQuantity || "100000000",
+    maxOrderSize: listing.maxQuantity || (10000000n * 10n ** BigInt(baseAsset.decimals)).toString(),
+    makerFeeBps: listing.makerFeeBps ?? 10,
+    takerFeeBps: listing.takerFeeBps ?? 20,
+    isActive: false,
+    isHalted: true,
+    isDelisted: false,
+    scheduledAt: listing.scheduledAt,
+    lastPrice: "0",
+    high24h: "0",
+    low24h: "0",
+    volume24h: "0",
+    quoteVolume24h: "0",
+    priceChange24h: "+0.00",
+    priceChangePercent24h: "0.00"
+  };
+  db.tradingPairs.set(pairId, pair);
+  return pair;
+}
+function scheduleDelistMarket(pairId, delistScheduledAt, actorId, actorEmail, reason) {
+  const pair = db.tradingPairs.get(pairId);
+  if (!pair) {
+    throw new Error(`Trading pair ${pairId} tidak ditemukan.`);
+  }
+  if (pair.isDelisted) {
+    throw new Error(`Trading pair ${pairId} sudah dalam status DELISTED.`);
+  }
+  if (!Number.isFinite(delistScheduledAt) || delistScheduledAt <= Date.now() + 5e3) {
+    throw new Error("Waktu jadwal delisting harus berada di masa depan (minimal 5 detik dari sekarang).");
+  }
+  const cleanReason = String(reason || "Peninjauan berkala likuiditas & kepatuhan bursa").trim().slice(0, 300);
+  pair.delistScheduledAt = Math.floor(delistScheduledAt);
+  pair.delistReason = cleanReason;
+  db.tradingPairs.set(pair.id, pair);
+  db.auditLogs.push({
+    id: crypto10.randomUUID(),
+    actorId,
+    action: "MARKET_DELIST_SCHEDULED",
+    resource: `pair:${pair.id}`,
+    details: `Delisting pair ${pair.id} dijadwalkan pada ${new Date(pair.delistScheduledAt).toISOString()} oleh ${actorEmail || actorId}. Alasan: ${cleanReason}`,
+    createdAt: Date.now()
+  });
+  db.saveToDisk();
+  marketWsService.broadcastTickerSnapshot();
+  return pair;
+}
+function cancelScheduledDelistMarket(pairId, actorId, actorEmail) {
+  const pair = db.tradingPairs.get(pairId);
+  if (!pair) {
+    throw new Error(`Trading pair ${pairId} tidak ditemukan.`);
+  }
+  if (pair.isDelisted) {
+    throw new Error(`Pair ${pairId} sudah terlanjur DELISTED. Gunakan tombol Relist Market untuk mengaktifkan kembali.`);
+  }
+  if (!pair.delistScheduledAt) {
+    throw new Error(`Pair ${pairId} tidak memiliki jadwal delisting aktif.`);
+  }
+  pair.delistScheduledAt = void 0;
+  pair.delistReason = void 0;
+  db.tradingPairs.set(pair.id, pair);
+  db.auditLogs.push({
+    id: crypto10.randomUUID(),
+    actorId,
+    action: "MARKET_DELIST_CANCELLED",
+    resource: `pair:${pair.id}`,
+    details: `Jadwal delisting pair ${pair.id} dibatalkan oleh ${actorEmail || actorId}`,
+    createdAt: Date.now()
+  });
+  db.saveToDisk();
+  marketWsService.broadcastTickerSnapshot();
+  return pair;
+}
+function executeDelistMarket(pairId, actorId, actorEmail, reason) {
+  const pair = db.tradingPairs.get(pairId);
+  if (!pair) {
+    throw new Error(`Trading pair ${pairId} tidak ditemukan.`);
+  }
+  const now = Date.now();
+  const cleanReason = String(reason || pair.delistReason || "Market di-delisting oleh operator bursa").trim().slice(0, 300);
+  let cancelledOrdersCount = 0;
+  const openOrdersOnPair = Array.from(db.orders.values()).filter(
+    (o) => o.pairId === pairId && (o.status === "NEW" || o.status === "PARTIALLY_FILLED")
+  );
+  for (const order of openOrdersOnPair) {
+    try {
+      matchingEngine.cancelOrder(order.id, pairId, order.userId);
+      cancelledOrdersCount += 1;
+    } catch (err) {
+      console.warn(`[MarketLifecycle] Failed to cancel order ${order.id} during delisting of ${pairId}:`, err?.message || err);
+    }
+  }
+  let stoppedBotsCount = 0;
+  if (db.botInstances && typeof db.botInstances.values === "function") {
+    for (const bot of db.botInstances.values()) {
+      if (bot.pairId === pairId && (bot.status === "RUNNING" || bot.status === "PAUSED" || bot.status === "READY")) {
+        bot.status = "STOPPED";
+        bot.stoppedAt = now;
+        bot.updatedAt = now;
+        bot.lastExecutionResult = `Auto-stopped because market ${pairId} was delisted`;
+        db.botInstances.set(bot.id, bot);
+        stoppedBotsCount += 1;
+      }
+    }
+  }
+  pair.isActive = false;
+  pair.isHalted = true;
+  pair.isDelisted = true;
+  pair.delistedAt = now;
+  pair.delistScheduledAt = void 0;
+  pair.delistReason = cleanReason;
+  db.tradingPairs.set(pair.id, pair);
+  const market = db.markets.get(pair.id);
+  if (market) {
+    market.status = "CLOSED";
+    market.updatedAt = now;
+    db.markets.set(market.id, market);
+  }
+  db.auditLogs.push({
+    id: crypto10.randomUUID(),
+    actorId,
+    action: "MARKET_DELISTED",
+    resource: `pair:${pair.id}`,
+    details: `Market ${pair.id} di-DELISTING oleh ${actorEmail || actorId}. Order dibatalkan & direfund: ${cancelledOrdersCount}, Bot dihentikan: ${stoppedBotsCount}. Alasan: ${cleanReason}`,
+    createdAt: now
+  });
+  db.saveToDisk();
+  marketWsService.broadcastDepth(pair.id);
+  marketWsService.broadcastTickerSnapshot();
+  marketWsService.broadcast({
+    type: "MARKET_STATUS_CHANGED",
+    data: {
+      symbol: pair.id,
+      status: "DELISTED",
+      isDelisted: true,
+      isHalted: true
+    }
+  });
+  return {
+    pair,
+    cancelledOrdersCount,
+    stoppedBotsCount
+  };
+}
+function relistMarket(pairId, actorId, actorEmail) {
+  const pair = db.tradingPairs.get(pairId);
+  if (!pair) {
+    throw new Error(`Trading pair ${pairId} tidak ditemukan.`);
+  }
+  const now = Date.now();
+  pair.isDelisted = false;
+  pair.delistedAt = void 0;
+  pair.delistScheduledAt = void 0;
+  pair.delistReason = void 0;
+  pair.isActive = true;
+  pair.isHalted = false;
+  db.tradingPairs.set(pair.id, pair);
+  const market = db.markets.get(pair.id);
+  if (market) {
+    market.status = "ACTIVE";
+    market.updatedAt = now;
+    db.markets.set(market.id, market);
+  }
+  db.auditLogs.push({
+    id: crypto10.randomUUID(),
+    actorId,
+    action: "MARKET_RELISTED",
+    resource: `pair:${pair.id}`,
+    details: `Market ${pair.id} diaktifkan kembali (RELISTED) oleh ${actorEmail || actorId}`,
+    createdAt: now
+  });
+  db.saveToDisk();
+  marketWsService.broadcastTickerSnapshot();
+  return pair;
+}
+var MarketLifecycleScheduler = class {
+  constructor() {
+    this.timer = null;
+    this.isTicking = false;
+  }
+  start() {
+    if (this.timer) return;
+    for (const listing of db.listingRequests.values()) {
+      if (listing.status === "SCHEDULED") {
+        ensureScheduledPairEntry(listing);
+      }
+    }
+    this.timer = setInterval(() => {
+      this.tick().catch((err) => {
+        console.error("[MarketLifecycleScheduler] Tick error:", err?.message || err);
+      });
+    }, 3e3);
+    console.log("[DIMONEX] MarketLifecycleScheduler started (3s interval for scheduled listings & delistings)");
+  }
+  stop() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+  async tick() {
+    if (this.isTicking) return;
+    this.isTicking = true;
+    try {
+      const now = Date.now();
+      for (const listing of db.listingRequests.values()) {
+        if (listing.status === "SCHEDULED" && listing.scheduledAt && now >= listing.scheduledAt) {
+          try {
+            const idempKey = `sched-auto-act:${listing.id}:v${listing.version}:${listing.scheduledAt}`;
+            const result = await ListingActivationService.activateMarket(
+              listing.id,
+              "SYSTEM_SCHEDULER",
+              idempKey,
+              { ip: "127.0.0.1", userAgent: "MarketLifecycleScheduler", authRole: "SYSTEM" }
+            );
+            const pair = db.tradingPairs.get(result.market.symbol);
+            if (pair) {
+              pair.isActive = true;
+              pair.isHalted = false;
+              pair.scheduledAt = void 0;
+              db.tradingPairs.set(pair.id, pair);
+            }
+            db.saveToDisk();
+            marketWsService.broadcastTickerSnapshot();
+            console.log(`[MarketLifecycleScheduler] Auto-activated scheduled listing ${result.market.symbol}`);
+          } catch (err) {
+            console.warn(`[MarketLifecycleScheduler] Auto-activation skipped for ${listing.id}:`, err?.message || err);
+          }
+        }
+      }
+      for (const pair of db.tradingPairs.values()) {
+        if (!pair.isDelisted && pair.delistScheduledAt && now >= pair.delistScheduledAt) {
+          try {
+            const res = executeDelistMarket(
+              pair.id,
+              "SYSTEM_SCHEDULER",
+              "system-scheduler@dimonex.id",
+              pair.delistReason || "Jadwal delisting otomatis tercapai"
+            );
+            console.log(
+              `[MarketLifecycleScheduler] Auto-delisted ${pair.id} (cancelled ${res.cancelledOrdersCount} orders, stopped ${res.stoppedBotsCount} bots)`
+            );
+          } catch (err) {
+            console.warn(`[MarketLifecycleScheduler] Auto-delist failed for ${pair.id}:`, err?.message || err);
+          }
+        }
+      }
+    } finally {
+      this.isTicking = false;
+    }
+  }
+};
+var marketLifecycleScheduler = new MarketLifecycleScheduler();
 
 // server/routes/trading.ts
 var tradingRouter = Router3();
@@ -5418,7 +6750,16 @@ tradingRouter.get("/pairs", (req, res) => {
       }
     }
   }
+  for (const listing of db.listingRequests.values()) {
+    if (listing.status === "SCHEDULED") {
+      ensureScheduledPairEntry(listing);
+    }
+  }
+  db.ensureAssetsForTradingPairs();
   db.recalculatePair24hStats();
+  const assetsBySymbol = new Map(
+    Array.from(db.assets.values()).map((a) => [a.symbol.toUpperCase(), a])
+  );
   const enrichedPairs = Array.from(db.tradingPairs.values()).map((pair) => {
     const market = db.markets.get(pair.id);
     const listing = market ? db.listingRequests.get(market.listingRequestId) : Array.from(db.listingRequests.values()).find((l) => {
@@ -5426,17 +6767,27 @@ tradingRouter.get("/pairs", (req, res) => {
       const quote = db.assets.get(l.quoteAssetId);
       return base && base.symbol === pair.baseCurrency && (!quote || quote.symbol === pair.quoteCurrency);
     });
-    const baseAsset = Array.from(db.assets.values()).find((a) => a.symbol === pair.baseCurrency);
+    const baseAsset = assetsBySymbol.get(pair.baseCurrency.toUpperCase());
+    const quoteAsset = assetsBySymbol.get(pair.quoteCurrency.toUpperCase());
     const isNew = pair.baseCurrency === "SOL" || listing !== void 0;
+    const resolvedScheduledAt = listing?.status === "SCHEDULED" ? listing.scheduledAt || pair.scheduledAt : pair.scheduledAt;
+    const resolvedListingStatus = pair.isDelisted ? "DELISTED" : listing?.status === "SCHEDULED" && !pair.isActive ? "SCHEDULED" : listing?.status || (pair.isActive ? "ACTIVE" : "PREPARING");
     return {
       ...pair,
+      baseName: baseAsset?.name || pair.baseCurrency,
+      baseLogoUrl: baseAsset?.logoUrl || "",
+      quoteLogoUrl: quoteAsset?.logoUrl || "",
       isNewListing: isNew,
-      listingStatus: listing?.status || (pair.isActive ? "ACTIVE" : "PREPARING"),
+      listingStatus: resolvedListingStatus,
       depositEnabled: baseAsset?.depositEnabled ?? true,
       withdrawalEnabled: baseAsset?.withdrawalEnabled ?? true,
       depositOpenedAt: baseAsset?.depositOpenedAt || listing?.depositOpenedAt,
       withdrawalOpenedAt: baseAsset?.withdrawalOpenedAt || listing?.withdrawalOpenedAt,
-      scheduledAt: listing?.scheduledAt
+      scheduledAt: resolvedScheduledAt,
+      isDelisted: Boolean(pair.isDelisted),
+      delistedAt: pair.delistedAt,
+      delistScheduledAt: pair.delistScheduledAt,
+      delistReason: pair.delistReason
     };
   });
   res.json(enrichedPairs);
@@ -5600,6 +6951,17 @@ tradingRouter.post("/order", requireAuth, (req, res) => {
     if (!pairId || !side || !orderType || !quantity) {
       return res.status(400).json({ error: "Parameter order tidak lengkap" });
     }
+    const targetPair = db.tradingPairs.get(pairId);
+    if (targetPair?.isDelisted) {
+      return res.status(400).json({
+        error: `Market ${pairId} telah di-delisting dari bursa dan tidak lagi menerima order baru.`
+      });
+    }
+    if (targetPair && !targetPair.isActive && targetPair.scheduledAt && targetPair.scheduledAt > Date.now()) {
+      return res.status(400).json({
+        error: `Market ${pairId} dijadwalkan listing pada ${new Date(targetPair.scheduledAt).toLocaleString("id-ID")}. Trading akan dibuka otomatis setelah countdown selesai.`
+      });
+    }
     const result = matchingEngine.placeOrder({
       userId: user.id,
       pairId,
@@ -5701,7 +7063,7 @@ tradingRouter.get("/reference-price/:pairId", async (req, res) => {
 
 // server/routes/wallet.ts
 import { Router as Router4 } from "express";
-import crypto8 from "crypto";
+import crypto11 from "crypto";
 init_database();
 init_PrecisionMath();
 var walletRouter = Router4();
@@ -5773,7 +7135,7 @@ walletRouter.post("/idr/simulate-deposit-payment", requireAuth, (req, res) => {
     if (amountUnits <= 0n) {
       return res.status(400).json({ error: "Nominal deposit harus lebih dari 0" });
     }
-    const txId = crypto8.randomUUID();
+    const txId = crypto11.randomUUID();
     const idempotencyKey = `dep-idr-${txId}`;
     LedgerService.deposit(user.id, "IDR", amountUnits, txId, idempotencyKey);
     const fiatTx = {
@@ -5823,7 +7185,7 @@ walletRouter.post("/idr/withdraw", requireAuth, (req, res) => {
       return res.status(400).json({ error: "Saldo IDR yang tersedia tidak mencukupi" });
     }
     LedgerService.lockBalance(user.id, "IDR", amountUnits);
-    const txId = crypto8.randomUUID();
+    const txId = crypto11.randomUUID();
     const idempotencyKey = `wd-idr-${txId}`;
     const isLarge = amountUnits > 1000000000n;
     const status = isLarge ? "PENDING" : "COMPLETED";
@@ -6014,7 +7376,7 @@ function getCurrencyNetworks(currency) {
 }
 function generateDeterministicCryptoAddress(userId, currency, network) {
   const clean = currency.toUpperCase();
-  const userHash = crypto8.createHash("sha256").update(userId + clean + (network || "")).digest("hex");
+  const userHash = crypto11.createHash("sha256").update(userId + clean + (network || "")).digest("hex");
   if (clean === "BTC") {
     return { address: `bc1q${userHash.slice(0, 38)}`, chain: "Bitcoin Native SegWit" };
   }
@@ -6077,8 +7439,8 @@ walletRouter.post("/crypto/simulate-deposit-block", requireAuth, (req, res) => {
     if (amountUnits <= 0n) {
       return res.status(400).json({ error: "Nominal deposit harus lebih dari 0" });
     }
-    const txHash = "0x" + crypto8.randomBytes(32).toString("hex");
-    const txId = crypto8.randomUUID();
+    const txHash = "0x" + crypto11.randomBytes(32).toString("hex");
+    const txId = crypto11.randomUUID();
     LedgerService.deposit(user.id, cleanCurr, amountUnits, txId, `dep-crypto-${txId}`);
     const { address, chain } = generateDeterministicCryptoAddress(user.id, cleanCurr, network);
     const cryptoTx = {
@@ -6124,7 +7486,7 @@ walletRouter.post("/crypto/withdraw", requireAuth, (req, res) => {
       return res.status(400).json({ error: `Saldo ${cleanCurr} tidak mencukupi untuk penarikan ini` });
     }
     LedgerService.lockBalance(user.id, cleanCurr, amountUnits);
-    const txId = crypto8.randomUUID();
+    const txId = crypto11.randomUUID();
     const { chain } = generateDeterministicCryptoAddress(user.id, cleanCurr, network);
     const cryptoTx = {
       id: txId,
@@ -6134,7 +7496,7 @@ walletRouter.post("/crypto/withdraw", requireAuth, (req, res) => {
       chain,
       address,
       amount: amountUnits.toString(),
-      txHash: "0x" + crypto8.randomBytes(32).toString("hex"),
+      txHash: "0x" + crypto11.randomBytes(32).toString("hex"),
       status: "PENDING",
       // Cold wallet approval queue
       confirmations: 0,
@@ -6357,7 +7719,7 @@ walletRouter.get("/pnl-analytics", requireAuth, (req, res) => {
           const takerFee = PrecisionMath.calculateFee(quoteVol, 20);
           const isBuy = tIdx % 2 === 0;
           const seededTrade = {
-            id: `usr-seed-${user.id.slice(0, 8)}-${dayOffset}-${tIdx}-${crypto8.randomUUID().slice(0, 6)}`,
+            id: `usr-seed-${user.id.slice(0, 8)}-${dayOffset}-${tIdx}-${crypto11.randomUUID().slice(0, 6)}`,
             pairId: p.id,
             makerOrderId: `usr-ord-m-${dayOffset}-${tIdx}`,
             takerOrderId: `usr-ord-t-${dayOffset}-${tIdx}`,
@@ -6656,7 +8018,7 @@ walletRouter.get("/pnl-analytics", requireAuth, (req, res) => {
 
 // server/routes/apiKeys.ts
 import { Router as Router5 } from "express";
-import crypto9 from "crypto";
+import crypto12 from "crypto";
 init_database();
 var apiKeyRouter = Router5();
 var requireHmacAuth = (req, res, next) => {
@@ -6690,7 +8052,7 @@ var requireHmacAuth = (req, res, next) => {
   }
   const bodyStr = req.body ? JSON.stringify(req.body) : "";
   const message = `${req.method}${req.originalUrl}${timestamp}${bodyStr}`;
-  const computedSig = crypto9.createHmac("sha256", foundKey.secretHash).update(message).digest("hex");
+  const computedSig = crypto12.createHmac("sha256", foundKey.secretHash).update(message).digest("hex");
   if (computedSig !== signature) {
     return res.status(401).json({ error: "Tanda tangan digital HMAC-SHA256 tidak cocok" });
   }
@@ -6706,10 +8068,10 @@ apiKeyRouter.post("/create", requireAuth, (req, res) => {
   try {
     const user = req.user;
     const { label, permissions, ipWhitelist } = req.body;
-    const keyId = "dmx_live_" + crypto9.randomBytes(16).toString("hex");
-    const secretKey = crypto9.randomBytes(32).toString("hex");
+    const keyId = "dmx_live_" + crypto12.randomBytes(16).toString("hex");
+    const secretKey = crypto12.randomBytes(32).toString("hex");
     const newKey = {
-      id: crypto9.randomUUID(),
+      id: crypto12.randomUUID(),
       userId: user.id,
       keyId,
       secretHash: secretKey,
@@ -6759,9 +8121,10 @@ apiKeyRouter.post("/revoke", requireAuth, (req, res) => {
 
 // server/routes/admin.ts
 import { Router as Router6 } from "express";
-import crypto10 from "crypto";
+import crypto13 from "crypto";
 init_database();
 init_PrecisionMath();
+init_PriceAggregatorService();
 var adminRouter = Router6();
 adminRouter.get("/users", requireAdmin, (req, res) => {
   const usersList = Array.from(db.users.values()).map((u) => {
@@ -6799,7 +8162,7 @@ adminRouter.post("/kyc/review", requireAdmin, (req, res) => {
       kyc.reviewedAt = Date.now();
     }
     db.auditLogs.push({
-      id: crypto10.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: adminUser.id,
       action: `KYC_${action}`,
       resource: `user:${userId}`,
@@ -6820,7 +8183,7 @@ adminRouter.post("/pairs/toggle-halt", requireAdmin, (req, res) => {
     pair.isHalted = Boolean(isHalted);
     db.tradingPairs.set(pairId, pair);
     db.auditLogs.push({
-      id: crypto10.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: adminUser.id,
       action: isHalted ? "TRADING_HALTED" : "TRADING_RESUMED",
       resource: `pair:${pairId}`,
@@ -6846,7 +8209,7 @@ adminRouter.post("/pairs/update-fees", requireAdmin, (req, res) => {
     if (takerFeeBps !== void 0) pair.takerFeeBps = Number(takerFeeBps);
     db.tradingPairs.set(pairId, pair);
     db.auditLogs.push({
-      id: crypto10.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: adminUser.id,
       action: "FEES_UPDATED",
       resource: `pair:${pairId}`,
@@ -6874,7 +8237,10 @@ adminRouter.post("/pairs/update-config", requireAdmin, (req, res) => {
       makerFeeBps,
       takerFeeBps,
       isHalted,
-      lastPrice
+      lastPrice,
+      isDelisted,
+      delistScheduledAt,
+      delistReason
     } = req.body;
     if (!pairId) return res.status(400).json({ error: "ID Trading pair wajib ditentukan" });
     const pair = db.tradingPairs.get(pairId);
@@ -6898,8 +8264,6 @@ adminRouter.post("/pairs/update-config", requireAdmin, (req, res) => {
     if (BigInt(updatedMax) < BigInt(updatedMin)) {
       return res.status(400).json({ error: "Kuantitas maksimum order tidak boleh lebih kecil dari kuantitas minimum" });
     }
-    const oldMin = pair.minOrderSize;
-    const oldMax = pair.maxOrderSize;
     pair.minOrderSize = updatedMin;
     pair.maxOrderSize = updatedMax;
     if (makerFeeBps !== void 0 && makerFeeBps !== null) pair.makerFeeBps = Number(makerFeeBps);
@@ -6919,18 +8283,65 @@ adminRouter.post("/pairs/update-config", requireAdmin, (req, res) => {
     const humanMin = PrecisionMath.formatFromUnits(BigInt(updatedMin), baseDecimals);
     const humanMax = PrecisionMath.formatFromUnits(BigInt(updatedMax), baseDecimals);
     db.auditLogs.push({
-      id: crypto10.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: adminUser.id,
       action: "PAIR_CONFIG_UPDATED",
       resource: `pair:${pairId}`,
       details: `Token limits for ${pairId} updated: Min ${humanMin} ${pair.baseCurrency} (${updatedMin} units), Max ${humanMax} ${pair.baseCurrency} (${updatedMax} units) by ${adminUser.email}`,
       createdAt: Date.now()
     });
+    let lifecycleNote = "";
+    if (typeof isDelisted === "boolean") {
+      if (isDelisted && !pair.isDelisted) {
+        const resDelist = executeDelistMarket(
+          pairId,
+          adminUser.id,
+          adminUser.email,
+          delistReason || pair.delistReason || "Manual delisting oleh admin"
+        );
+        lifecycleNote = ` \xB7 Market di-DELISTING (${resDelist.cancelledOrdersCount} order dibatalkan & direfund, ${resDelist.stoppedBotsCount} bot dihentikan).`;
+      } else if (!isDelisted && pair.isDelisted) {
+        relistMarket(pairId, adminUser.id, adminUser.email);
+        if (isHalted !== void 0 && isHalted !== null) {
+          const refreshed = db.tradingPairs.get(pairId);
+          if (refreshed) {
+            refreshed.isHalted = Boolean(isHalted);
+            db.tradingPairs.set(pairId, refreshed);
+          }
+        }
+        lifecycleNote = " \xB7 Market diaktifkan kembali (Relisted).";
+      }
+    }
+    const currentPairAfterToggle = db.tradingPairs.get(pairId) || pair;
+    if (!currentPairAfterToggle.isDelisted && delistScheduledAt !== void 0) {
+      if (delistScheduledAt === null || delistScheduledAt === "" || Number(delistScheduledAt) === 0) {
+        if (currentPairAfterToggle.delistScheduledAt) {
+          cancelScheduledDelistMarket(pairId, adminUser.id, adminUser.email);
+          lifecycleNote += " \xB7 Jadwal delisting dibatalkan.";
+        }
+      } else {
+        const parsedTs = Number(delistScheduledAt);
+        if (!Number.isFinite(parsedTs) || parsedTs <= Date.now() + 1e4) {
+          return res.status(400).json({ error: "Waktu jadwal delisting harus berada di masa depan (minimal 10 detik dari sekarang)." });
+        }
+        if (currentPairAfterToggle.delistScheduledAt !== parsedTs || delistReason !== void 0 && delistReason !== currentPairAfterToggle.delistReason) {
+          scheduleDelistMarket(
+            pairId,
+            parsedTs,
+            adminUser.id,
+            adminUser.email,
+            delistReason || currentPairAfterToggle.delistReason || "Delisting terjadwal oleh admin"
+          );
+          lifecycleNote += ` \xB7 Delisting dijadwalkan pada ${new Date(parsedTs).toLocaleString("id-ID")}.`;
+        }
+      }
+    }
     db.saveToDisk();
+    const finalPair = db.tradingPairs.get(pairId) || pair;
     res.json({
       success: true,
-      message: `Konfigurasi kuantitas order ${pairId} berhasil diperbarui: Min ${humanMin} ${pair.baseCurrency}, Max ${humanMax} ${pair.baseCurrency}`,
-      pair,
+      message: `Konfigurasi ${pairId} berhasil diperbarui: Min ${humanMin} ${finalPair.baseCurrency}, Max ${humanMax} ${finalPair.baseCurrency}${lifecycleNote}`,
+      pair: finalPair,
       humanLimits: {
         minTokens: humanMin,
         maxTokens: humanMax,
@@ -6978,7 +8389,7 @@ adminRouter.post("/withdrawals/approve", requireAdmin, (req, res) => {
       db.cryptoTransactions.set(txId, tx);
     }
     db.auditLogs.push({
-      id: crypto10.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: adminUser.id,
       action: "WITHDRAWAL_APPROVED",
       resource: `tx:${txId}`,
@@ -7023,7 +8434,7 @@ adminRouter.post("/withdrawals/reject", requireAdmin, (req, res) => {
       db.cryptoTransactions.set(txId, tx);
     }
     db.auditLogs.push({
-      id: crypto10.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: adminUser.id,
       action: "WITHDRAWAL_REJECTED",
       resource: `tx:${txId}`,
@@ -7102,7 +8513,7 @@ adminRouter.post("/users/role", requireAdmin, (req, res) => {
     targetUser.updatedAt = Date.now();
     db.users.set(userId, targetUser);
     db.auditLogs.push({
-      id: crypto10.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: adminUser.id,
       action: "USER_ROLE_CHANGED",
       resource: `user:${userId}`,
@@ -7126,7 +8537,7 @@ adminRouter.post("/users/reset-2fa", requireAdmin, (req, res) => {
     targetUser.updatedAt = Date.now();
     db.users.set(userId, targetUser);
     db.auditLogs.push({
-      id: crypto10.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: adminUser.id,
       action: "USER_2FA_RESET",
       resource: `user:${userId}`,
@@ -7198,7 +8609,7 @@ adminRouter.post("/pairs/create", requireAdmin, (req, res) => {
     };
     db.tradingPairs.set(pairId, newPair);
     db.auditLogs.push({
-      id: crypto10.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: adminUser.id,
       action: "PAIR_CREATED",
       resource: `pair:${pairId}`,
@@ -7224,7 +8635,7 @@ adminRouter.get("/bots/all", requireAdmin, (req, res) => {
         status: b.status,
         ownerEmail: owner ? owner.email : "Unknown",
         ownerUserId: b.ownerUserId,
-        activeOrdersCount: b.depthLiquidityConfig?.activeOrderIds?.length || (b.priceFollowerConfig?.activeBuyOrderId ? 1 : 0) + (b.priceFollowerConfig?.activeSellOrderId ? 1 : 0) || 0,
+        activeOrdersCount: b.depthLiquidityConfig?.activeOrderIds?.length || b.movementDepthConfig?.activeOrderIds?.length || (b.priceFollowerConfig?.activeBuyOrderId ? 1 : 0) + (b.priceFollowerConfig?.activeSellOrderId ? 1 : 0) || 0,
         stats: b.stats,
         lastHeartbeat: b.lastHeartbeat,
         createdAt: b.createdAt
@@ -7257,7 +8668,7 @@ adminRouter.post("/bots/emergency-stop", requireAdmin, (req, res) => {
       }
     }
     db.auditLogs.push({
-      id: crypto10.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: adminUser.id,
       action: "BOTS_EMERGENCY_STOP",
       resource: botId ? `bot:${botId}` : "bots:all",
@@ -7298,7 +8709,7 @@ adminRouter.post("/ledger/adjust-balance", requireAdmin, (req, res) => {
     treasuryAcc.version += 1;
     treasuryAcc.updatedAt = Date.now();
     db.auditLogs.push({
-      id: crypto10.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: adminUser.id,
       action: "LEDGER_ADJUSTMENT",
       resource: `account:${userAcc.id}`,
@@ -7333,7 +8744,7 @@ adminRouter.post("/earn/pools/update", requireAdmin, (req, res) => {
     if (apy !== void 0) pool.apy = Number(apy);
     if (status !== void 0) pool.status = status;
     db.auditLogs.push({
-      id: crypto10.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: adminUser.id,
       action: "EARN_POOL_UPDATED",
       resource: `pool:${poolId}`,
@@ -7362,7 +8773,7 @@ adminRouter.post("/copy-trading/masters/update", requireAdmin, (req, res) => {
     if (status !== void 0) master.status = status;
     if (profitShareBps !== void 0) master.profitShareBps = Number(profitShareBps);
     db.auditLogs.push({
-      id: crypto10.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: adminUser.id,
       action: "COPY_MASTER_UPDATED",
       resource: `master:${masterId}`,
@@ -7394,7 +8805,7 @@ adminRouter.post("/vip-tiers/update", requireAdmin, (req, res) => {
     if (makerFeeBps !== void 0) t.makerFeeBps = Number(makerFeeBps);
     if (takerFeeBps !== void 0) t.takerFeeBps = Number(takerFeeBps);
     db.auditLogs.push({
-      id: crypto10.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: adminUser.id,
       action: "VIP_TIER_UPDATED",
       resource: `vip:tier_${tier}`,
@@ -7409,6 +8820,544 @@ adminRouter.post("/vip-tiers/update", requireAdmin, (req, res) => {
 adminRouter.get("/audit-logs", requireAdmin, (req, res) => {
   res.json(db.auditLogs.slice(-200).reverse());
 });
+adminRouter.get("/external-ws/whitelist", requireAdmin, (req, res) => {
+  try {
+    const items = Array.from(db.externalWsWhitelist.values()).map((entry) => {
+      const snap = priceAggregatorService.getSymbolSnapshot(entry.symbol, "AGGREGATED");
+      return {
+        ...entry,
+        binancePrice: snap.binancePrice,
+        bybitPrice: snap.bybitPrice,
+        binanceFresh: snap.binanceFresh,
+        bybitFresh: snap.bybitFresh
+      };
+    });
+    res.json({
+      success: true,
+      items,
+      feedStatus: {
+        binance: {
+          status: priceAggregatorService.binance.getConnectionStatus(),
+          subscribedCount: priceAggregatorService.binance.getSubscribedSymbols().length,
+          subscribedSymbols: priceAggregatorService.binance.getSubscribedSymbols()
+        },
+        bybit: {
+          status: priceAggregatorService.bybit.getConnectionStatus(),
+          subscribedCount: priceAggregatorService.bybit.getSubscribedSymbols().length,
+          subscribedSymbols: priceAggregatorService.bybit.getSubscribedSymbols()
+        }
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+adminRouter.get("/external-ws/catalog", requireAdmin, async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim().toUpperCase();
+    const providerFilter = String(req.query.provider || "ALL").toUpperCase();
+    const force = req.query.refresh === "1";
+    const catalog = await priceAggregatorService.fetchAvailableCatalog(force);
+    let filtered = catalog.items;
+    if (providerFilter === "BINANCE") {
+      filtered = filtered.filter((i) => i.providers.includes("binance"));
+    } else if (providerFilter === "BYBIT") {
+      filtered = filtered.filter((i) => i.providers.includes("bybit"));
+    }
+    if (q) {
+      filtered = filtered.filter(
+        (i) => i.symbol.includes(q) || i.baseAsset.includes(q) || i.quoteAsset.includes(q)
+      );
+    }
+    const whitelistedSet = new Set(Array.from(db.externalWsWhitelist.keys()));
+    const limited = filtered.slice(0, 60).map((item) => ({
+      ...item,
+      isWhitelisted: whitelistedSet.has(item.symbol)
+    }));
+    res.json({
+      success: true,
+      source: catalog.source,
+      fetchedAt: catalog.fetchedAt,
+      totalMatches: filtered.length,
+      items: limited
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+adminRouter.post("/external-ws/whitelist/add", requireAdmin, async (req, res) => {
+  try {
+    const adminUser = req.user;
+    const rawSymbol = String(req.body?.symbol || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!rawSymbol || rawSymbol.length < 4) {
+      return res.status(400).json({ error: "Simbol pair tidak valid (contoh: SOLUSDT, PEPEUSDT, ETHBTC)." });
+    }
+    const providersInput = Array.isArray(req.body?.providers) && req.body.providers.length > 0 ? req.body.providers.filter((p) => p === "binance" || p === "bybit") : ["binance", "bybit"];
+    const providers = providersInput.length > 0 ? providersInput : ["binance", "bybit"];
+    const parsed = parseExternalPairSymbol(rawSymbol);
+    const label = req.body?.label ? String(req.body.label).trim() : `${parsed.baseAsset} / ${parsed.quoteAsset}`;
+    const entry = {
+      symbol: rawSymbol,
+      baseAsset: parsed.baseAsset,
+      quoteAsset: parsed.quoteAsset,
+      label,
+      providers,
+      enabled: true,
+      addedBy: adminUser?.email || "ADMIN",
+      addedAt: Date.now()
+    };
+    db.externalWsWhitelist.set(rawSymbol, entry);
+    db.saveToDisk();
+    await priceAggregatorService.seedSymbolFromCatalog(rawSymbol, providers);
+    priceAggregatorService.syncWhitelistSymbols(
+      db.getEnabledExternalWsSymbols("binance"),
+      db.getEnabledExternalWsSymbols("bybit")
+    );
+    db.auditLogs.push({
+      id: crypto13.randomUUID(),
+      actorId: adminUser?.id || "ADMIN",
+      action: "EXTERNAL_WS_WHITELIST_ADDED",
+      resource: `ws_pair:${rawSymbol}`,
+      details: `Pair ${rawSymbol} (${providers.join(", ")}) ditambahkan ke whitelist WebSocket oleh ${adminUser?.email}`,
+      createdAt: Date.now()
+    });
+    db.scheduleSave();
+    res.json({
+      success: true,
+      message: `Pair ${rawSymbol} ditambahkan ke whitelist & stream WebSocket Binance/Bybit disinkronkan.`,
+      entry
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/external-ws/whitelist/toggle", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const rawSymbol = String(req.body?.symbol || "").trim().toUpperCase();
+    const entry = db.externalWsWhitelist.get(rawSymbol);
+    if (!entry) {
+      return res.status(404).json({ error: `Pair ${rawSymbol} tidak ditemukan di whitelist.` });
+    }
+    entry.enabled = req.body?.enabled !== void 0 ? Boolean(req.body.enabled) : !entry.enabled;
+    if (Array.isArray(req.body?.providers) && req.body.providers.length > 0) {
+      const validProvs = req.body.providers.filter((p) => p === "binance" || p === "bybit");
+      if (validProvs.length > 0) entry.providers = validProvs;
+    }
+    db.externalWsWhitelist.set(rawSymbol, entry);
+    db.saveToDisk();
+    priceAggregatorService.syncWhitelistSymbols(
+      db.getEnabledExternalWsSymbols("binance"),
+      db.getEnabledExternalWsSymbols("bybit")
+    );
+    db.auditLogs.push({
+      id: crypto13.randomUUID(),
+      actorId: adminUser?.id || "ADMIN",
+      action: "EXTERNAL_WS_WHITELIST_TOGGLED",
+      resource: `ws_pair:${rawSymbol}`,
+      details: `Pair ${rawSymbol} diubah status=${entry.enabled ? "ENABLED" : "DISABLED"} oleh ${adminUser?.email}`,
+      createdAt: Date.now()
+    });
+    db.scheduleSave();
+    res.json({
+      success: true,
+      message: `Pair ${rawSymbol} sekarang ${entry.enabled ? "AKTIF" : "NONAKTIF"} di WebSocket feed.`,
+      entry
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/external-ws/whitelist/remove", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const rawSymbol = String(req.body?.symbol || "").trim().toUpperCase();
+    if (!db.externalWsWhitelist.has(rawSymbol)) {
+      return res.status(404).json({ error: `Pair ${rawSymbol} tidak ditemukan di whitelist.` });
+    }
+    db.externalWsWhitelist.delete(rawSymbol);
+    db.saveToDisk();
+    priceAggregatorService.syncWhitelistSymbols(
+      db.getEnabledExternalWsSymbols("binance"),
+      db.getEnabledExternalWsSymbols("bybit")
+    );
+    db.auditLogs.push({
+      id: crypto13.randomUUID(),
+      actorId: adminUser?.id || "ADMIN",
+      action: "EXTERNAL_WS_WHITELIST_REMOVED",
+      resource: `ws_pair:${rawSymbol}`,
+      details: `Pair ${rawSymbol} dihapus dari whitelist WebSocket oleh ${adminUser?.email}`,
+      createdAt: Date.now()
+    });
+    db.scheduleSave();
+    res.json({
+      success: true,
+      message: `Pair ${rawSymbol} dihapus dari whitelist & di-unsubscribe dari WebSocket.`
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+function validateAndSanitizeLogoUrl(rawLogo) {
+  if (rawLogo === void 0) return void 0;
+  const trimmed = String(rawLogo || "").trim();
+  if (!trimmed) return "";
+  if (trimmed.length > 512e3) {
+    throw new Error("Ukuran logo terlalu besar (maksimal 500 KB). Kompres atau pilih gambar yang lebih kecil.");
+  }
+  if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) {
+    if (trimmed.length > 2048) {
+      throw new Error("URL logo terlalu panjang (maksimal 2048 karakter).");
+    }
+    return trimmed;
+  }
+  const dataUriMatch = trimmed.match(/^data:image\/(png|jpeg|jpg|webp|gif|svg\+xml);base64,([A-Za-z0-9+/=]+)$/i);
+  if (dataUriMatch) {
+    const mimeSubtype = dataUriMatch[1].toLowerCase();
+    if (mimeSubtype === "svg+xml") {
+      const decodedSvg = Buffer.from(dataUriMatch[2], "base64").toString("utf8");
+      if (/<script[\s>]|on[a-z]+\s*=|javascript:/i.test(decodedSvg)) {
+        throw new Error("File SVG tidak diizinkan mengandung script atau event handler.");
+      }
+    }
+    return trimmed;
+  }
+  throw new Error("Format logo tidak valid. Gunakan upload PNG/JPG/WebP/SVG atau URL https://");
+}
+function validateOptionalHttpUrl(rawUrl, fieldName) {
+  if (rawUrl === void 0) return void 0;
+  const trimmed = String(rawUrl || "").trim();
+  if (!trimmed) return "";
+  if (!/^https?:\/\//i.test(trimmed)) {
+    throw new Error(`${fieldName} harus diawali dengan https:// atau http://`);
+  }
+  if (trimmed.length > 1024) {
+    throw new Error(`${fieldName} terlalu panjang.`);
+  }
+  return trimmed;
+}
+function serializeAdminAsset(asset) {
+  const linkedPairs = Array.from(db.tradingPairs.values()).filter(
+    (p) => p.baseCurrency.toUpperCase() === asset.symbol.toUpperCase() || p.quoteCurrency.toUpperCase() === asset.symbol.toUpperCase()
+  ).map((p) => p.id);
+  return {
+    ...asset,
+    logoUrl: asset.logoUrl || "",
+    category: asset.category || (asset.network === "FIAT" ? "Fiat" : asset.assetType === "NATIVE" ? "Layer 1" : "Token"),
+    contractAddress: asset.contractAddress || "",
+    description: asset.description || "",
+    websiteUrl: asset.websiteUrl || "",
+    explorerUrl: asset.explorerUrl || "",
+    linkedPairs
+  };
+}
+adminRouter.get("/assets", requireAdmin, (req, res) => {
+  try {
+    const assets = db.ensureAssetsForTradingPairs().map(serializeAdminAsset).sort((a, b) => a.symbol.localeCompare(b.symbol));
+    res.json({
+      success: true,
+      count: assets.length,
+      assets
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+adminRouter.post("/assets", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const rawSymbol = String(req.body?.symbol || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const rawName = String(req.body?.name || "").trim();
+    if (!rawSymbol || rawSymbol.length < 2 || rawSymbol.length > 15) {
+      return res.status(400).json({ error: "Simbol aset harus 2\u201315 karakter alfanumerik (contoh: BTC, SOL, PEPE)." });
+    }
+    if (!rawName || rawName.length < 2 || rawName.length > 80) {
+      return res.status(400).json({ error: "Nama lengkap aset harus 2\u201380 karakter." });
+    }
+    const existing = Array.from(db.assets.values()).find(
+      (a) => a.symbol.toUpperCase() === rawSymbol
+    );
+    if (existing) {
+      return res.status(409).json({ error: `Aset dengan simbol ${rawSymbol} sudah terdaftar. Gunakan menu Edit Aset.` });
+    }
+    const decimals = Number(req.body?.decimals ?? 8);
+    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
+      return res.status(400).json({ error: "Desimal aset harus berupa bilangan bulat antara 0 sampai 18." });
+    }
+    const assetType = req.body?.assetType === "NATIVE" ? "NATIVE" : "TOKEN";
+    const allowedStatuses = ["PENDING", "ACTIVE", "SUSPENDED", "RETIRED"];
+    const status = allowedStatuses.includes(req.body?.status) ? req.body.status : "ACTIVE";
+    const network = String(req.body?.network || rawSymbol).trim().toUpperCase() || rawSymbol;
+    const logoUrl = validateAndSanitizeLogoUrl(req.body?.logoUrl) || "";
+    const websiteUrl = validateOptionalHttpUrl(req.body?.websiteUrl, "Website URL") || "";
+    const explorerUrl = validateOptionalHttpUrl(req.body?.explorerUrl, "Explorer URL") || "";
+    const category = String(req.body?.category || (assetType === "NATIVE" ? "Layer 1" : "Token")).trim().slice(0, 40);
+    const description = String(req.body?.description || "").trim().slice(0, 1e3);
+    const contractAddress = String(req.body?.contractAddress || "").trim().slice(0, 160);
+    const now = Date.now();
+    const newAsset = {
+      id: `ast-${rawSymbol.toLowerCase()}-${crypto13.randomUUID().slice(0, 8)}`,
+      symbol: rawSymbol,
+      name: rawName,
+      logoUrl,
+      assetType,
+      category,
+      decimals,
+      network,
+      contractAddress: contractAddress || void 0,
+      description: description || void 0,
+      websiteUrl: websiteUrl || void 0,
+      explorerUrl: explorerUrl || void 0,
+      status,
+      depositEnabled: req.body?.depositEnabled !== void 0 ? Boolean(req.body.depositEnabled) : true,
+      withdrawalEnabled: req.body?.withdrawalEnabled !== void 0 ? Boolean(req.body.withdrawalEnabled) : true,
+      createdAt: now,
+      updatedAt: now
+    };
+    db.assets.set(newAsset.id, newAsset);
+    db.auditLogs.push({
+      id: crypto13.randomUUID(),
+      actorId: adminUser?.id || "ADMIN",
+      action: "ASSET_CREATED",
+      resource: `asset:${newAsset.symbol}`,
+      details: `Aset baru ${newAsset.symbol} (${newAsset.name}, ${newAsset.decimals} desimal, network=${newAsset.network}, customLogo=${Boolean(logoUrl)}) ditambahkan oleh ${adminUser?.email}`,
+      createdAt: now
+    });
+    db.saveToDisk();
+    const serializedList = Array.from(db.assets.values()).map(serializeAdminAsset);
+    marketWsService.broadcastAssetsUpdated(serializedList);
+    res.status(201).json({
+      success: true,
+      message: `Aset ${newAsset.symbol} (${newAsset.name}) berhasil ditambahkan.`,
+      asset: serializeAdminAsset(newAsset)
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.put("/assets/:id", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const assetId = req.params.id;
+    const asset = db.assets.get(assetId) || Array.from(db.assets.values()).find((a) => a.symbol.toUpperCase() === assetId.toUpperCase());
+    if (!asset) {
+      return res.status(404).json({ error: `Aset ${assetId} tidak ditemukan.` });
+    }
+    const changes = [];
+    if (req.body?.name !== void 0) {
+      const nextName = String(req.body.name).trim();
+      if (nextName.length < 2 || nextName.length > 80) {
+        return res.status(400).json({ error: "Nama aset harus 2\u201380 karakter." });
+      }
+      if (nextName !== asset.name) {
+        changes.push(`name: "${asset.name}" -> "${nextName}"`);
+        asset.name = nextName;
+      }
+    }
+    if (req.body?.logoUrl !== void 0) {
+      const sanitizedLogo = validateAndSanitizeLogoUrl(req.body.logoUrl) || "";
+      if (sanitizedLogo !== (asset.logoUrl || "")) {
+        changes.push(`logoUrl: ${sanitizedLogo ? "UPDATED" : "CLEARED"}`);
+        asset.logoUrl = sanitizedLogo || void 0;
+      }
+    }
+    if (req.body?.assetType !== void 0) {
+      const nextType = req.body.assetType === "NATIVE" ? "NATIVE" : "TOKEN";
+      if (nextType !== asset.assetType) {
+        changes.push(`assetType: ${asset.assetType} -> ${nextType}`);
+        asset.assetType = nextType;
+      }
+    }
+    if (req.body?.category !== void 0) {
+      const nextCategory = String(req.body.category || "").trim().slice(0, 40);
+      if (nextCategory !== (asset.category || "")) {
+        changes.push(`category: "${asset.category || ""}" -> "${nextCategory}"`);
+        asset.category = nextCategory || void 0;
+      }
+    }
+    if (req.body?.network !== void 0) {
+      const nextNetwork = String(req.body.network || "").trim().toUpperCase().slice(0, 40);
+      if (!nextNetwork) {
+        return res.status(400).json({ error: "Jaringan (network) tidak boleh kosong." });
+      }
+      if (nextNetwork !== asset.network) {
+        changes.push(`network: ${asset.network} -> ${nextNetwork}`);
+        asset.network = nextNetwork;
+      }
+    }
+    if (req.body?.contractAddress !== void 0) {
+      const nextContract = String(req.body.contractAddress || "").trim().slice(0, 160);
+      if (nextContract !== (asset.contractAddress || "")) {
+        changes.push(`contractAddress updated`);
+        asset.contractAddress = nextContract || void 0;
+      }
+    }
+    if (req.body?.description !== void 0) {
+      const nextDesc = String(req.body.description || "").trim().slice(0, 1e3);
+      if (nextDesc !== (asset.description || "")) {
+        changes.push(`description updated`);
+        asset.description = nextDesc || void 0;
+      }
+    }
+    if (req.body?.websiteUrl !== void 0) {
+      const nextWeb = validateOptionalHttpUrl(req.body.websiteUrl, "Website URL") || "";
+      if (nextWeb !== (asset.websiteUrl || "")) {
+        changes.push(`websiteUrl updated`);
+        asset.websiteUrl = nextWeb || void 0;
+      }
+    }
+    if (req.body?.explorerUrl !== void 0) {
+      const nextExplorer = validateOptionalHttpUrl(req.body.explorerUrl, "Explorer URL") || "";
+      if (nextExplorer !== (asset.explorerUrl || "")) {
+        changes.push(`explorerUrl updated`);
+        asset.explorerUrl = nextExplorer || void 0;
+      }
+    }
+    const syncedPairs = [];
+    if (req.body?.decimals !== void 0) {
+      const nextDecimals = Number(req.body.decimals);
+      if (!Number.isInteger(nextDecimals) || nextDecimals < 0 || nextDecimals > 18) {
+        return res.status(400).json({ error: "Desimal aset harus berupa bilangan bulat antara 0 sampai 18." });
+      }
+      if (nextDecimals !== asset.decimals) {
+        changes.push(`decimals: ${asset.decimals} -> ${nextDecimals}`);
+        asset.decimals = nextDecimals;
+        for (const pair of db.tradingPairs.values()) {
+          let pairChanged = false;
+          if (pair.baseCurrency.toUpperCase() === asset.symbol.toUpperCase()) {
+            pair.baseDecimals = nextDecimals;
+            pairChanged = true;
+          }
+          if (pair.quoteCurrency.toUpperCase() === asset.symbol.toUpperCase()) {
+            pair.quoteDecimals = nextDecimals;
+            pairChanged = true;
+          }
+          if (pairChanged) {
+            syncedPairs.push(pair.id);
+          }
+        }
+      }
+    }
+    if (req.body?.status !== void 0) {
+      const allowedStatuses = ["PENDING", "ACTIVE", "SUSPENDED", "RETIRED"];
+      if (!allowedStatuses.includes(req.body.status)) {
+        return res.status(400).json({ error: "Status aset tidak valid." });
+      }
+      if (req.body.status !== asset.status) {
+        changes.push(`status: ${asset.status} -> ${req.body.status}`);
+        asset.status = req.body.status;
+      }
+    }
+    if (req.body?.depositEnabled !== void 0) {
+      const nextDep = Boolean(req.body.depositEnabled);
+      if (nextDep !== asset.depositEnabled) {
+        changes.push(`depositEnabled: ${asset.depositEnabled} -> ${nextDep}`);
+        asset.depositEnabled = nextDep;
+      }
+    }
+    if (req.body?.withdrawalEnabled !== void 0) {
+      const nextWd = Boolean(req.body.withdrawalEnabled);
+      if (nextWd !== asset.withdrawalEnabled) {
+        changes.push(`withdrawalEnabled: ${asset.withdrawalEnabled} -> ${nextWd}`);
+        asset.withdrawalEnabled = nextWd;
+      }
+    }
+    asset.updatedAt = Date.now();
+    db.assets.set(asset.id, asset);
+    db.auditLogs.push({
+      id: crypto13.randomUUID(),
+      actorId: adminUser?.id || "ADMIN",
+      action: "ASSET_UPDATED",
+      resource: `asset:${asset.symbol}`,
+      details: `Aset ${asset.symbol} diperbarui oleh ${adminUser?.email}: ${changes.length > 0 ? changes.join("; ") : "no field changes"}${syncedPairs.length > 0 ? ` | Synced pairs: ${syncedPairs.join(", ")}` : ""}`,
+      createdAt: Date.now()
+    });
+    db.saveToDisk();
+    const serializedList = Array.from(db.assets.values()).map(serializeAdminAsset);
+    marketWsService.broadcastAssetsUpdated(serializedList);
+    res.json({
+      success: true,
+      message: `Aset ${asset.symbol} (${asset.name}) berhasil diperbarui${syncedPairs.length > 0 ? ` & disinkronkan ke ${syncedPairs.length} pair` : ""}.`,
+      asset: serializeAdminAsset(asset),
+      syncedPairs
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/pairs/delist-schedule", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { pairId, delistScheduledAt, reason } = req.body;
+    if (!pairId || !delistScheduledAt) {
+      return res.status(400).json({ error: "pairId dan delistScheduledAt wajib diisi." });
+    }
+    const pair = scheduleDelistMarket(
+      String(pairId),
+      Number(delistScheduledAt),
+      adminUser?.id || "ADMIN",
+      adminUser?.email,
+      reason
+    );
+    res.json({
+      success: true,
+      message: `Delisting ${pair.id} dijadwalkan pada ${new Date(pair.delistScheduledAt || 0).toLocaleString("id-ID")}. Countdown timer delisting kini tampil di Market Chart.`,
+      pair
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/pairs/delist-cancel", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { pairId } = req.body;
+    if (!pairId) return res.status(400).json({ error: "pairId wajib diisi." });
+    const pair = cancelScheduledDelistMarket(String(pairId), adminUser?.id || "ADMIN", adminUser?.email);
+    res.json({
+      success: true,
+      message: `Jadwal delisting untuk ${pair.id} berhasil dibatalkan.`,
+      pair
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/pairs/delist-now", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { pairId, reason } = req.body;
+    if (!pairId) return res.status(400).json({ error: "pairId wajib diisi." });
+    const result = executeDelistMarket(
+      String(pairId),
+      adminUser?.id || "ADMIN",
+      adminUser?.email,
+      reason
+    );
+    res.json({
+      success: true,
+      message: `Market ${result.pair.id} berhasil di-DELISTING. ${result.cancelledOrdersCount} order terbuka dibatalkan & direfund otomatis, ${result.stoppedBotsCount} bot dihentikan.`,
+      ...result
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/pairs/relist", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { pairId } = req.body;
+    if (!pairId) return res.status(400).json({ error: "pairId wajib diisi." });
+    const pair = relistMarket(String(pairId), adminUser?.id || "ADMIN", adminUser?.email);
+    res.json({
+      success: true,
+      message: `Market ${pair.id} berhasil diaktifkan kembali (Relisted).`,
+      pair
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 
 // server/routes/listing.ts
 import { Router as Router7 } from "express";
@@ -7416,437 +9365,7 @@ init_database();
 
 // server/services/listing/ListingService.ts
 init_database();
-import crypto13 from "crypto";
-
-// server/services/listing/ListingAuditService.ts
-init_database();
-import crypto11 from "crypto";
-var ListingAuditService = class {
-  static {
-    this.GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
-  }
-  /**
-   * Deterministically orders keys in JSON for canonical serialization
-   */
-  static canonicalStringify(obj) {
-    if (obj === null || typeof obj !== "object") {
-      return JSON.stringify(obj);
-    }
-    if (Array.isArray(obj)) {
-      return "[" + obj.map((item) => this.canonicalStringify(item)).join(",") + "]";
-    }
-    const keys = Object.keys(obj).sort();
-    const keyValues = keys.map((k) => `${JSON.stringify(k)}:${this.canonicalStringify(obj[k])}`);
-    return "{" + keyValues.join(",") + "}";
-  }
-  /**
-   * Redacts sensitive fields from audit payload
-   */
-  static redactSensitiveData(data) {
-    const sensitiveKeys = ["password", "totpsecret", "secrethash", "token", "privatekey", "apikey", "secret"];
-    const sanitized = {};
-    for (const [key, val] of Object.entries(data)) {
-      if (sensitiveKeys.includes(key.toLowerCase())) {
-        sanitized[key] = "[REDACTED]";
-      } else if (val && typeof val === "object" && !Array.isArray(val)) {
-        sanitized[key] = this.redactSensitiveData(val);
-      } else {
-        sanitized[key] = val;
-      }
-    }
-    return sanitized;
-  }
-  /**
-   * Records an append-only audit event with cryptographic hash chaining
-   */
-  static recordEvent(input) {
-    const events = db.listingAuditEvents;
-    const previousHash = events.length > 0 ? events[events.length - 1].currentHash : this.GENESIS_HASH;
-    const eventId = crypto11.randomUUID();
-    const correlationId = input.correlationId || crypto11.randomUUID();
-    const sanitizedPayload = this.redactSensitiveData(input.payload);
-    const createdAt = Date.now();
-    const dataToHash = {
-      id: eventId,
-      aggregateId: input.aggregateId,
-      eventType: input.eventType,
-      actorId: input.actorId,
-      correlationId,
-      idempotencyKey: input.idempotencyKey || null,
-      aggregateVersion: input.aggregateVersion,
-      payload: sanitizedPayload,
-      reason: input.reason || null,
-      securityMetadata: input.securityMetadata || {},
-      previousHash,
-      createdAt
-    };
-    const canonicalSerialized = this.canonicalStringify(dataToHash);
-    const currentHash = crypto11.createHash("sha256").update(canonicalSerialized).digest("hex");
-    const auditEvent = {
-      id: eventId,
-      aggregateId: input.aggregateId,
-      eventType: input.eventType,
-      actorId: input.actorId,
-      correlationId,
-      idempotencyKey: input.idempotencyKey,
-      aggregateVersion: input.aggregateVersion,
-      payload: sanitizedPayload,
-      reason: input.reason,
-      securityMetadata: input.securityMetadata || {},
-      previousHash,
-      currentHash,
-      createdAt
-    };
-    db.listingAuditEvents.push(auditEvent);
-    db.scheduleSave();
-    return auditEvent;
-  }
-  /**
-   * Retrieves audit events for a given aggregate (asset or listing request)
-   */
-  static getEventsForAggregate(aggregateId) {
-    return db.listingAuditEvents.filter((e) => e.aggregateId === aggregateId);
-  }
-  /**
-   * Validates the cryptographic integrity of the entire audit chain.
-   * Returns verification result and any violated sequence indexes.
-   */
-  static verifyAuditIntegrity() {
-    const events = db.listingAuditEvents;
-    let prevHash = this.GENESIS_HASH;
-    for (let i = 0; i < events.length; i++) {
-      const evt = events[i];
-      if (evt.previousHash !== prevHash) {
-        return {
-          isValid: false,
-          totalEvents: events.length,
-          tamperedIndex: i,
-          error: `Broken hash chain at index ${i}: expected prevHash ${prevHash}, got ${evt.previousHash}`
-        };
-      }
-      const dataToHash = {
-        id: evt.id,
-        aggregateId: evt.aggregateId,
-        eventType: evt.eventType,
-        actorId: evt.actorId,
-        correlationId: evt.correlationId,
-        idempotencyKey: evt.idempotencyKey || null,
-        aggregateVersion: evt.aggregateVersion,
-        payload: evt.payload,
-        reason: evt.reason || null,
-        securityMetadata: evt.securityMetadata,
-        previousHash: evt.previousHash,
-        createdAt: evt.createdAt
-      };
-      const canonicalSerialized = this.canonicalStringify(dataToHash);
-      const computedHash = crypto11.createHash("sha256").update(canonicalSerialized).digest("hex");
-      if (computedHash !== evt.currentHash) {
-        return {
-          isValid: false,
-          totalEvents: events.length,
-          tamperedIndex: i,
-          error: `Tampered payload or signature at index ${i}: expected ${computedHash}, got ${evt.currentHash}`
-        };
-      }
-      prevHash = evt.currentHash;
-    }
-    return {
-      isValid: true,
-      totalEvents: events.length
-    };
-  }
-};
-
-// server/services/listing/ListingActivationService.ts
-init_database();
-import crypto12 from "crypto";
-var ListingActivationService = class {
-  /**
-   * Idempotent activation of an APPROVED or SCHEDULED listing request.
-   */
-  static async activateMarket(listingRequestId, actorId, idempotencyKeyHeader, securityMeta) {
-    const listing = db.listingRequests.get(listingRequestId);
-    if (!listing) {
-      throw new Error(`Listing request tidak ditemukan: ${listingRequestId}`);
-    }
-    if (listing.status !== "APPROVED" && listing.status !== "SCHEDULED") {
-      if (listing.status === "ACTIVE") {
-        const existingMarket = Array.from(db.markets.values()).find(
-          (m) => m.listingRequestId === listing.id
-        );
-        if (existingMarket) {
-          return {
-            success: true,
-            isIdempotentReplay: true,
-            market: existingMarket,
-            outboxEventId: `idemp-${listing.id}`,
-            message: `Market ${existingMarket.symbol} sudah dalam status ACTIVE (Idempotent replay)`
-          };
-        }
-      }
-      throw new Error(`Listing request ${listingRequestId} belum dalam status APPROVED atau SCHEDULED (Status saat ini: ${listing.status})`);
-    }
-    const approval = db.listingApprovals.get(listing.id);
-    if (!approval) {
-      throw new Error("Listing belum memiliki persetujuan (approval) dari reviewer");
-    }
-    if (approval.decision !== "APPROVED") {
-      throw new Error("Listing request ditolak (REJECTED) dan tidak dapat diaktifkan");
-    }
-    if (approval.configVersion !== listing.version) {
-      throw new Error(`Persetujuan reviewer tidak valid: disetujui pada versi ${approval.configVersion}, namun versi listing saat ini adalah ${listing.version}`);
-    }
-    const baseAsset = db.assets.get(listing.assetId);
-    const quoteAsset = db.assets.get(listing.quoteAssetId);
-    if (!baseAsset || !quoteAsset) {
-      throw new Error("Asset dasar atau quote asset untuk listing ini tidak valid");
-    }
-    const marketSymbol = `${baseAsset.symbol}-${quoteAsset.symbol}`;
-    const idempotencyKey = idempotencyKeyHeader || `activate:${listing.id}:v${listing.version}`;
-    const existingOutbox = Array.from(db.outboxEvents.values()).find(
-      (o) => o.idempotencyKey === idempotencyKey
-    );
-    if (existingOutbox && existingOutbox.status === "DELIVERED") {
-      const existingMarket = db.markets.get(marketSymbol);
-      if (existingMarket && existingMarket.status === "ACTIVE") {
-        return {
-          success: true,
-          isIdempotentReplay: true,
-          market: existingMarket,
-          outboxEventId: existingOutbox.id,
-          message: `Aktivasi idempoten: Market ${marketSymbol} telah aktif sebelumnya.`
-        };
-      }
-    }
-    const duplicateMarket = Array.from(db.markets.values()).find(
-      (m) => m.baseAssetId === baseAsset.id && m.quoteAssetId === quoteAsset.id && m.id !== marketSymbol
-    );
-    if (duplicateMarket) {
-      throw new Error(`Market pair untuk ${baseAsset.symbol}/${quoteAsset.symbol} sudah ada dengan ID ${duplicateMarket.id}`);
-    }
-    const outboxId = crypto12.randomUUID();
-    const outboxEvent = {
-      id: outboxId,
-      aggregateId: listing.id,
-      eventType: "COMMAND_ACTIVATE_MARKET",
-      payload: {
-        listingRequestId: listing.id,
-        symbol: marketSymbol,
-        baseCurrency: baseAsset.symbol,
-        quoteCurrency: quoteAsset.symbol,
-        baseDecimals: baseAsset.decimals,
-        quoteDecimals: quoteAsset.decimals,
-        tickSize: listing.tickSize,
-        lotSize: listing.lotSize,
-        minQuantity: listing.minQuantity,
-        minNotional: listing.minNotional,
-        makerFeeBps: listing.makerFeeBps,
-        takerFeeBps: listing.takerFeeBps,
-        version: listing.version
-      },
-      idempotencyKey,
-      status: "PROCESSING",
-      attempts: 1,
-      createdAt: Date.now()
-    };
-    db.outboxEvents.set(outboxId, outboxEvent);
-    const now = Date.now();
-    const marketEntity = {
-      id: marketSymbol,
-      baseAssetId: baseAsset.id,
-      quoteAssetId: quoteAsset.id,
-      listingRequestId: listing.id,
-      symbol: marketSymbol,
-      status: "PREPARING",
-      tickSize: listing.tickSize,
-      lotSize: listing.lotSize,
-      minQuantity: listing.minQuantity,
-      minNotional: listing.minNotional,
-      makerFeeBps: listing.makerFeeBps,
-      takerFeeBps: listing.takerFeeBps,
-      version: listing.version,
-      createdAt: now,
-      updatedAt: now
-    };
-    db.markets.set(marketSymbol, marketEntity);
-    ListingAuditService.recordEvent({
-      aggregateId: listing.id,
-      eventType: "MARKET_PREPARED",
-      actorId,
-      idempotencyKey,
-      aggregateVersion: listing.version,
-      payload: {
-        symbol: marketSymbol,
-        marketId: marketEntity.id,
-        outboxId
-      },
-      reason: "Outbox activation event generated, market set to PREPARING",
-      securityMetadata: securityMeta
-    });
-    try {
-      const tradingPair = {
-        id: marketSymbol,
-        baseCurrency: baseAsset.symbol,
-        quoteCurrency: quoteAsset.symbol,
-        baseDecimals: baseAsset.decimals,
-        quoteDecimals: quoteAsset.decimals,
-        minOrderSize: listing.minQuantity || "100000000",
-        maxOrderSize: listing.maxQuantity || (10000000n * 10n ** BigInt(baseAsset.decimals)).toString(),
-        // 10,000,000 base tokens
-        makerFeeBps: listing.makerFeeBps,
-        takerFeeBps: listing.takerFeeBps,
-        isActive: true,
-        isHalted: false,
-        lastPrice: "0",
-        high24h: "0",
-        low24h: "0",
-        volume24h: "0",
-        priceChange24h: "0.00"
-      };
-      db.tradingPairs.set(marketSymbol, tradingPair);
-      const book = matchingEngine.getOrderBook(marketSymbol);
-      if (!book) {
-        throw new Error(`Matching Engine gagal menginisialisasi order book untuk ${marketSymbol}`);
-      }
-      const bookDepth = book.getDepth(5);
-      if (bookDepth.bids.length > 0 || bookDepth.asks.length > 0) {
-        book.bids = [];
-        book.asks = [];
-      }
-      marketEntity.status = "ACTIVE";
-      marketEntity.activatedAt = Date.now();
-      marketEntity.updatedAt = Date.now();
-      db.markets.set(marketSymbol, marketEntity);
-      listing.status = "ACTIVE";
-      listing.updatedAt = Date.now();
-      db.listingRequests.set(listing.id, listing);
-      baseAsset.status = "ACTIVE";
-      baseAsset.depositEnabled = listing.depositEnabled !== void 0 ? listing.depositEnabled : true;
-      baseAsset.withdrawalEnabled = listing.withdrawalEnabled !== void 0 ? listing.withdrawalEnabled : true;
-      baseAsset.depositOpenedAt = listing.depositOpenedAt || Date.now();
-      baseAsset.withdrawalOpenedAt = listing.withdrawalOpenedAt || Date.now();
-      baseAsset.updatedAt = Date.now();
-      db.assets.set(baseAsset.id, baseAsset);
-      const mmUserId = listing.marketMakerAccountId || "usr-mm-0000-0000-000000000001";
-      const defaultBaseSeed = (10000n * 10n ** BigInt(baseAsset.decimals)).toString();
-      const defaultQuoteAmount = quoteAsset.symbol === "IDR" ? 50000000n : 50000n;
-      const defaultQuoteSeed = (defaultQuoteAmount * 10n ** BigInt(quoteAsset.decimals)).toString();
-      const initialBaseSeed = listing.initialLiquidityBase || defaultBaseSeed;
-      const initialQuoteSeed = listing.initialLiquidityQuoteIdr || defaultQuoteSeed;
-      db.createOrGetAccount(mmUserId, baseAsset.symbol, initialBaseSeed);
-      db.createOrGetAccount(mmUserId, quoteAsset.symbol, initialQuoteSeed);
-      if (listing.projectOwnerAccountId) {
-        db.createOrGetAccount(listing.projectOwnerAccountId, baseAsset.symbol, "0");
-        db.createOrGetAccount(listing.projectOwnerAccountId, quoteAsset.symbol, "0");
-      }
-      outboxEvent.status = "DELIVERED";
-      outboxEvent.deliveredAt = Date.now();
-      db.outboxEvents.set(outboxId, outboxEvent);
-      db.scheduleSave();
-      ListingAuditService.recordEvent({
-        aggregateId: listing.id,
-        eventType: "MARKET_ACTIVATED",
-        actorId,
-        idempotencyKey,
-        aggregateVersion: listing.version,
-        payload: {
-          symbol: marketSymbol,
-          activatedAt: marketEntity.activatedAt,
-          engineReady: true
-        },
-        reason: "Market successfully activated and matching engine verified",
-        securityMetadata: securityMeta
-      });
-      marketWsService.broadcast({
-        type: "MARKET_ACTIVATED",
-        data: {
-          symbol: marketSymbol,
-          baseCurrency: baseAsset.symbol,
-          quoteCurrency: quoteAsset.symbol,
-          tickSize: listing.tickSize,
-          lotSize: listing.lotSize,
-          activatedAt: marketEntity.activatedAt
-        }
-      });
-      return {
-        success: true,
-        isIdempotentReplay: false,
-        market: marketEntity,
-        outboxEventId: outboxId,
-        message: `Market ${marketSymbol} berhasil diaktifkan secara idempoten.`
-      };
-    } catch (engineErr) {
-      outboxEvent.status = "FAILED";
-      outboxEvent.lastError = engineErr.message;
-      db.outboxEvents.set(outboxId, outboxEvent);
-      marketEntity.status = "PREPARING";
-      db.markets.set(marketSymbol, marketEntity);
-      ListingAuditService.recordEvent({
-        aggregateId: listing.id,
-        eventType: "ACTIVATION_FAILED",
-        actorId,
-        idempotencyKey,
-        aggregateVersion: listing.version,
-        payload: {
-          symbol: marketSymbol,
-          error: engineErr.message
-        },
-        reason: "Engine activation failed during execution",
-        securityMetadata: securityMeta
-      });
-      throw new Error(`Aktivasi market gagal pada matching engine: ${engineErr.message}`);
-    }
-  }
-  /**
-   * Health and readiness reconciliation between database and matching engine.
-   * If a divergence is found (e.g. market is ACTIVE in DB but OrderBook is missing in Engine),
-   * repairs or flags the divergence.
-   */
-  static reconcileMarketReadiness(marketSymbol) {
-    const market = db.markets.get(marketSymbol);
-    if (!market) {
-      return {
-        isConsistent: false,
-        dbStatus: "NOT_FOUND",
-        engineBookLoaded: false,
-        bidsCount: 0,
-        asksCount: 0,
-        repaired: false
-      };
-    }
-    let bookLoaded = false;
-    let bidsCount = 0;
-    let asksCount = 0;
-    let repaired = false;
-    try {
-      const book = matchingEngine.getOrderBook(marketSymbol);
-      if (book) {
-        bookLoaded = true;
-        bidsCount = book.bids.length;
-        asksCount = book.asks.length;
-      }
-    } catch (e) {
-      bookLoaded = false;
-    }
-    if (market.status === "ACTIVE" && !bookLoaded) {
-      const pair = db.tradingPairs.get(marketSymbol);
-      if (pair) {
-        matchingEngine.getOrderBook(marketSymbol);
-        repaired = true;
-      }
-    }
-    return {
-      isConsistent: market.status === "ACTIVE" ? bookLoaded : true,
-      dbStatus: market.status,
-      engineBookLoaded: bookLoaded,
-      bidsCount,
-      asksCount,
-      repaired
-    };
-  }
-};
-
-// server/services/listing/ListingService.ts
+import crypto14 from "crypto";
 var ListingService = class {
   /**
    * Validate network-specific contract address format
@@ -7895,7 +9414,7 @@ var ListingService = class {
       throw new Error(`Aset bertipe TOKEN pada jaringan ${input.network} wajib menyertakan contractAddress.`);
     }
     this.validateContractAddress(input.network, input.contractAddress);
-    const assetId = crypto13.randomUUID();
+    const assetId = crypto14.randomUUID();
     const now = Date.now();
     const asset = {
       id: assetId,
@@ -8023,7 +9542,7 @@ var ListingService = class {
       throw new Error(`Listing untuk pasangan ${baseAsset.symbol}/${quoteAsset.symbol} sudah ada (Status: ${existingListing.status})`);
     }
     this.validateFinancialParameters({ ...input, quoteSymbol: quoteAsset.symbol });
-    const listingId = crypto13.randomUUID();
+    const listingId = crypto14.randomUUID();
     const now = Date.now();
     const listing = {
       id: listingId,
@@ -8182,7 +9701,7 @@ var ListingService = class {
     if (existingApproval && existingApproval.configVersion === listing.version && existingApproval.decision === "APPROVED") {
       throw new Error(`Listing versi ${listing.version} sudah memiliki persetujuan aktif.`);
     }
-    const approvalId = crypto13.randomUUID();
+    const approvalId = crypto14.randomUUID();
     const approval = {
       id: approvalId,
       listingRequestId: listing.id,
@@ -8193,10 +9712,15 @@ var ListingService = class {
       reviewedAt: Date.now()
     };
     db.listingApprovals.set(listing.id, approval);
-    listing.status = "APPROVED";
+    const hasFutureSchedule = Boolean(listing.scheduledAt && listing.scheduledAt > Date.now() + 5e3);
+    listing.status = hasFutureSchedule ? "SCHEDULED" : "APPROVED";
     listing.updatedAt = Date.now();
     db.listingRequests.set(listing.id, listing);
-    db.scheduleSave();
+    if (hasFutureSchedule) {
+      ensureScheduledPairEntry(listing);
+      marketWsService.broadcastTickerSnapshot();
+    }
+    db.saveToDisk();
     ListingAuditService.recordEvent({
       aggregateId: listing.id,
       eventType: "LISTING_APPROVED",
@@ -8231,7 +9755,7 @@ var ListingService = class {
     if (!reason || reason.trim().length < 5) {
       throw new Error("Alasan penolakan (rejection reason) wajib diisi minimal 5 karakter.");
     }
-    const approvalId = crypto13.randomUUID();
+    const approvalId = crypto14.randomUUID();
     const approval = {
       id: approvalId,
       listingRequestId: listing.id,
@@ -8265,22 +9789,24 @@ var ListingService = class {
     return approval;
   }
   /**
-   * 6. Schedule Listing Request
+   * 6. Schedule Listing Request (supports initial scheduling on APPROVED and rescheduling on SCHEDULED)
    */
   static scheduleListing(id, scheduledAt, actorId, securityMeta) {
     const listing = db.listingRequests.get(id);
     if (!listing) throw new Error(`Listing request tidak ditemukan: ${id}`);
-    if (listing.status !== "APPROVED") {
-      throw new Error(`Hanya listing yang sudah di-APPROVED yang dapat dijadwalkan (Status saat ini: ${listing.status})`);
+    if (listing.status !== "APPROVED" && listing.status !== "SCHEDULED") {
+      throw new Error(`Hanya listing berstatus APPROVED atau SCHEDULED yang dapat dijadwalkan (Status saat ini: ${listing.status})`);
     }
-    if (!scheduledAt || scheduledAt <= Date.now()) {
-      throw new Error("Waktu jadwal (scheduledAt) harus berupa waktu masa depan.");
+    if (!scheduledAt || !Number.isFinite(scheduledAt) || scheduledAt <= Date.now() + 5e3) {
+      throw new Error("Waktu jadwal (scheduledAt) harus berupa waktu masa depan (minimal 5 detik dari sekarang).");
     }
     listing.status = "SCHEDULED";
-    listing.scheduledAt = scheduledAt;
+    listing.scheduledAt = Math.floor(scheduledAt);
     listing.updatedAt = Date.now();
     db.listingRequests.set(listing.id, listing);
-    db.scheduleSave();
+    ensureScheduledPairEntry(listing);
+    db.saveToDisk();
+    marketWsService.broadcastTickerSnapshot();
     ListingAuditService.recordEvent({
       aggregateId: listing.id,
       eventType: "LISTING_SCHEDULED",
@@ -8289,7 +9815,45 @@ var ListingService = class {
       payload: {
         scheduledAt: listing.scheduledAt
       },
-      reason: `Listing scheduled for activation at ${new Date(scheduledAt).toISOString()}`,
+      reason: `Listing scheduled for activation at ${new Date(listing.scheduledAt).toISOString()}`,
+      securityMetadata: securityMeta
+    });
+    return listing;
+  }
+  /**
+   * 6b. Cancel Scheduled Listing (reverts SCHEDULED -> APPROVED)
+   */
+  static cancelScheduleListing(id, actorId, securityMeta) {
+    const listing = db.listingRequests.get(id);
+    if (!listing) throw new Error(`Listing request tidak ditemukan: ${id}`);
+    if (listing.status !== "SCHEDULED") {
+      throw new Error(`Hanya listing berstatus SCHEDULED yang dapat dibatalkan jadwalnya (Status saat ini: ${listing.status})`);
+    }
+    const baseAsset = db.assets.get(listing.assetId);
+    const quoteAsset = db.assets.get(listing.quoteAssetId);
+    const pairId = baseAsset && quoteAsset ? `${baseAsset.symbol}-${quoteAsset.symbol}` : null;
+    listing.status = "APPROVED";
+    listing.scheduledAt = void 0;
+    listing.updatedAt = Date.now();
+    db.listingRequests.set(listing.id, listing);
+    if (pairId) {
+      const existingPair = db.tradingPairs.get(pairId);
+      if (existingPair && !existingPair.isActive && !db.markets.has(pairId)) {
+        db.tradingPairs.delete(pairId);
+      } else if (existingPair) {
+        existingPair.scheduledAt = void 0;
+        db.tradingPairs.set(pairId, existingPair);
+      }
+    }
+    db.saveToDisk();
+    marketWsService.broadcastTickerSnapshot();
+    ListingAuditService.recordEvent({
+      aggregateId: listing.id,
+      eventType: "LISTING_UPDATED",
+      actorId,
+      aggregateVersion: listing.version,
+      payload: { status: "APPROVED", scheduledAt: null },
+      reason: "Scheduled listing launch time cancelled by Admin",
       securityMetadata: securityMeta
     });
     return listing;
@@ -8405,7 +9969,7 @@ var ListingService = class {
 
 // server/services/listingService.ts
 init_database();
-import crypto14 from "crypto";
+import crypto15 from "crypto";
 init_PrecisionMath();
 var ListingService2 = class {
   /**
@@ -8598,11 +10162,11 @@ var ListingService2 = class {
       throw new Error("Format simbol token harus 2-12 karakter alfanumerik huruf besar.");
     }
     ListingService.validateContractAddress(input.network, input.contractAddress);
-    const applicationId = `REQ-${Date.now().toString(36).toUpperCase()}-${crypto14.randomBytes(3).toString("hex").toUpperCase()}`;
+    const applicationId = `REQ-${Date.now().toString(36).toUpperCase()}-${crypto15.randomBytes(3).toString("hex").toUpperCase()}`;
     const now = Date.now();
     let asset = Array.from(db.assets.values()).find((a) => a.symbol === symbol);
     if (!asset) {
-      const assetId = crypto14.randomUUID();
+      const assetId = crypto15.randomUUID();
       asset = {
         id: assetId,
         symbol,
@@ -8621,7 +10185,7 @@ var ListingService2 = class {
     }
     const isUsdtQuote = (input.quoteCurrency || "").toUpperCase() === "USDT";
     const quoteAsset = ListingService.getQuoteAsset(isUsdtQuote ? "USDT" : "IDR");
-    const listingId = crypto14.randomUUID();
+    const listingId = crypto15.randomUUID();
     const tickSize = isUsdtQuote ? "10000" : "100";
     const baseLotDefault = asset.decimals >= 2 ? (10n ** BigInt(asset.decimals - 2)).toString() : "1";
     const lotSize = baseLotDefault;
@@ -9163,9 +10727,27 @@ listingRouter.post("/:id/schedule", requireAdmin, (req, res) => {
     const { id } = req.params;
     const { scheduledAt } = req.body;
     const scheduled = ListingService.scheduleListing(id, Number(scheduledAt), adminUser.id, extractSecurityMeta(req));
-    res.json({ success: true, listing: scheduled });
+    res.json({
+      success: true,
+      message: `Listing berhasil dijadwalkan untuk ${new Date(scheduled.scheduledAt || 0).toLocaleString("id-ID")}. Countdown timer kini aktif di Market Chart.`,
+      listing: scheduled
+    });
   } catch (err) {
     res.status(400).json({ error: err.message, code: "SCHEDULE_FAILED" });
+  }
+});
+listingRouter.post("/:id/unschedule", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { id } = req.params;
+    const updated = ListingService.cancelScheduleListing(id, adminUser.id, extractSecurityMeta(req));
+    res.json({
+      success: true,
+      message: "Jadwal aktivasi listing dibatalkan (kembali ke status APPROVED).",
+      listing: updated
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: "UNSCHEDULE_FAILED" });
   }
 });
 listingRouter.post("/:id/activate", requireAdmin, async (req, res) => {
@@ -9224,16 +10806,25 @@ import { Router as Router8 } from "express";
 var marketsRouter = Router8();
 marketsRouter.get("/", (req, res) => {
   try {
+    db.ensureAssetsForTradingPairs();
     db.recalculatePair24hStats();
+    const assetsBySymbol = new Map(
+      Array.from(db.assets.values()).map((a) => [a.symbol.toUpperCase(), a])
+    );
     const activeMarkets = Array.from(db.markets.values()).filter((m) => m.status === "ACTIVE").map((m) => {
-      const baseAsset = db.assets.get(m.baseAssetId);
-      const quoteAsset = db.assets.get(m.quoteAssetId);
+      const baseSym = m.symbol.split("-")[0];
+      const quoteSym = m.symbol.split("-")[1];
+      const baseAsset = db.assets.get(m.baseAssetId) || assetsBySymbol.get(baseSym);
+      const quoteAsset = db.assets.get(m.quoteAssetId) || assetsBySymbol.get(quoteSym);
       const pair = db.tradingPairs.get(m.id);
       return {
         id: m.id,
         symbol: m.symbol,
-        baseCurrency: baseAsset ? baseAsset.symbol : m.symbol.split("-")[0],
-        quoteCurrency: quoteAsset ? quoteAsset.symbol : m.symbol.split("-")[1],
+        baseCurrency: baseAsset ? baseAsset.symbol : baseSym,
+        quoteCurrency: quoteAsset ? quoteAsset.symbol : quoteSym,
+        baseName: baseAsset?.name || baseSym,
+        baseLogoUrl: baseAsset?.logoUrl || "",
+        quoteLogoUrl: quoteAsset?.logoUrl || "",
         baseDecimals: baseAsset ? baseAsset.decimals : 8,
         quoteDecimals: quoteAsset ? quoteAsset.decimals : 2,
         tickSize: m.tickSize,
@@ -9256,20 +10847,23 @@ marketsRouter.get("/", (req, res) => {
     });
     const newListings = Array.from(db.listingRequests.values()).map((l) => {
       const baseAsset = db.assets.get(l.assetId);
+      const quoteAsset = db.assets.get(l.quoteAssetId);
+      const quoteSym = quoteAsset?.symbol || "IDR";
       const isDepositOpen = baseAsset?.depositEnabled ?? l.depositEnabled ?? true;
       const isWithdrawOpen = baseAsset?.withdrawalEnabled ?? l.withdrawalEnabled ?? true;
-      const pairId = `${baseAsset?.symbol || "TOKEN"}-IDR`;
+      const pairId = `${baseAsset?.symbol || "TOKEN"}-${quoteSym}`;
       const pair = db.tradingPairs.get(pairId);
       return {
         id: l.id,
         pairId,
         symbol: pairId,
         baseCurrency: baseAsset?.symbol || "TOKEN",
-        quoteCurrency: "IDR",
+        quoteCurrency: quoteSym,
         tokenName: baseAsset?.name || baseAsset?.symbol,
+        logoUrl: baseAsset?.logoUrl || "",
         network: baseAsset?.network || "TOKEN",
         contractAddress: baseAsset?.contractAddress,
-        decimals: baseAsset?.decimals || 8,
+        decimals: baseAsset?.decimals ?? 8,
         status: l.status,
         depositStatus: isDepositOpen ? "OPEN" : "CLOSED",
         withdrawalStatus: isWithdrawOpen ? "OPEN" : "CLOSED",
@@ -9287,6 +10881,35 @@ marketsRouter.get("/", (req, res) => {
       count: activeMarkets.length,
       markets: activeMarkets,
       newListings
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
+  }
+});
+marketsRouter.get("/assets", (req, res) => {
+  try {
+    const allAssets = db.ensureAssetsForTradingPairs().map((a) => ({
+      id: a.id,
+      symbol: a.symbol,
+      name: a.name,
+      logoUrl: a.logoUrl || "",
+      assetType: a.assetType,
+      category: a.category || (a.network === "FIAT" ? "Fiat" : a.assetType === "NATIVE" ? "Layer 1" : "Token"),
+      decimals: a.decimals,
+      network: a.network,
+      contractAddress: a.contractAddress || "",
+      description: a.description || "",
+      websiteUrl: a.websiteUrl || "",
+      explorerUrl: a.explorerUrl || "",
+      status: a.status,
+      depositEnabled: a.depositEnabled,
+      withdrawalEnabled: a.withdrawalEnabled,
+      updatedAt: a.updatedAt
+    }));
+    res.json({
+      success: true,
+      count: allAssets.length,
+      assets: allAssets
     });
   } catch (err) {
     res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
@@ -9312,6 +10935,9 @@ marketsRouter.get("/:symbol", (req, res) => {
         symbol: market.symbol,
         baseCurrency: baseAsset ? baseAsset.symbol : market.symbol.split("-")[0],
         quoteCurrency: quoteAsset ? quoteAsset.symbol : market.symbol.split("-")[1],
+        baseName: baseAsset?.name || market.symbol.split("-")[0],
+        baseLogoUrl: baseAsset?.logoUrl || "",
+        quoteLogoUrl: quoteAsset?.logoUrl || "",
         baseDecimals: baseAsset ? baseAsset.decimals : 8,
         quoteDecimals: quoteAsset ? quoteAsset.decimals : 2,
         tickSize: market.tickSize,
@@ -9337,7 +10963,7 @@ marketsRouter.get("/:symbol", (req, res) => {
 
 // server/routes/risk.ts
 import { Router as Router9 } from "express";
-import crypto15 from "crypto";
+import crypto16 from "crypto";
 init_database();
 var riskRouter = Router9();
 riskRouter.get("/suspicious-activity", requireAdmin, (req, res) => {
@@ -9377,7 +11003,7 @@ riskRouter.post("/account-freeze", requireAdmin, (req, res) => {
     targetUser.status = freeze ? "frozen" : "active";
     targetUser.updatedAt = Date.now();
     db.auditLogs.push({
-      id: crypto15.randomUUID(),
+      id: crypto16.randomUUID(),
       actorId: adminUser.id,
       action: freeze ? "ACCOUNT_FROZEN" : "ACCOUNT_UNFROZEN",
       resource: `user:${userId}`,
@@ -9412,7 +11038,7 @@ riskRouter.get("/export-report", requireAdmin, (req, res) => {
 
 // server/routes/bot.ts
 import { Router as Router10 } from "express";
-import crypto16 from "crypto";
+import crypto17 from "crypto";
 import fs3 from "fs";
 import path3 from "path";
 init_database();
@@ -9591,7 +11217,7 @@ botRouter.post("/grid/deploy", requireAuthOrHmac, (req, res) => {
     }
     const priceStep = (upperUnits - lowerUnits) / BigInt(count);
     const budgetPerGridIdr = PrecisionMath.parseToUnits(totalInvestmentIdr, 2) / BigInt(count);
-    const botId = `bot-grid-${crypto16.randomUUID().slice(0, 8)}`;
+    const botId = `bot-grid-${crypto17.randomUUID().slice(0, 8)}`;
     const bot = {
       id: botId,
       userId: user.id,
@@ -9731,7 +11357,7 @@ botRouter.post("/layers/deploy", requireAuthOrHmac, (req, res) => {
         });
       }
     }
-    const botId = `bot-layer-${crypto16.randomUUID().slice(0, 8)}`;
+    const botId = `bot-layer-${crypto17.randomUUID().slice(0, 8)}`;
     const bot = {
       id: botId,
       userId: user.id,
@@ -9827,7 +11453,7 @@ botRouter.post("/smart-trade/deploy", requireAuthOrHmac, (req, res) => {
         });
       }
     }
-    const botId = `bot-smart-${crypto16.randomUUID().slice(0, 8)}`;
+    const botId = `bot-smart-${crypto17.randomUUID().slice(0, 8)}`;
     const bot = {
       id: botId,
       userId: user.id,
@@ -10110,7 +11736,7 @@ botRouter.post("/volume/deploy", requireAuthOrHmac, (req, res) => {
       return res.status(400).json({ error: "Harga minimum harus lebih kecil dari harga maksimum" });
     }
     const delaySec = Math.max(1, parseInt(String(delaySecondAmount || 3), 10));
-    const botId = `bot-vol-${crypto16.randomUUID().slice(0, 8)}`;
+    const botId = `bot-vol-${crypto17.randomUUID().slice(0, 8)}`;
     const bot = {
       id: botId,
       userId: user.id,
@@ -10251,12 +11877,12 @@ botRouter.post("/cancel-all", requireAuthOrHmac, (req, res) => {
 import fs4 from "fs";
 import path4 from "path";
 import { Router as Router11 } from "express";
-import crypto18 from "crypto";
+import crypto21 from "crypto";
 init_database();
 
 // server/services/BotWorkerManager.ts
 init_database();
-import crypto17 from "crypto";
+import crypto18 from "crypto";
 init_PrecisionMath();
 
 // server/services/bots/PriceFollowerBot.ts
@@ -10857,6 +12483,504 @@ var DepthLiquidityBotExecutor = class {
     bot.deployedOrderIds = [];
     if (count > 0) {
       addLog(bot, `Membatalkan ${count} order depth terbuka (${reason}).`, "INFO");
+      marketWsService.broadcastDepth(bot.pairId);
+    }
+    return count;
+  }
+};
+
+// server/services/bots/MovementDepthLiquidityBot.ts
+init_database();
+init_PrecisionMath();
+init_PriceAggregatorService();
+var MovementDepthLiquidityBotExecutor = class {
+  /**
+   * Format floating point price/quantity safely without scientific notation
+   */
+  static toFixedSafe(val, decimals) {
+    const clampedDec = Math.max(0, Math.min(8, decimals));
+    return Number(val).toFixed(clampedDec);
+  }
+  /**
+   * Determine market-compatible tick size, supporting micro-cap & sub-$1 USDT listings
+   */
+  static getCompatibleTickSize(pairId, configuredTickSize, refPriceHint) {
+    const pair = db.tradingPairs.get(pairId);
+    const isUsdtQuote = pair?.quoteCurrency === "USDT" || pairId.endsWith("-USDT");
+    if (configuredTickSize && configuredTickSize > 0) {
+      if (isUsdtQuote && configuredTickSize > 10) {
+        return 1e-4;
+      }
+      if (pairId === "USDT-IDR" && configuredTickSize > 60) {
+        return 1;
+      }
+      return configuredTickSize;
+    }
+    const hint = refPriceHint && refPriceHint > 0 ? refPriceHint : 0;
+    if (isUsdtQuote) {
+      if (hint > 0 && hint < 0.01) return 1e-5;
+      if (hint > 0 && hint < 1) return 1e-4;
+      if (hint > 0 && hint < 20) return 1e-3;
+      return 0.01;
+    }
+    if (hint > 0 && hint < 500) return 1;
+    if (hint > 0 && hint < 5e3) return 10;
+    if (hint > 0 && hint < 5e4) return 100;
+    return pairId === "USDT-IDR" ? 1 : pairId === "ETH-IDR" ? 100 : 1e3;
+  }
+  static formatDisplayPrice(priceUnits, pair) {
+    if (pair.quoteCurrency === "IDR") {
+      return PrecisionMath.formatIDRDisplay(priceUnits);
+    }
+    const dec = pair.quoteDecimals || 4;
+    const val = Number(priceUnits) / 10 ** dec;
+    return `${val.toLocaleString("en-US", { minimumFractionDigits: Math.min(2, dec), maximumFractionDigits: dec })} ${pair.quoteCurrency}`;
+  }
+  /**
+   * Capture/reset local anchor price and current WS leader baseline price
+   */
+  static resetAnchor(bot, newAnchorLocalPrice, addLog) {
+    const cfg = bot.movementDepthConfig;
+    if (!cfg) return { success: false, error: "Konfigurasi Movement Depth tidak ditemukan." };
+    const pair = db.tradingPairs.get(bot.pairId);
+    if (!pair) return { success: false, error: `Trading pair ${bot.pairId} tidak ditemukan.` };
+    const snapshot = priceAggregatorService.getSymbolSnapshot(cfg.leader_symbol, cfg.leader_provider || "AGGREGATED");
+    if (!snapshot || !(snapshot.price > 0)) {
+      return { success: false, error: `Feed harga WebSocket untuk ${cfg.leader_symbol} belum tersedia.` };
+    }
+    let resolvedAnchor = cfg.anchor_local_price;
+    if (newAnchorLocalPrice !== void 0 && newAnchorLocalPrice !== "" && Number(newAnchorLocalPrice) > 0) {
+      resolvedAnchor = String(newAnchorLocalPrice);
+    } else if (!(parseFloat(String(resolvedAnchor || "0")) > 0)) {
+      const lastFloat = Number(BigInt(pair.lastPrice || "0")) / 10 ** (pair.quoteDecimals || 2);
+      if (lastFloat > 0) resolvedAnchor = String(lastFloat);
+    }
+    if (!(parseFloat(String(resolvedAnchor || "0")) > 0)) {
+      return { success: false, error: "Harga anchor lokal target tidak valid (> 0)." };
+    }
+    cfg.anchor_local_price = resolvedAnchor;
+    cfg.leader_baseline_price = snapshot.price;
+    cfg.last_leader_price = snapshot.price;
+    cfg.last_leader_return_pct = 0;
+    cfg.last_projected_local_price = parseFloat(resolvedAnchor);
+    cfg.last_refresh_timestamp = 0;
+    cfg.lastTargetPrice = 0;
+    bot.updatedAt = Date.now();
+    if (addLog) {
+      addLog(
+        bot,
+        `[Reset Anchor] Acuan ${cfg.leader_symbol} dikunci di ${snapshot.price} <-> Harga Lokal Anchor ${resolvedAnchor} ${pair.quoteCurrency}.`,
+        "INFO"
+      );
+    }
+    db.scheduleSave();
+    return {
+      success: true,
+      anchorLocalPrice: cfg.anchor_local_price,
+      leaderBaselinePrice: cfg.leader_baseline_price
+    };
+  }
+  /**
+   * Execute a single Depth Movement (WS) market-making cycle
+   */
+  static executeCycle(bot, addLog) {
+    const cfg = bot.movementDepthConfig;
+    if (!cfg) return false;
+    const pair = db.tradingPairs.get(bot.pairId);
+    if (!pair) {
+      addLog(bot, `Trading pair ${bot.pairId} tidak ditemukan.`, "ERROR");
+      return false;
+    }
+    if (pair.isHalted) {
+      addLog(bot, `Trading pair ${bot.pairId} sedang di-halt oleh Administrator.`, "RISK");
+      return false;
+    }
+    const leaderSym = (cfg.leader_symbol || "").trim().toUpperCase();
+    const wlEntry = db.externalWsWhitelist.get(leaderSym);
+    if (!wlEntry || !wlEntry.enabled) {
+      addLog(
+        bot,
+        `Pair acuan WS "${leaderSym}" tidak aktif atau belum di-whitelist oleh Admin. Bot menahan likuiditas.`,
+        "RISK"
+      );
+      this.cancelOpenBotOrders(bot, addLog, "Pair acuan WS dinonaktifkan dari whitelist");
+      return false;
+    }
+    const now = Date.now();
+    const snapshot = priceAggregatorService.getSymbolSnapshot(leaderSym, cfg.leader_provider || "AGGREGATED");
+    if (!snapshot || !(snapshot.price > 0)) {
+      addLog(
+        bot,
+        `Harga WebSocket ${leaderSym} belum tersedia. Menunggu stream Binance/Bybit...`,
+        "RISK"
+      );
+      this.cancelOpenBotOrders(bot, addLog, "Harga WS acuan tidak tersedia");
+      return false;
+    }
+    const wsConnected = priceAggregatorService.binance.getConnectionStatus() === "CONNECTED" || priceAggregatorService.bybit.getConnectionStatus() === "CONNECTED";
+    const maxDataAge = Math.max(15e3, cfg.max_data_age_ms || 3e4);
+    if (wsConnected && snapshot.updatedAt > 0 && now - snapshot.updatedAt > maxDataAge) {
+      addLog(
+        bot,
+        `Feed WS ${leaderSym} stale (${Math.round((now - snapshot.updatedAt) / 1e3)}s > ${Math.round(maxDataAge / 1e3)}s). Order ditarik sementara.`,
+        "RISK"
+      );
+      this.cancelOpenBotOrders(bot, addLog, "Feed WS acuan stale");
+      return false;
+    }
+    const quoteDecimals = pair.quoteDecimals || 2;
+    const baseDecimals = pair.baseDecimals;
+    let anchorLocal = parseFloat(String(cfg.anchor_local_price || "0"));
+    if (!(anchorLocal > 0)) {
+      anchorLocal = Number(BigInt(pair.lastPrice || "0")) / 10 ** quoteDecimals;
+      if (anchorLocal > 0) {
+        cfg.anchor_local_price = String(anchorLocal);
+      }
+    }
+    if (!(anchorLocal > 0)) {
+      addLog(
+        bot,
+        `Anchor harga lokal ${bot.pairId} tidak valid (> 0). Harap isi Target Local Anchor Price.`,
+        "RISK"
+      );
+      return false;
+    }
+    if (!cfg.leader_baseline_price || cfg.leader_baseline_price <= 0) {
+      cfg.leader_baseline_price = snapshot.price;
+      addLog(
+        bot,
+        `[Baseline Captured] Mengunci harga awal ${leaderSym} = ${snapshot.price} sebagai patokan 0.00% terhadap anchor lokal ${anchorLocal} ${pair.quoteCurrency}.`,
+        "INFO"
+      );
+    }
+    const leaderReturn = (snapshot.price - cfg.leader_baseline_price) / cfg.leader_baseline_price;
+    const sensitivity = Number.isFinite(cfg.movement_sensitivity) && cfg.movement_sensitivity !== 0 ? cfg.movement_sensitivity : 1;
+    let projectedLocal = anchorLocal * (1 + leaderReturn * sensitivity);
+    if (projectedLocal <= 0) {
+      projectedLocal = anchorLocal * 0.01;
+    }
+    const minGuard = cfg.min_price_guard ? parseFloat(String(cfg.min_price_guard)) : 0;
+    const maxGuard = cfg.max_price_guard ? parseFloat(String(cfg.max_price_guard)) : 0;
+    let clampedByGuard = false;
+    if (minGuard > 0 && projectedLocal < minGuard) {
+      projectedLocal = minGuard;
+      clampedByGuard = true;
+    }
+    if (maxGuard > 0 && projectedLocal > maxGuard && (minGuard <= 0 || maxGuard >= minGuard)) {
+      projectedLocal = maxGuard;
+      clampedByGuard = true;
+    }
+    const tickSize = this.getCompatibleTickSize(bot.pairId, cfg.tick_size, projectedLocal);
+    const roundedProjected = Math.max(tickSize, Math.round(projectedLocal / tickSize) * tickSize);
+    cfg.last_leader_price = snapshot.price;
+    cfg.last_leader_return_pct = Number((leaderReturn * 100).toFixed(4));
+    cfg.last_projected_local_price = roundedProjected;
+    const cooldownSec = Math.max(
+      2,
+      cfg.liquidity_refresh_cooldown_sec || Math.round((cfg.minimum_reprice_interval_ms || 3e3) / 1e3) || 10
+    );
+    const cooldownMs = cooldownSec * 1e3;
+    const lastRefresh = cfg.last_refresh_timestamp || cfg.lastRepriceTimestamp || 0;
+    const isCooldownElapsed = now - lastRefresh >= cooldownMs;
+    const book = matchingEngine.getOrderBook(bot.pairId);
+    const botPrefix = `bot-mv-${bot.id.slice(4, 10)}`;
+    const currentLiveBotOrders = [...book.bids, ...book.asks].filter(
+      (o) => o.clientOrderId && o.clientOrderId.startsWith(botPrefix) || cfg?.activeOrderIds && cfg.activeOrderIds.includes(o.id)
+    );
+    const hasLiveOrders = currentLiveBotOrders.length > 0;
+    const lastTarget = cfg.lastTargetPrice || 0;
+    const thresholdBps = Math.max(1, cfg.movement_threshold_bps ?? cfg.minimum_price_change_bps ?? 10);
+    const moveBpsFromLast = lastTarget > 0 ? Math.abs(roundedProjected - lastTarget) / lastTarget * 1e4 : 1e4;
+    const significantMove = moveBpsFromLast >= thresholdBps;
+    if (!isCooldownElapsed && hasLiveOrders && !significantMove) {
+      return true;
+    }
+    const isRandomizeEnabled = cfg.randomize_placement_enabled !== false;
+    const maxJitterTicks = isRandomizeEnabled ? cfg.price_randomization_ticks !== void 0 ? Math.max(1, cfg.price_randomization_ticks) : 2 : 0;
+    const jitterDirection = Math.random() >= 0.5 ? 1 : -1;
+    const jitterAmount = isRandomizeEnabled ? Math.floor(Math.random() * (maxJitterTicks + 1)) : 0;
+    const dynamicRef = Math.max(tickSize, roundedProjected + jitterDirection * jitterAmount * tickSize);
+    const defaultQuoteUnits = PrecisionMath.parseToUnits(
+      pair.quoteCurrency === "IDR" ? "100000000000" : "1000000",
+      quoteDecimals
+    );
+    const defaultBaseUnits = PrecisionMath.parseToUnits("1000000", baseDecimals);
+    const quoteAccount = db.createOrGetAccount(bot.accountId, pair.quoteCurrency, defaultQuoteUnits.toString());
+    const baseAccount = db.createOrGetAccount(bot.accountId, pair.baseCurrency, defaultBaseUnits.toString());
+    const botOwner = db.users.get(bot.accountId);
+    const ownerRole = (botOwner?.role || "").toUpperCase();
+    const isOperatorAccount = ownerRole === "MM" || ownerRole === "ADMIN" || ownerRole === "SUPERADMIN";
+    if (isOperatorAccount) {
+      const minBaseBuffer = PrecisionMath.parseToUnits("100", baseDecimals);
+      if (BigInt(baseAccount.balanceAvailable) < minBaseBuffer && BigInt(baseAccount.balanceLocked) === 0n) {
+        baseAccount.balanceAvailable = defaultBaseUnits.toString();
+      }
+    }
+    let quoteAvailable = BigInt(quoteAccount.balanceAvailable);
+    let baseAvailable = BigInt(baseAccount.balanceAvailable);
+    if (!cfg.dry_run) {
+      this.cancelOpenBotOrders(bot, addLog, "Rotasi ladder mengikuti pergerakan WS");
+    }
+    const numBids = Math.min(20, Math.max(1, cfg.number_of_bid_levels || 5));
+    const numAsks = Math.min(20, Math.max(1, cfg.number_of_ask_levels || 5));
+    const spacingMode = cfg.spacing_mode || "PERCENT_BPS";
+    const spreadBps = Math.max(2, cfg.spread_bps || 20);
+    const dynamicProportionalStep = Math.max(tickSize, Math.round(dynamicRef * 5e-3 / tickSize) * tickSize);
+    const spacingStep = Math.max(tickSize, cfg.level_spacing_idr || dynamicProportionalStep);
+    const bidOffsets = cfg.bid_level_offsets_bps && cfg.bid_level_offsets_bps.length > 0 ? cfg.bid_level_offsets_bps : [20, 45, 75, 110, 150];
+    const askOffsets = cfg.ask_level_offsets_bps && cfg.ask_level_offsets_bps.length > 0 ? cfg.ask_level_offsets_bps : [20, 45, 75, 110, 150];
+    const minPairOrderFloat = Number(BigInt(pair.minOrderSize || "1000")) / 10 ** baseDecimals;
+    const defaultTokenQty = Math.max(minPairOrderFloat, bot.pairId === "USDT-IDR" ? 25 : bot.pairId.startsWith("BTC") ? 0.01 : 10);
+    const defaultQtyStrings = [
+      defaultTokenQty.toFixed(Math.min(4, baseDecimals)),
+      (defaultTokenQty * 1.5).toFixed(Math.min(4, baseDecimals)),
+      (defaultTokenQty * 2).toFixed(Math.min(4, baseDecimals)),
+      (defaultTokenQty * 3).toFixed(Math.min(4, baseDecimals)),
+      (defaultTokenQty * 5).toFixed(Math.min(4, baseDecimals))
+    ];
+    const bidQuantities = cfg.bid_quantities && cfg.bid_quantities.length > 0 ? cfg.bid_quantities : defaultQtyStrings;
+    const askQuantities = cfg.ask_quantities && cfg.ask_quantities.length > 0 ? cfg.ask_quantities : defaultQtyStrings;
+    const tickQuoteUnits = PrecisionMath.parseToUnits(this.toFixedSafe(tickSize, quoteDecimals), quoteDecimals);
+    const safeTickUnits = tickQuoteUnits > 0n ? tickQuoteUnits : 1n;
+    const newActiveOrderIds = [];
+    const usedBidPriceUnits = /* @__PURE__ */ new Set();
+    const usedAskPriceUnits = /* @__PURE__ */ new Set();
+    const maxOpenOrders = cfg.maximum_open_orders || 40;
+    const maxTotalBidValIdr = parseFloat(cfg.maximum_total_bid_value_idr || "500000000000");
+    const maxTotalAskQty = parseFloat(cfg.maximum_total_ask_quantity || "10000000.0");
+    let cumulativeBidValIdr = 0;
+    let cumulativeAskQty = 0;
+    let lastBidUnits = null;
+    let highestBidUnits = null;
+    const qtyDisplayDecimals = Math.min(4, baseDecimals);
+    for (let i = 0; i < numBids; i++) {
+      if (newActiveOrderIds.length >= maxOpenOrders) {
+        addLog(bot, `Mencapai batas maksimum open orders (${maxOpenOrders}). Menghentikan penambahan bid level.`, "RISK");
+        break;
+      }
+      const levelJitter = isRandomizeEnabled && maxJitterTicks > 0 ? (Math.floor(Math.random() * (maxJitterTicks * 2 + 1)) - maxJitterTicks) * tickSize : 0;
+      let rawBidPrice = 0;
+      const topBidAnchor = dynamicRef * (1 - spreadBps / 1e4);
+      if (spacingMode === "FIXED_IDR") {
+        rawBidPrice = topBidAnchor - i * spacingStep;
+      } else if (spacingMode === "LINEAR") {
+        rawBidPrice = cfg.level_spacing_idr && cfg.level_spacing_idr > 0 ? topBidAnchor - i * cfg.level_spacing_idr : dynamicRef * (1 - (spreadBps + i * 25) / 1e4);
+      } else if (spacingMode === "GEOMETRIC") {
+        const bps = spreadBps + Math.round(15 * Math.pow(1.4, i) - 15);
+        rawBidPrice = dynamicRef * (1 - bps / 1e4);
+      } else if (spacingMode === "CONCENTRATED") {
+        const bps = spreadBps + Math.round(10 * Math.pow(1.2, i) - 10);
+        rawBidPrice = dynamicRef * (1 - bps / 1e4);
+      } else {
+        const rawOffset = i < bidOffsets.length ? bidOffsets[i] : bidOffsets[bidOffsets.length - 1] + (i - bidOffsets.length + 1) * 20;
+        const offsetBps = Math.max(spreadBps, rawOffset);
+        rawBidPrice = dynamicRef * (1 - offsetBps / 1e4);
+      }
+      rawBidPrice = Math.round((rawBidPrice + levelJitter) / tickSize) * tickSize;
+      if (rawBidPrice <= 0) rawBidPrice = tickSize;
+      let bidPriceUnits = PrecisionMath.parseToUnits(this.toFixedSafe(rawBidPrice, quoteDecimals), quoteDecimals);
+      if (bidPriceUnits <= 0n) bidPriceUnits = safeTickUnits;
+      if (lastBidUnits !== null && bidPriceUnits >= lastBidUnits) {
+        bidPriceUnits = lastBidUnits - safeTickUnits;
+      }
+      if (bidPriceUnits <= 0n) bidPriceUnits = safeTickUnits;
+      lastBidUnits = bidPriceUnits;
+      if (i === 0 || highestBidUnits === null || bidPriceUnits > highestBidUnits) {
+        highestBidUnits = bidPriceUnits;
+      }
+      if (usedBidPriceUnits.has(bidPriceUnits.toString())) continue;
+      usedBidPriceUnits.add(bidPriceUnits.toString());
+      const baseQtyStr = bidQuantities[i < bidQuantities.length ? i : bidQuantities.length - 1] || "10.0";
+      let qtyStr = baseQtyStr;
+      if (cfg.quantity_randomization_enabled) {
+        const minQ = parseFloat(cfg.random_min_quantity || "5.0");
+        const maxQ = parseFloat(cfg.random_max_quantity || "25.0");
+        const randQ = minQ + Math.random() * Math.max(0, maxQ - minQ);
+        qtyStr = randQ.toFixed(qtyDisplayDecimals);
+      } else {
+        const parsedBaseQ = parseFloat(baseQtyStr) || 10;
+        qtyStr = parsedBaseQ.toFixed(qtyDisplayDecimals);
+      }
+      const parsedQtyNum = parseFloat(qtyStr);
+      const estBidVal = rawBidPrice * parsedQtyNum;
+      if (cumulativeBidValIdr + estBidVal > maxTotalBidValIdr) {
+        addLog(bot, `Batas total nilai bid tercapai (${maxTotalBidValIdr}). Menghentikan level bid selanjutnya.`, "RISK");
+        break;
+      }
+      const qtyUnitsBig = PrecisionMath.parseToUnits(qtyStr, baseDecimals);
+      const neededQuote = PrecisionMath.calculateQuoteAmount(qtyUnitsBig, baseDecimals, bidPriceUnits);
+      if (quoteAvailable >= neededQuote && qtyUnitsBig > 0n) {
+        const displayPrice = this.formatDisplayPrice(bidPriceUnits, pair);
+        if (cfg.dry_run) {
+          addLog(bot, `[DRY-RUN][Move] Bid Lvl ${i + 1}: ${displayPrice} (Qty: ${qtyStr} ${pair.baseCurrency})`, "INFO");
+        } else {
+          const clientOrderId = `${botPrefix}-b${i + 1}-${Date.now()}`;
+          try {
+            const res = matchingEngine.placeOrder({
+              userId: bot.accountId,
+              pairId: bot.pairId,
+              side: "BUY",
+              orderType: "LIMIT",
+              timeInForce: "GTC",
+              price: bidPriceUnits.toString(),
+              quantity: qtyUnitsBig.toString(),
+              clientOrderId
+            });
+            const placedBid = res?.takerOrder || res?.order;
+            if (placedBid) {
+              newActiveOrderIds.push(placedBid.id);
+              bot.stats.ordersSubmitted++;
+              bot.stats.ordersAccepted++;
+              quoteAvailable -= neededQuote;
+              cumulativeBidValIdr += estBidVal;
+            }
+          } catch (err) {
+            addLog(bot, `Gagal memasang Bid Lvl ${i + 1} (${displayPrice}): ${err.message}`, "ERROR");
+          }
+        }
+      } else if (quoteAvailable < neededQuote && qtyUnitsBig > 0n) {
+        addLog(bot, `Saldo ${pair.quoteCurrency} tidak cukup untuk Bid Lvl ${i + 1} (butuh ${PrecisionMath.formatFromUnits(neededQuote, quoteDecimals)} ${pair.quoteCurrency}).`, "RISK");
+        break;
+      }
+    }
+    let lastAskUnits = null;
+    for (let i = 0; i < numAsks; i++) {
+      if (newActiveOrderIds.length >= maxOpenOrders) {
+        addLog(bot, `Mencapai batas maksimum open orders (${maxOpenOrders}). Menghentikan penambahan ask level.`, "RISK");
+        break;
+      }
+      const levelJitter = isRandomizeEnabled && maxJitterTicks > 0 ? (Math.floor(Math.random() * (maxJitterTicks * 2 + 1)) - maxJitterTicks) * tickSize : 0;
+      let rawAskPrice = 0;
+      const topAskAnchor = dynamicRef * (1 + spreadBps / 1e4);
+      if (spacingMode === "FIXED_IDR") {
+        rawAskPrice = topAskAnchor + i * spacingStep;
+      } else if (spacingMode === "LINEAR") {
+        rawAskPrice = cfg.level_spacing_idr && cfg.level_spacing_idr > 0 ? topAskAnchor + i * cfg.level_spacing_idr : dynamicRef * (1 + (spreadBps + i * 25) / 1e4);
+      } else if (spacingMode === "GEOMETRIC") {
+        const bps = spreadBps + Math.round(15 * Math.pow(1.4, i) - 15);
+        rawAskPrice = dynamicRef * (1 + bps / 1e4);
+      } else if (spacingMode === "CONCENTRATED") {
+        const bps = spreadBps + Math.round(10 * Math.pow(1.2, i) - 10);
+        rawAskPrice = dynamicRef * (1 + bps / 1e4);
+      } else {
+        const rawOffset = i < askOffsets.length ? askOffsets[i] : askOffsets[askOffsets.length - 1] + (i - askOffsets.length + 1) * 20;
+        const offsetBps = Math.max(spreadBps, rawOffset);
+        rawAskPrice = dynamicRef * (1 + offsetBps / 1e4);
+      }
+      rawAskPrice = Math.round((rawAskPrice + levelJitter) / tickSize) * tickSize;
+      if (rawAskPrice <= 0) rawAskPrice = tickSize;
+      let askPriceUnits = PrecisionMath.parseToUnits(this.toFixedSafe(rawAskPrice, quoteDecimals), quoteDecimals);
+      if (askPriceUnits <= 0n) askPriceUnits = safeTickUnits;
+      if (highestBidUnits !== null && askPriceUnits <= highestBidUnits) {
+        askPriceUnits = highestBidUnits + safeTickUnits;
+      }
+      if (lastAskUnits !== null && askPriceUnits <= lastAskUnits) {
+        askPriceUnits = lastAskUnits + safeTickUnits;
+      }
+      lastAskUnits = askPriceUnits;
+      if (usedAskPriceUnits.has(askPriceUnits.toString())) continue;
+      usedAskPriceUnits.add(askPriceUnits.toString());
+      const baseQtyStr = askQuantities[i < askQuantities.length ? i : askQuantities.length - 1] || "10.0";
+      let qtyStr = baseQtyStr;
+      if (cfg.quantity_randomization_enabled) {
+        const minQ = parseFloat(cfg.random_min_quantity || "5.0");
+        const maxQ = parseFloat(cfg.random_max_quantity || "25.0");
+        const randQ = minQ + Math.random() * Math.max(0, maxQ - minQ);
+        qtyStr = randQ.toFixed(qtyDisplayDecimals);
+      } else {
+        const parsedBaseQ = parseFloat(baseQtyStr) || 10;
+        qtyStr = parsedBaseQ.toFixed(qtyDisplayDecimals);
+      }
+      const parsedQtyNum = parseFloat(qtyStr);
+      if (cumulativeAskQty + parsedQtyNum > maxTotalAskQty) {
+        addLog(bot, `Batas total volume ask tercapai (${maxTotalAskQty}). Menghentikan level ask selanjutnya.`, "RISK");
+        break;
+      }
+      const qtyUnitsBig = PrecisionMath.parseToUnits(qtyStr, baseDecimals);
+      if (baseAvailable >= qtyUnitsBig && qtyUnitsBig > 0n) {
+        const displayPrice = this.formatDisplayPrice(askPriceUnits, pair);
+        if (cfg.dry_run) {
+          addLog(bot, `[DRY-RUN][Move] Ask Lvl ${i + 1}: ${displayPrice} (Qty: ${qtyStr} ${pair.baseCurrency})`, "INFO");
+        } else {
+          const clientOrderId = `${botPrefix}-a${i + 1}-${Date.now()}`;
+          try {
+            const res = matchingEngine.placeOrder({
+              userId: bot.accountId,
+              pairId: bot.pairId,
+              side: "SELL",
+              orderType: "LIMIT",
+              timeInForce: "GTC",
+              price: askPriceUnits.toString(),
+              quantity: qtyUnitsBig.toString(),
+              clientOrderId
+            });
+            const placedAsk = res?.takerOrder || res?.order;
+            if (placedAsk) {
+              newActiveOrderIds.push(placedAsk.id);
+              bot.stats.ordersSubmitted++;
+              bot.stats.ordersAccepted++;
+              baseAvailable -= qtyUnitsBig;
+              cumulativeAskQty += parsedQtyNum;
+            }
+          } catch (err) {
+            addLog(bot, `Gagal memasang Ask Lvl ${i + 1} (${displayPrice}): ${err.message}`, "ERROR");
+          }
+        }
+      } else if (baseAvailable < qtyUnitsBig && qtyUnitsBig > 0n) {
+        addLog(bot, `Saldo ${pair.baseCurrency} tidak cukup untuk Ask Lvl ${i + 1} (butuh ${qtyStr} ${pair.baseCurrency}).`, "RISK");
+        break;
+      }
+    }
+    cfg.activeOrderIds = newActiveOrderIds;
+    bot.deployedOrderIds = [...newActiveOrderIds];
+    cfg.lastRepriceTimestamp = now;
+    cfg.last_refresh_timestamp = now;
+    cfg.next_refresh_timestamp = now + cooldownMs;
+    cfg.lastTargetPrice = roundedProjected;
+    bot.lastHeartbeat = now;
+    if (newActiveOrderIds.length > 0) {
+      const sign = leaderReturn >= 0 ? "+" : "";
+      const guardTag = clampedByGuard ? " [Guard Clamped]" : "";
+      addLog(
+        bot,
+        `[Depth Movement] ${newActiveOrderIds.length} order aktif | Acuan ${leaderSym}: ${sign}${(leaderReturn * 100).toFixed(2)}% (${snapshot.activeProvider.toUpperCase()}) \xD7 ${sensitivity}x -> Proyeksi ${roundedProjected} ${pair.quoteCurrency}${guardTag}.`,
+        "ORDER"
+      );
+    }
+    marketWsService.broadcastDepth(bot.pairId);
+    marketWsService.broadcastTicker(pair);
+    db.scheduleSave();
+    return true;
+  }
+  /**
+   * Cancel all open Movement Depth orders placed by this bot
+   */
+  static cancelOpenBotOrders(bot, addLog, reason = "Penghentian bot") {
+    const cfg = bot.movementDepthConfig;
+    let count = 0;
+    const book = matchingEngine.getOrderBook(bot.pairId);
+    const botPrefix = `bot-mv-${bot.id.slice(4, 10)}`;
+    const liveBookOrderIds = [...book.bids, ...book.asks].filter((o) => o.clientOrderId && o.clientOrderId.startsWith(botPrefix) || cfg?.activeOrderIds && cfg.activeOrderIds.includes(o.id)).map((o) => o.id);
+    const idsToCancel = [...cfg?.activeOrderIds || [], ...bot.deployedOrderIds, ...liveBookOrderIds];
+    const uniqueIds = Array.from(new Set(idsToCancel));
+    for (const orderId of uniqueIds) {
+      const order = db.orders.get(orderId);
+      if (order && (order.status === "NEW" || order.status === "PARTIALLY_FILLED")) {
+        try {
+          const res = matchingEngine.cancelOrder(orderId, bot.accountId, bot.pairId, "MM");
+          if (res && res.status === "CANCELLED") {
+            count++;
+          }
+        } catch (_) {
+        }
+      }
+    }
+    if (cfg) {
+      cfg.activeOrderIds = [];
+    }
+    bot.deployedOrderIds = [];
+    if (count > 0) {
+      addLog(bot, `Membatalkan ${count} order Movement Depth terbuka (${reason}).`, "INFO");
       marketWsService.broadcastDepth(bot.pairId);
     }
     return count;
@@ -12733,6 +14857,29 @@ var BotWorkerManager = class {
           errors.push("Pada Custom Pricing Mode, batas harga (Min/Max Buy & Sell) harus diisi angka positif > 0.");
         }
       }
+    } else if (bot.botType === "MOVEMENT_DEPTH_LIQUIDITY") {
+      const cfg = bot.movementDepthConfig;
+      if (!cfg) {
+        errors.push("Konfigurasi Movement Depth (WS) Bot tidak boleh kosong.");
+        return { isValid: false, errors };
+      }
+      const leaderSym = (cfg.leader_symbol || "").trim().toUpperCase();
+      const enabledWhitelist = db.getEnabledExternalWsSymbols();
+      if (!leaderSym || !enabledWhitelist.includes(leaderSym)) {
+        errors.push(`Pair acuan WebSocket "${leaderSym || "-"}" belum terdaftar/aktif di Whitelist Admin.`);
+      }
+      if (!Number.isFinite(cfg.movement_sensitivity) || cfg.movement_sensitivity === 0) {
+        errors.push("Sensitivitas pergerakan (Beta) harus angka != 0 (misal 1.0).");
+      }
+      const anchorVal = parseFloat(String(cfg.anchor_local_price || "0"));
+      const pairLastVal = Number(BigInt(pair.lastPrice || "0")) / 10 ** (pair.quoteDecimals || 2);
+      if (!(anchorVal > 0) && !(pairLastVal > 0)) {
+        errors.push("Target Local Anchor Price harus diisi angka positif > 0.");
+      }
+      if (!cfg.number_of_bid_levels || cfg.number_of_bid_levels < 1) cfg.number_of_bid_levels = 5;
+      if (!cfg.number_of_ask_levels || cfg.number_of_ask_levels < 1) cfg.number_of_ask_levels = 5;
+      if (cfg.number_of_bid_levels > 20) errors.push("Jumlah level bid maksimal 20 level.");
+      if (cfg.number_of_ask_levels > 20) errors.push("Jumlah level ask maksimal 20 level.");
     } else if (bot.botType === "QUANT_HFT_MM") {
       const cfg = bot.quantHftConfig;
       if (!cfg) {
@@ -12818,7 +14965,7 @@ var BotWorkerManager = class {
       this.addLog(bot, "Peringatan: Worker sudah berjalan untuk bot ini. Menggunakan lease aktif.", "INFO");
       return true;
     }
-    const leaseId = crypto17.randomUUID();
+    const leaseId = crypto18.randomUUID();
     const runtime = {
       botId,
       leaseId,
@@ -12842,6 +14989,8 @@ var BotWorkerManager = class {
       this.schedulePriceFollowerTick(runtime);
     } else if (bot.botType === "DEPTH_LIQUIDITY") {
       this.scheduleDepthLiquidityTick(runtime);
+    } else if (bot.botType === "MOVEMENT_DEPTH_LIQUIDITY") {
+      this.scheduleMovementDepthTick(runtime);
     } else if (bot.botType === "QUANT_HFT_MM") {
       this.scheduleQuantHftBotTick(runtime);
     } else if (bot.botType === "SMART_HFT_LADDER") {
@@ -12892,6 +15041,8 @@ var BotWorkerManager = class {
         cancelledOrdersCount += PriceFollowerBotExecutor.cancelOpenBotOrders(bot, this.addLog.bind(this));
       } else if (bot.botType === "DEPTH_LIQUIDITY") {
         cancelledOrdersCount += DepthLiquidityBotExecutor.cancelOpenDepthOrders(bot, this.addLog.bind(this));
+      } else if (bot.botType === "MOVEMENT_DEPTH_LIQUIDITY") {
+        cancelledOrdersCount += MovementDepthLiquidityBotExecutor.cancelOpenBotOrders(bot, this.addLog.bind(this));
       } else if (bot.botType === "QUANT_HFT_MM") {
         cancelledOrdersCount += QuantHftBotExecutor.cancelOpenBotOrders(bot, this.addLog.bind(this));
       } else if (bot.botType === "SMART_HFT_LADDER") {
@@ -12932,7 +15083,7 @@ var BotWorkerManager = class {
       }
     }
     db.auditLogs.push({
-      id: crypto17.randomUUID(),
+      id: crypto18.randomUUID(),
       actorId: "RISK_CONTROLLER",
       action: "EMERGENCY_KILL_SWITCH_TRIGGERED",
       resource: "ALL_BOTS",
@@ -12945,7 +15096,7 @@ var BotWorkerManager = class {
   resetEmergencyKillSwitch() {
     db.riskControls.isKillSwitchActive = false;
     db.auditLogs.push({
-      id: crypto17.randomUUID(),
+      id: crypto18.randomUUID(),
       actorId: "ADMIN",
       action: "EMERGENCY_KILL_SWITCH_RESET",
       resource: "ALL_BOTS",
@@ -12964,7 +15115,7 @@ var BotWorkerManager = class {
     const botName = bot.name;
     const stopResult = this.stopWorker(botId, true);
     db.auditLogs.push({
-      id: crypto17.randomUUID(),
+      id: crypto18.randomUUID(),
       actorId: actorEmail || "MM_OPERATOR",
       action: "BOT_INSTANCE_DELETED",
       resource: botId,
@@ -13383,6 +15534,37 @@ var BotWorkerManager = class {
     }, intervalMs);
   }
   /**
+   * Movement Depth (Relative WS Follower) Scheduling Loop
+   */
+  scheduleMovementDepthTick(runtime) {
+    if (!runtime.isRunning) return;
+    const bot = db.botInstances.get(runtime.botId);
+    if (!bot || bot.status !== "RUNNING") {
+      runtime.isRunning = false;
+      this.workers.delete(runtime.botId);
+      return;
+    }
+    const intervalMs = Math.max(1e3, bot.movementDepthConfig?.minimum_reprice_interval_ms || 3e3);
+    runtime.timer = setTimeout(() => {
+      if (!runtime.isRunning) return;
+      try {
+        MovementDepthLiquidityBotExecutor.executeCycle(bot, this.addLog.bind(this));
+        runtime.consecutiveErrors = 0;
+      } catch (err) {
+        runtime.consecutiveErrors++;
+        this.addLog(bot, `Error pada Movement Depth cycle: ${err.message}`, "ERROR");
+        if (runtime.consecutiveErrors >= db.riskControls.maxConsecutiveErrors) {
+          bot.status = "RISK_HALTED";
+          bot.errorInfo = `Consecutive error threshold breached (${runtime.consecutiveErrors}).`;
+          this.addLog(bot, bot.errorInfo, "RISK");
+          this.stopWorker(bot.id, false);
+          return;
+        }
+      }
+      this.scheduleMovementDepthTick(runtime);
+    }, intervalMs);
+  }
+  /**
    * Quant HFT Market Maker Scheduling Loop
    */
   scheduleQuantHftBotTick(runtime) {
@@ -13481,6 +15663,643 @@ var botWorkerManager = new BotWorkerManager();
 // server/routes/mmConsole.ts
 init_PriceAggregatorService();
 init_FxConversionService();
+
+// server/services/backtest/HftBacktestEngine.ts
+init_database();
+import crypto19 from "crypto";
+init_PrecisionMath();
+var HftBacktestEngine = class {
+  static {
+    this.runHistory = [];
+  }
+  static {
+    this.MAX_HISTORY = 25;
+  }
+  /**
+   * Build read-only lookup index from immutable TRADE_SETTLEMENT journals -> referenceId (tradeId)
+   */
+  static buildLedgerSettlementIndex() {
+    const journalByTradeId = /* @__PURE__ */ new Map();
+    for (const j of db.journalTransactions.values()) {
+      if (j.txType === "TRADE_SETTLEMENT" && j.referenceId) {
+        journalByTradeId.set(j.referenceId, j);
+      }
+    }
+    const entriesCountByJournalId = /* @__PURE__ */ new Map();
+    for (const entry of db.ledgerEntries) {
+      entriesCountByJournalId.set(
+        entry.journalId,
+        (entriesCountByJournalId.get(entry.journalId) || 0) + 1
+      );
+    }
+    return {
+      journalByTradeId,
+      entriesCountByJournalId,
+      totalLedgerEntries: db.ledgerEntries.length
+    };
+  }
+  /**
+   * Suggest balanced virtual capital allocations scaled to quote currency and current price
+   */
+  static getSuggestedCapital(pair, lastPriceFloat) {
+    const safePrice = lastPriceFloat > 0 ? lastPriceFloat : 1;
+    if (pair.quoteCurrency === "IDR") {
+      const targetSideIdr = safePrice >= 1e8 ? 15e7 : safePrice >= 1e6 ? 5e7 : 15e6;
+      const baseAmt2 = Math.max(0.1, Number((targetSideIdr / safePrice).toFixed(4)));
+      return {
+        base: String(baseAmt2),
+        quote: String(targetSideIdr)
+      };
+    }
+    const targetSideUsdt = 1e4;
+    const baseAmt = Math.max(0.1, Number((targetSideUsdt / safePrice).toFixed(4)));
+    return {
+      base: String(baseAmt),
+      quote: String(targetSideUsdt)
+    };
+  }
+  /**
+   * Inspect available immutable ledger journals, historical trades, and OHLCV candles per pair
+   */
+  static getAvailableDatasets(selectedPairId) {
+    const { journalByTradeId, entriesCountByJournalId, totalLedgerEntries } = this.buildLedgerSettlementIndex();
+    const tradesByPair = /* @__PURE__ */ new Map();
+    for (const t of db.trades) {
+      const list = tradesByPair.get(t.pairId) || [];
+      list.push(t);
+      tradesByPair.set(t.pairId, list);
+    }
+    const pairs = [];
+    for (const pair of db.tradingPairs.values()) {
+      const quoteDecimals = pair.quoteDecimals !== void 0 ? pair.quoteDecimals : pair.quoteCurrency === "USDT" ? 6 : 2;
+      const lastPriceFloat = Number(BigInt(pair.lastPrice || "0")) / 10 ** quoteDecimals;
+      const pairTrades = tradesByPair.get(pair.id) || [];
+      let journalVerifiedTrades = 0;
+      let ledgerEntriesLinked = 0;
+      let earliestTradeTs = null;
+      let latestTradeTs = null;
+      for (const tr of pairTrades) {
+        if (earliestTradeTs === null || tr.createdAt < earliestTradeTs) earliestTradeTs = tr.createdAt;
+        if (latestTradeTs === null || tr.createdAt > latestTradeTs) latestTradeTs = tr.createdAt;
+        const journal = journalByTradeId.get(tr.id);
+        if (journal) {
+          journalVerifiedTrades++;
+          ledgerEntriesLinked += entriesCountByJournalId.get(journal.id) || 0;
+        }
+      }
+      const candles15m = klineService.getCandles(pair.id, "15m", 1e3);
+      const suggested = this.getSuggestedCapital(pair, lastPriceFloat);
+      pairs.push({
+        pairId: pair.id,
+        baseCurrency: pair.baseCurrency,
+        quoteCurrency: pair.quoteCurrency,
+        baseDecimals: pair.baseDecimals,
+        quoteDecimals,
+        lastPriceFloat,
+        totalTrades: pairTrades.length,
+        journalVerifiedTrades,
+        ledgerEntriesLinked,
+        klineCandles15m: candles15m.length,
+        earliestTradeTs,
+        latestTradeTs,
+        suggestedInitialBase: suggested.base,
+        suggestedInitialQuote: suggested.quote
+      });
+    }
+    pairs.sort((a, b) => b.journalVerifiedTrades - a.journalVerifiedTrades || b.totalTrades - a.totalTrades);
+    const selected = (selectedPairId ? pairs.find((p) => p.pairId === selectedPairId) : null) || pairs[0] || null;
+    return {
+      pairs,
+      selected,
+      globalLedgerSummary: {
+        totalTrades: db.trades.length,
+        totalSettlementJournals: journalByTradeId.size,
+        totalLedgerEntries,
+        totalJournalTransactions: db.journalTransactions.size
+      }
+    };
+  }
+  /**
+   * Retrieve recent backtest history (summary + results)
+   */
+  static getHistory() {
+    return [...this.runHistory];
+  }
+  /**
+   * Run deterministic non-mutating backtest of a Smart HFT Ladder configuration
+   * against immutable ledger journals, historical trades, or historical OHLCV klines.
+   */
+  static runBacktest(req) {
+    const startExecMs = Date.now();
+    const pair = db.tradingPairs.get(req.pairId);
+    if (!pair) {
+      throw new Error(`Trading pair "${req.pairId}" tidak ditemukan.`);
+    }
+    const baseDecimals = pair.baseDecimals ?? 8;
+    const quoteDecimals = pair.quoteDecimals !== void 0 ? pair.quoteDecimals : pair.quoteCurrency === "USDT" ? 6 : 2;
+    const dataSourceMode = req.dataSourceMode || "LEDGER_SETTLED_TRADES";
+    const initialBaseFloat = parseFloat(req.initialBaseBalance || "0");
+    const initialQuoteFloat = parseFloat(req.initialQuoteBalance || "0");
+    if (!Number.isFinite(initialBaseFloat) || initialBaseFloat < 0 || !Number.isFinite(initialQuoteFloat) || initialQuoteFloat < 0) {
+      throw new Error("Modal awal Base dan Quote harus berupa angka valid (>= 0).");
+    }
+    if (initialBaseFloat === 0 && initialQuoteFloat === 0) {
+      throw new Error("Modal awal tidak boleh nol keduanya; isi minimal saldo Base atau Quote.");
+    }
+    const totalOrders = Math.min(100, Math.max(2, Number(req.total_orders || 40)));
+    const timeframe = req.timeframe || "15m";
+    const pattern = req.pattern || "HEAD_AND_SHOULDERS";
+    const repriceIntervalMs = Math.max(500, Number(req.reprice_interval_ms || 4e3));
+    const makerFeeBps = req.makerFeeBps !== void 0 && !isNaN(Number(req.makerFeeBps)) ? Number(req.makerFeeBps) : pair.makerFeeBps ?? 10;
+    const takerFeeBps = req.takerFeeBps !== void 0 && !isNaN(Number(req.takerFeeBps)) ? Number(req.takerFeeBps) : pair.takerFeeBps ?? 20;
+    const slippageBps = Math.max(0, Math.min(500, Number(req.slippageBps || 0)));
+    const { journalByTradeId, entriesCountByJournalId } = this.buildLedgerSettlementIndex();
+    const allPairTrades = db.trades.filter((t) => t.pairId === req.pairId).filter((t) => (!req.startTime || t.createdAt >= req.startTime) && (!req.endTime || t.createdAt <= req.endTime)).sort((a, b) => a.createdAt - b.createdAt);
+    let journalVerifiedCount = 0;
+    let ledgerEntriesExamined = 0;
+    for (const tr of allPairTrades) {
+      const j = journalByTradeId.get(tr.id);
+      if (j) {
+        journalVerifiedCount++;
+        ledgerEntriesExamined += 1 + (entriesCountByJournalId.get(j.id) || 0);
+      }
+    }
+    const replayTicks = [];
+    if (dataSourceMode === "LEDGER_SETTLED_TRADES" || dataSourceMode === "ALL_HISTORICAL_TRADES") {
+      const filteredTrades = dataSourceMode === "LEDGER_SETTLED_TRADES" ? allPairTrades.filter((t) => journalByTradeId.has(t.id)) : allPairTrades;
+      if (filteredTrades.length === 0) {
+        if (dataSourceMode === "LEDGER_SETTLED_TRADES" && allPairTrades.length > 0) {
+          throw new Error(
+            `Pair ${req.pairId} memiliki ${allPairTrades.length} transaksi historis, tetapi 0 jurnal TRADE_SETTLEMENT aktif (jurnal terlama terpruning oleh batas 1.000 jurnal disk). Pilih mode "ALL_HISTORICAL_TRADES" atau "KLINE_OHLCV_REPLAY".`
+          );
+        }
+        const candleCount = klineService.getCandles(req.pairId, req.klineTimeframe || "15m", 500).length;
+        throw new Error(
+          `Belum ada data trade historis pada ledger untuk pair ${req.pairId} dalam rentang waktu ini.${candleCount > 0 ? ` Tersedia ${candleCount} candle OHLCV \u2014 coba mode "KLINE_OHLCV_REPLAY".` : ""}`
+        );
+      }
+      for (const tr of filteredTrades) {
+        const priceUnits = BigInt(tr.price);
+        const qtyUnits = BigInt(tr.quantity);
+        if (priceUnits <= 0n || qtyUnits <= 0n) continue;
+        const j = journalByTradeId.get(tr.id);
+        replayTicks.push({
+          id: tr.id,
+          timestamp: tr.createdAt,
+          priceUnits,
+          priceFloat: Number(priceUnits) / 10 ** quoteDecimals,
+          qtyUnits,
+          takerSide: tr.takerSide === "SELL" ? "SELL" : "BUY",
+          journalId: j?.id,
+          ledgerVerified: Boolean(j)
+        });
+      }
+    } else {
+      const klineTf = req.klineTimeframe || timeframe || "15m";
+      const candles = klineService.getCandles(req.pairId, klineTf, 500).filter((c) => {
+        const tsMs = c.time * 1e3;
+        return (!req.startTime || tsMs >= req.startTime) && (!req.endTime || tsMs <= req.endTime);
+      });
+      if (candles.length === 0) {
+        throw new Error(`Belum ada data candle historis (${klineTf}) untuk pair ${req.pairId}.`);
+      }
+      const intervalMs = Math.max(6e4, ((candles[1]?.time || candles[0].time + 900) - candles[0].time) * 1e3);
+      for (const c of candles) {
+        const baseTs = c.time * 1e3;
+        const totalVolFloat = Math.max(Number(c.volume || 0), parseFloat(req.min_buy_lot || "0.05") * 4);
+        const quarterVolStr = Math.max(1e-4, totalVolFloat / 4).toFixed(Math.min(8, baseDecimals));
+        const quarterQtyUnits = PrecisionMath.parseToUnits(quarterVolStr, baseDecimals);
+        const seq = c.close >= c.open ? [
+          { price: c.open, side: "BUY", offsetMs: 0 },
+          { price: c.low, side: "SELL", offsetMs: Math.floor(intervalMs * 0.25) },
+          { price: c.high, side: "BUY", offsetMs: Math.floor(intervalMs * 0.65) },
+          { price: c.close, side: "BUY", offsetMs: Math.floor(intervalMs * 0.9) }
+        ] : [
+          { price: c.open, side: "SELL", offsetMs: 0 },
+          { price: c.high, side: "BUY", offsetMs: Math.floor(intervalMs * 0.25) },
+          { price: c.low, side: "SELL", offsetMs: Math.floor(intervalMs * 0.65) },
+          { price: c.close, side: "SELL", offsetMs: Math.floor(intervalMs * 0.9) }
+        ];
+        for (let sIdx = 0; sIdx < seq.length; sIdx++) {
+          const pt = seq[sIdx];
+          if (!(pt.price > 0)) continue;
+          const pUnits = PrecisionMath.parseToUnits(pt.price.toFixed(quoteDecimals), quoteDecimals);
+          if (pUnits <= 0n) continue;
+          replayTicks.push({
+            id: `kline-${klineTf}-${c.time}-${sIdx}`,
+            timestamp: baseTs + pt.offsetMs,
+            priceUnits: pUnits,
+            priceFloat: pt.price,
+            qtyUnits: quarterQtyUnits > 0n ? quarterQtyUnits : 1n,
+            takerSide: pt.side,
+            ledgerVerified: false
+          });
+        }
+      }
+    }
+    if (replayTicks.length === 0) {
+      throw new Error(`Tidak ada event harga valid untuk disimulasikan pada ${req.pairId}.`);
+    }
+    const hash = crypto19.createHash("sha256");
+    hash.update(`${req.pairId}:${dataSourceMode}:${replayTicks.length}`);
+    for (const tk of replayTicks) {
+      hash.update(`|${tk.id}:${tk.journalId || "none"}:${tk.timestamp}:${tk.priceUnits.toString()}:${tk.qtyUnits.toString()}`);
+    }
+    const datasetIntegrityHash = hash.digest("hex").slice(0, 24);
+    const firstTickPrice = replayTicks[0].priceFloat;
+    const rawMinBound = req.min_price_bound ? parseFloat(req.min_price_bound) : NaN;
+    const rawMaxBound = req.max_price_bound ? parseFloat(req.max_price_bound) : NaN;
+    const hasExplicitBounds = !isNaN(rawMinBound) && !isNaN(rawMaxBound) && rawMinBound > 0 && rawMaxBound > rawMinBound;
+    const boundPct = !hasExplicitBounds && req.bound_percentage !== void 0 && req.bound_percentage !== null && !isNaN(Number(req.bound_percentage)) && Number(req.bound_percentage) > 0 ? Number(req.bound_percentage) : void 0;
+    const fixedMinBoundFloat = hasExplicitBounds ? rawMinBound : firstTickPrice * (1 - (boundPct || 3) / 100);
+    const fixedMaxBoundFloat = hasExplicitBounds ? rawMaxBound : firstTickPrice * (1 + (boundPct || 3) / 100);
+    const totalBars = timeframe === "5m" ? 30 : timeframe === "15m" ? 45 : timeframe === "1h" ? 60 : 90;
+    const baseCfg = {
+      account_id: "backtest-virtual-mm",
+      timeframe,
+      pattern,
+      total_orders: totalOrders,
+      bound_percentage: boundPct,
+      min_price_bound: fixedMinBoundFloat.toFixed(quoteDecimals),
+      max_price_bound: fixedMaxBoundFloat.toFixed(quoteDecimals),
+      min_buy_lot: String(req.min_buy_lot || "0.01"),
+      max_buy_lot: String(req.max_buy_lot || "0.25"),
+      min_sell_lot: String(req.min_sell_lot || "0.01"),
+      max_sell_lot: String(req.max_sell_lot || "0.25"),
+      min_spread_bps: req.min_spread_bps ? Number(req.min_spread_bps) : void 0,
+      spread_percentage: req.spread_percentage ? Number(req.spread_percentage) : void 0,
+      reprice_interval_ms: repriceIntervalMs
+    };
+    let baseAvailUnits = PrecisionMath.parseToUnits(initialBaseFloat.toFixed(Math.min(8, baseDecimals)), baseDecimals);
+    let quoteAvailUnits = PrecisionMath.parseToUnits(initialQuoteFloat.toFixed(quoteDecimals), quoteDecimals);
+    const initialEquityQuote = initialQuoteFloat + initialBaseFloat * firstTickPrice;
+    let avgCostQuotePerBase = firstTickPrice;
+    let realizedPnlQuote = 0;
+    let totalFeesPaidQuote = 0;
+    let totalTurnoverQuote = 0;
+    let grossProfit = 0;
+    let grossLoss = 0;
+    let winningSells = 0;
+    let losingSells = 0;
+    let totalBuyFills = 0;
+    let totalSellFills = 0;
+    let totalRepriceCycles = 0;
+    let totalOrdersSimulated = 0;
+    let outOfBoundsSkippedTicks = 0;
+    let insufficientBalanceSkips = 0;
+    let peakEquity = initialEquityQuote;
+    let maxDrawdownQuote = 0;
+    let maxDrawdownPct = 0;
+    let activeBuys = [];
+    let activeSells = [];
+    let lastRepriceTs = -Infinity;
+    let patternBarIndex = -1;
+    let lastAnchorFloat = firstTickPrice;
+    let lastCycleMinBound = fixedMinBoundFloat;
+    let lastCycleMaxBound = fixedMaxBoundFloat;
+    const fills = [];
+    const rungHitMap = /* @__PURE__ */ new Map();
+    const rawCurve = [];
+    const stepReturns = [];
+    let prevEquity = initialEquityQuote;
+    const minOrderUnits = BigInt(pair.minOrderSize || "1");
+    for (let idx = 0; idx < replayTicks.length; idx++) {
+      const tick = replayTicks[idx];
+      let filledOnThisTick = false;
+      if (activeBuys.length > 0 || activeSells.length > 0) {
+        let remainingTickQty = tick.qtyUnits;
+        for (const buyRung of activeBuys) {
+          if (remainingTickQty <= 0n || buyRung.remainingQtyUnits <= 0n) continue;
+          const slippageUnits = slippageBps > 0 ? buyRung.priceUnits * BigInt(slippageBps) / 10000n : 0n;
+          const triggerPriceUnits = buyRung.priceUnits > slippageUnits ? buyRung.priceUnits - slippageUnits : 1n;
+          if (tick.priceUnits <= triggerPriceUnits) {
+            const desiredQty = remainingTickQty < buyRung.remainingQtyUnits ? remainingTickQty : buyRung.remainingQtyUnits;
+            if (desiredQty <= 0n) continue;
+            const grossDesiredQuote = PrecisionMath.calculateQuoteAmount(desiredQty, baseDecimals, buyRung.priceUnits);
+            const feeDesired = makerFeeBps > 0 ? PrecisionMath.calculateFee(grossDesiredQuote, makerFeeBps) : 0n;
+            let execQtyUnits = desiredQty;
+            if (quoteAvailUnits < grossDesiredQuote + feeDesired) {
+              if (quoteAvailUnits <= 0n) {
+                insufficientBalanceSkips++;
+                continue;
+              }
+              const denomFloat = Number(buyRung.priceUnits) / 10 ** quoteDecimals * (1 + Math.max(0, makerFeeBps) / 1e4);
+              const quoteFloatAvail = Number(quoteAvailUnits) / 10 ** quoteDecimals;
+              const maxBaseFloat = denomFloat > 0 ? quoteFloatAvail * 0.999 / denomFloat : 0;
+              execQtyUnits = PrecisionMath.parseToUnits(Math.max(0, maxBaseFloat).toFixed(Math.min(8, baseDecimals)), baseDecimals);
+              if (execQtyUnits > buyRung.remainingQtyUnits) execQtyUnits = buyRung.remainingQtyUnits;
+              if (execQtyUnits > remainingTickQty) execQtyUnits = remainingTickQty;
+            }
+            if (execQtyUnits < minOrderUnits || execQtyUnits <= 0n) {
+              insufficientBalanceSkips++;
+              continue;
+            }
+            const quoteVolUnits = PrecisionMath.calculateQuoteAmount(execQtyUnits, baseDecimals, buyRung.priceUnits);
+            const feeUnitsSigned = makerFeeBps >= 0 ? PrecisionMath.calculateFee(quoteVolUnits, makerFeeBps) : -PrecisionMath.calculateFee(quoteVolUnits, Math.abs(makerFeeBps));
+            if (quoteAvailUnits < quoteVolUnits + feeUnitsSigned) {
+              insufficientBalanceSkips++;
+              continue;
+            }
+            const prevBaseFloat = Number(baseAvailUnits) / 10 ** baseDecimals;
+            quoteAvailUnits = quoteAvailUnits - quoteVolUnits - feeUnitsSigned;
+            baseAvailUnits = baseAvailUnits + execQtyUnits;
+            buyRung.remainingQtyUnits -= execQtyUnits;
+            remainingTickQty -= execQtyUnits;
+            const fillPriceFloat = Number(buyRung.priceUnits) / 10 ** quoteDecimals;
+            const qtyFloat = Number(execQtyUnits) / 10 ** baseDecimals;
+            const quoteVolFloat = Number(quoteVolUnits) / 10 ** quoteDecimals;
+            const feeFloat = Number(feeUnitsSigned) / 10 ** quoteDecimals;
+            const totalCostBefore = prevBaseFloat * avgCostQuotePerBase;
+            const totalCostAdded = quoteVolFloat + feeFloat;
+            const newBaseFloat = prevBaseFloat + qtyFloat;
+            if (newBaseFloat > 0) {
+              avgCostQuotePerBase = (totalCostBefore + totalCostAdded) / newBaseFloat;
+            }
+            totalFeesPaidQuote += feeFloat;
+            totalTurnoverQuote += quoteVolFloat;
+            totalBuyFills++;
+            filledOnThisTick = true;
+            const equityNow2 = Number(quoteAvailUnits) / 10 ** quoteDecimals + newBaseFloat * tick.priceFloat;
+            fills.push({
+              index: fills.length + 1,
+              timestamp: tick.timestamp,
+              side: "BUY",
+              ladderLevel: buyRung.level,
+              fillPrice: fillPriceFloat,
+              quantity: qtyFloat,
+              quoteVolume: quoteVolFloat,
+              feeQuote: feeFloat,
+              sourceTradeId: tick.id,
+              journalId: tick.journalId,
+              ledgerVerified: tick.ledgerVerified,
+              realizedPnl: 0,
+              equityAfter: equityNow2,
+              inventoryBaseAfter: newBaseFloat
+            });
+            const rKey = `BUY:${buyRung.level}`;
+            const existingStat = rungHitMap.get(rKey) || { level: buyRung.level, side: "BUY", hits: 0, volumeBase: 0, volumeQuote: 0 };
+            existingStat.hits++;
+            existingStat.volumeBase += qtyFloat;
+            existingStat.volumeQuote += quoteVolFloat;
+            rungHitMap.set(rKey, existingStat);
+          }
+        }
+        for (const sellRung of activeSells) {
+          if (remainingTickQty <= 0n || sellRung.remainingQtyUnits <= 0n) continue;
+          const slippageUnits = slippageBps > 0 ? sellRung.priceUnits * BigInt(slippageBps) / 10000n : 0n;
+          const triggerPriceUnits = sellRung.priceUnits + slippageUnits;
+          if (tick.priceUnits >= triggerPriceUnits) {
+            let execQtyUnits = remainingTickQty < sellRung.remainingQtyUnits ? remainingTickQty : sellRung.remainingQtyUnits;
+            if (baseAvailUnits < execQtyUnits) {
+              execQtyUnits = baseAvailUnits;
+            }
+            if (execQtyUnits < minOrderUnits || execQtyUnits <= 0n) {
+              insufficientBalanceSkips++;
+              continue;
+            }
+            const quoteVolUnits = PrecisionMath.calculateQuoteAmount(execQtyUnits, baseDecimals, sellRung.priceUnits);
+            const feeUnitsSigned = makerFeeBps >= 0 ? PrecisionMath.calculateFee(quoteVolUnits, makerFeeBps) : -PrecisionMath.calculateFee(quoteVolUnits, Math.abs(makerFeeBps));
+            baseAvailUnits -= execQtyUnits;
+            quoteAvailUnits = quoteAvailUnits + quoteVolUnits - feeUnitsSigned;
+            sellRung.remainingQtyUnits -= execQtyUnits;
+            remainingTickQty -= execQtyUnits;
+            const fillPriceFloat = Number(sellRung.priceUnits) / 10 ** quoteDecimals;
+            const qtyFloat = Number(execQtyUnits) / 10 ** baseDecimals;
+            const quoteVolFloat = Number(quoteVolUnits) / 10 ** quoteDecimals;
+            const feeFloat = Number(feeUnitsSigned) / 10 ** quoteDecimals;
+            const newBaseFloat = Number(baseAvailUnits) / 10 ** baseDecimals;
+            const tradeRealizedPnl = (fillPriceFloat - avgCostQuotePerBase) * qtyFloat - feeFloat;
+            realizedPnlQuote += tradeRealizedPnl;
+            if (tradeRealizedPnl >= 0) {
+              grossProfit += tradeRealizedPnl;
+              winningSells++;
+            } else {
+              grossLoss += Math.abs(tradeRealizedPnl);
+              losingSells++;
+            }
+            totalFeesPaidQuote += feeFloat;
+            totalTurnoverQuote += quoteVolFloat;
+            totalSellFills++;
+            filledOnThisTick = true;
+            const equityNow2 = Number(quoteAvailUnits) / 10 ** quoteDecimals + newBaseFloat * tick.priceFloat;
+            fills.push({
+              index: fills.length + 1,
+              timestamp: tick.timestamp,
+              side: "SELL",
+              ladderLevel: sellRung.level,
+              fillPrice: fillPriceFloat,
+              quantity: qtyFloat,
+              quoteVolume: quoteVolFloat,
+              feeQuote: feeFloat,
+              sourceTradeId: tick.id,
+              journalId: tick.journalId,
+              ledgerVerified: tick.ledgerVerified,
+              realizedPnl: tradeRealizedPnl,
+              equityAfter: equityNow2,
+              inventoryBaseAfter: newBaseFloat
+            });
+            const rKey = `SELL:${sellRung.level}`;
+            const existingStat = rungHitMap.get(rKey) || { level: sellRung.level, side: "SELL", hits: 0, volumeBase: 0, volumeQuote: 0 };
+            existingStat.hits++;
+            existingStat.volumeBase += qtyFloat;
+            existingStat.volumeQuote += quoteVolFloat;
+            rungHitMap.set(rKey, existingStat);
+          }
+        }
+      }
+      const shouldReprice = idx === 0 || tick.timestamp - lastRepriceTs >= repriceIntervalMs;
+      if (shouldReprice) {
+        lastRepriceTs = tick.timestamp;
+        patternBarIndex = (patternBarIndex + 1) % totalBars;
+        let minBound;
+        let maxBound;
+        if (boundPct && boundPct > 0) {
+          const ratio = boundPct / 100;
+          minBound = tick.priceFloat * (1 - ratio);
+          maxBound = tick.priceFloat * (1 + ratio);
+        } else {
+          minBound = fixedMinBoundFloat;
+          maxBound = fixedMaxBoundFloat;
+        }
+        const outOfBounds = !boundPct && (tick.priceFloat < minBound || tick.priceFloat > maxBound);
+        if (outOfBounds) {
+          outOfBoundsSkippedTicks++;
+          activeBuys = [];
+          activeSells = [];
+          lastCycleMinBound = minBound;
+          lastCycleMaxBound = maxBound;
+          lastAnchorFloat = tick.priceFloat;
+        } else {
+          const { anchorPrice } = SmartHftLadderBotExecutor.previewPattern(
+            tick.priceFloat,
+            pattern,
+            timeframe,
+            5,
+            patternBarIndex
+          );
+          const tickSz = SmartHftLadderBotExecutor.getTickSize(pair, tick.priceFloat);
+          const safeAnchor = Math.max(minBound + tickSz * 2, Math.min(maxBound - tickSz * 2, anchorPrice));
+          lastAnchorFloat = safeAnchor;
+          lastCycleMinBound = minBound;
+          lastCycleMaxBound = maxBound;
+          const cycleCfg = {
+            ...baseCfg,
+            min_price_bound: minBound.toFixed(quoteDecimals),
+            max_price_bound: maxBound.toFixed(quoteDecimals)
+          };
+          const { buyLevels, sellLevels } = SmartHftLadderBotExecutor.calculateLadder(pair, safeAnchor, cycleCfg);
+          activeBuys = buyLevels.map((lvl) => ({
+            level: lvl.level,
+            side: "BUY",
+            priceUnits: lvl.priceUnits,
+            remainingQtyUnits: lvl.quantityUnits
+          }));
+          activeSells = sellLevels.map((lvl) => ({
+            level: lvl.level,
+            side: "SELL",
+            priceUnits: lvl.priceUnits,
+            remainingQtyUnits: lvl.quantityUnits
+          }));
+          totalRepriceCycles++;
+          totalOrdersSimulated += activeBuys.length + activeSells.length;
+        }
+      }
+      const baseFloatNow = Number(baseAvailUnits) / 10 ** baseDecimals;
+      const quoteFloatNow = Number(quoteAvailUnits) / 10 ** quoteDecimals;
+      const equityNow = quoteFloatNow + baseFloatNow * tick.priceFloat;
+      if (equityNow > peakEquity) {
+        peakEquity = equityNow;
+      }
+      const ddQuote = Math.max(0, peakEquity - equityNow);
+      const ddPct = peakEquity > 0 ? ddQuote / peakEquity * 100 : 0;
+      if (ddQuote > maxDrawdownQuote) maxDrawdownQuote = ddQuote;
+      if (ddPct > maxDrawdownPct) maxDrawdownPct = ddPct;
+      if (prevEquity > 0) {
+        stepReturns.push((equityNow - prevEquity) / prevEquity);
+      }
+      prevEquity = equityNow;
+      const unrealizedNow = baseFloatNow * (tick.priceFloat - avgCostQuotePerBase);
+      if (filledOnThisTick || idx === 0 || idx === replayTicks.length - 1 || idx % Math.max(1, Math.floor(replayTicks.length / 180)) === 0) {
+        rawCurve.push({
+          index: idx,
+          timestamp: tick.timestamp,
+          marketPrice: tick.priceFloat,
+          anchorPrice: lastAnchorFloat,
+          minBound: lastCycleMinBound,
+          maxBound: lastCycleMaxBound,
+          equityQuote: equityNow,
+          realizedPnlQuote,
+          unrealizedPnlQuote: unrealizedNow,
+          drawdownPct: ddPct,
+          inventoryBase: baseFloatNow,
+          inventoryQuote: quoteFloatNow,
+          cumulativeFeesQuote: totalFeesPaidQuote,
+          fillsCount: totalBuyFills + totalSellFills
+        });
+      }
+    }
+    const equityCurve = this.downsampleCurve(rawCurve, 180);
+    const lastTick = replayTicks[replayTicks.length - 1];
+    const endingBaseInventory = Number(baseAvailUnits) / 10 ** baseDecimals;
+    const endingQuoteBalance = Number(quoteAvailUnits) / 10 ** quoteDecimals;
+    const finalEquityQuote = endingQuoteBalance + endingBaseInventory * lastTick.priceFloat;
+    const netPnlQuote = finalEquityQuote - initialEquityQuote;
+    const netReturnPct = initialEquityQuote > 0 ? netPnlQuote / initialEquityQuote * 100 : 0;
+    const unrealizedPnlQuote = netPnlQuote - realizedPnlQuote;
+    const totalFills = totalBuyFills + totalSellFills;
+    const fillRatePct = totalOrdersSimulated > 0 ? totalFills / totalOrdersSimulated * 100 : 0;
+    const sellCount = winningSells + losingSells;
+    const winRatePct = sellCount > 0 ? winningSells / sellCount * 100 : netPnlQuote >= 0 && totalFills > 0 ? 100 : 0;
+    const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? 99.9 : 0;
+    let sharpeRatio = 0;
+    if (stepReturns.length >= 2) {
+      const mean = stepReturns.reduce((a, b) => a + b, 0) / stepReturns.length;
+      const variance = stepReturns.reduce((acc, r) => acc + Math.pow(r - mean, 2), 0) / stepReturns.length;
+      const stdDev = Math.sqrt(variance);
+      if (stdDev > 1e-12) {
+        sharpeRatio = mean / stdDev * Math.sqrt(Math.min(252, stepReturns.length));
+      }
+    }
+    const rungHitDistribution = Array.from(rungHitMap.values()).sort((a, b) => {
+      if (a.side !== b.side) return a.side === "BUY" ? -1 : 1;
+      return a.level - b.level;
+    });
+    const result = {
+      runId: `bt-${Date.now()}-${crypto19.randomBytes(2).toString("hex")}`,
+      label: req.label?.trim() || `${pattern.replace(/_/g, " ")} (${timeframe}, \xB1${boundPct ?? "custom"}%)`,
+      createdAt: Date.now(),
+      pairId: pair.id,
+      baseCurrency: pair.baseCurrency,
+      quoteCurrency: pair.quoteCurrency,
+      baseDecimals,
+      quoteDecimals,
+      dataSourceMode,
+      config: {
+        ...baseCfg,
+        makerFeeBps,
+        takerFeeBps,
+        slippageBps,
+        initialBaseBalance: initialBaseFloat.toString(),
+        initialQuoteBalance: initialQuoteFloat.toString()
+      },
+      ledgerAudit: {
+        totalPairTradesInDb: allPairTrades.length,
+        journalVerifiedTradesCount: journalVerifiedCount,
+        replayedEventsCount: replayTicks.length,
+        ledgerEntriesExamined,
+        timeRangeStart: replayTicks[0].timestamp,
+        timeRangeEnd: lastTick.timestamp,
+        datasetIntegrityHash,
+        nonMutatingVerified: true
+      },
+      summary: {
+        initialEquityQuote,
+        finalEquityQuote,
+        netPnlQuote,
+        netReturnPct,
+        realizedPnlQuote,
+        unrealizedPnlQuote,
+        totalFeesPaidQuote,
+        grossTradingProfitQuote: netPnlQuote + totalFeesPaidQuote,
+        maxDrawdownQuote,
+        maxDrawdownPct,
+        sharpeRatio: Number(sharpeRatio.toFixed(2)),
+        winRatePct: Number(winRatePct.toFixed(1)),
+        profitFactor: Number(Math.min(99.99, profitFactor).toFixed(2)),
+        totalBuyFills,
+        totalSellFills,
+        totalFills,
+        totalRepriceCycles,
+        totalOrdersSimulated,
+        fillRatePct: Number(fillRatePct.toFixed(2)),
+        totalTurnoverQuote,
+        outOfBoundsSkippedTicks,
+        insufficientBalanceSkips,
+        endingBaseInventory,
+        endingQuoteBalance,
+        avgEntryCostQuote: avgCostQuotePerBase
+      },
+      equityCurve,
+      fills: fills.slice(-150),
+      rungHitDistribution,
+      executionTimeMs: Math.max(1, Date.now() - startExecMs)
+    };
+    this.runHistory.unshift(result);
+    if (this.runHistory.length > this.MAX_HISTORY) {
+      this.runHistory = this.runHistory.slice(0, this.MAX_HISTORY);
+    }
+    return result;
+  }
+  static downsampleCurve(points, maxPoints) {
+    if (points.length <= maxPoints) return points;
+    const sampled = [];
+    const step = (points.length - 1) / (maxPoints - 1);
+    for (let i = 0; i < maxPoints; i++) {
+      sampled.push(points[Math.round(i * step)]);
+    }
+    return sampled;
+  }
+};
 
 // server/services/rebalance/PortfolioRebalanceService.ts
 init_database();
@@ -13944,6 +16763,461 @@ var portfolioRebalanceService = PortfolioRebalanceService.getInstance();
 
 // server/routes/mmConsole.ts
 init_PrecisionMath();
+
+// server/services/PriceThresholdService.ts
+init_database();
+init_PrecisionMath();
+import crypto20 from "crypto";
+var LADDER_CAPABLE_BOT_TYPES = /* @__PURE__ */ new Set([
+  "SMART_HFT_LADDER",
+  "DEPTH_LIQUIDITY",
+  "MOVEMENT_DEPTH_LIQUIDITY",
+  "QUANT_HFT_MM",
+  "ADVANCED_MM"
+]);
+var PriceThresholdService = class {
+  constructor() {
+    this.timer = null;
+    this.isTickRunning = false;
+  }
+  start() {
+    if (this.timer) return;
+    this.timer = setInterval(() => {
+      this.evaluateAll();
+    }, 1e3);
+    console.log("[DIMONEX PriceThresholdService] Monitor threshold harga MM aktif (interval 1000ms).");
+  }
+  stop() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+  createTrigger(input) {
+    const pair = db.tradingPairs.get(input.pairId);
+    if (!pair) {
+      throw new Error(`Trading pair ${input.pairId} tidak ditemukan.`);
+    }
+    const quoteDecimals = pair.quoteDecimals !== void 0 && pair.quoteDecimals !== null ? pair.quoteDecimals : pair.quoteCurrency === "USDT" ? 6 : 2;
+    const thresholdPriceUnits = PrecisionMath.parseToUnits(input.thresholdPrice, quoteDecimals);
+    if (thresholdPriceUnits <= 0n) {
+      throw new Error("Harga threshold harus lebih besar dari 0.");
+    }
+    if (input.targetBotId) {
+      const targetBot = db.botInstances.get(input.targetBotId);
+      if (!targetBot) {
+        throw new Error(`Target bot ${input.targetBotId} tidak ditemukan.`);
+      }
+    }
+    const now = Date.now();
+    const trigger = {
+      id: `pt-${crypto20.randomUUID().slice(0, 8)}`,
+      name: (input.name || `${input.pairId} ${input.condition}`).trim(),
+      pairId: pair.id,
+      environment: input.environment || "DEMO",
+      condition: input.condition || "ABOVE_OR_EQUAL",
+      thresholdPrice: PrecisionMath.formatFromUnits(thresholdPriceUnits, quoteDecimals),
+      thresholdPriceUnits: thresholdPriceUnits.toString(),
+      quoteCurrency: pair.quoteCurrency,
+      quoteDecimals,
+      soundEnabled: input.soundEnabled !== false && input.soundTone !== "NONE",
+      soundTone: input.soundTone || "CHIME",
+      action: input.action || "NONE",
+      targetBotId: input.targetBotId || void 0,
+      adjustStepPct: Math.max(0.1, Math.min(25, Number(input.adjustStepPct ?? 1.5))),
+      cooldownSec: Math.max(5, Math.min(86400, Math.round(Number(input.cooldownSec ?? 30)))),
+      autoResetAfterCooldown: input.autoResetAfterCooldown !== false,
+      enabled: true,
+      status: "ARMED",
+      triggerCount: 0,
+      lastObservedPriceUnits: pair.lastPrice || "0",
+      createdBy: input.createdBy || "MM_OPERATOR",
+      createdAt: now,
+      updatedAt: now
+    };
+    db.priceThresholdTriggers.set(trigger.id, trigger);
+    db.auditLogs.push({
+      id: crypto20.randomUUID(),
+      actorId: trigger.createdBy,
+      action: "PRICE_THRESHOLD_CREATED",
+      resource: trigger.id,
+      details: `Threshold "${trigger.name}" pada ${trigger.pairId} (${trigger.condition} @ ${trigger.thresholdPrice} ${trigger.quoteCurrency}, aksi: ${trigger.action}).`,
+      createdAt: now
+    });
+    db.scheduleSave();
+    return trigger;
+  }
+  updateTrigger(id, patch) {
+    const existing = db.priceThresholdTriggers.get(id);
+    if (!existing) {
+      throw new Error("Aturan price threshold tidak ditemukan.");
+    }
+    const pair = db.tradingPairs.get(existing.pairId);
+    const quoteDecimals = pair?.quoteDecimals ?? existing.quoteDecimals;
+    if (patch.name !== void 0) existing.name = patch.name.trim() || existing.name;
+    if (patch.condition !== void 0) existing.condition = patch.condition;
+    if (patch.thresholdPrice !== void 0) {
+      const units = PrecisionMath.parseToUnits(patch.thresholdPrice, quoteDecimals);
+      if (units <= 0n) throw new Error("Harga threshold harus lebih besar dari 0.");
+      existing.thresholdPrice = PrecisionMath.formatFromUnits(units, quoteDecimals);
+      existing.thresholdPriceUnits = units.toString();
+      existing.quoteDecimals = quoteDecimals;
+    }
+    if (patch.soundEnabled !== void 0) existing.soundEnabled = Boolean(patch.soundEnabled);
+    if (patch.soundTone !== void 0) existing.soundTone = patch.soundTone;
+    if (patch.action !== void 0) existing.action = patch.action;
+    if (patch.targetBotId !== void 0) existing.targetBotId = patch.targetBotId || void 0;
+    if (patch.adjustStepPct !== void 0) {
+      existing.adjustStepPct = Math.max(0.1, Math.min(25, Number(patch.adjustStepPct)));
+    }
+    if (patch.cooldownSec !== void 0) {
+      existing.cooldownSec = Math.max(5, Math.min(86400, Math.round(Number(patch.cooldownSec))));
+    }
+    if (patch.autoResetAfterCooldown !== void 0) {
+      existing.autoResetAfterCooldown = Boolean(patch.autoResetAfterCooldown);
+    }
+    if (patch.enabled !== void 0) {
+      existing.enabled = Boolean(patch.enabled);
+      if (existing.enabled && existing.status === "TRIGGERED") {
+        existing.status = "ARMED";
+      }
+    }
+    if (patch.rearm) {
+      existing.enabled = true;
+      existing.status = "ARMED";
+      if (pair?.lastPrice) {
+        existing.lastObservedPriceUnits = pair.lastPrice;
+      }
+    }
+    existing.updatedAt = Date.now();
+    db.priceThresholdTriggers.set(existing.id, existing);
+    db.scheduleSave();
+    return existing;
+  }
+  deleteTrigger(id) {
+    const deleted = db.priceThresholdTriggers.delete(id);
+    if (deleted) db.scheduleSave();
+    return deleted;
+  }
+  listTriggers(environment, pairId) {
+    let items = Array.from(db.priceThresholdTriggers.values());
+    if (environment) items = items.filter((t) => t.environment === environment);
+    if (pairId) items = items.filter((t) => t.pairId === pairId);
+    return items.sort((a, b) => b.createdAt - a.createdAt);
+  }
+  listEvents(environment, limit = 60) {
+    let items = db.priceThresholdEvents;
+    if (environment) items = items.filter((e) => e.environment === environment);
+    return items.slice(-limit).reverse();
+  }
+  triggerManualTest(id, executeBotAdjustment = true) {
+    const trigger = db.priceThresholdTriggers.get(id);
+    if (!trigger) {
+      throw new Error("Aturan price threshold tidak ditemukan.");
+    }
+    const pair = db.tradingPairs.get(trigger.pairId);
+    const liveUnits = pair?.lastPrice || trigger.thresholdPriceUnits;
+    let adjustmentSummary = "Notifikasi suara uji coba dipicu (tanpa modifikasi bot).";
+    if (executeBotAdjustment && trigger.action !== "NONE") {
+      adjustmentSummary = this.executeLadderAction(trigger, BigInt(liveUnits), true);
+    }
+    const event = {
+      id: `pte-${crypto20.randomUUID().slice(0, 8)}`,
+      triggerId: trigger.id,
+      triggerName: trigger.name,
+      pairId: trigger.pairId,
+      environment: trigger.environment,
+      condition: trigger.condition,
+      thresholdPriceUnits: trigger.thresholdPriceUnits,
+      breachedPriceUnits: liveUnits,
+      quoteCurrency: trigger.quoteCurrency,
+      quoteDecimals: trigger.quoteDecimals,
+      soundEnabled: trigger.soundEnabled,
+      soundTone: trigger.soundTone,
+      action: trigger.action,
+      targetBotId: trigger.targetBotId,
+      adjustmentSummary,
+      timestamp: Date.now(),
+      isTest: true
+    };
+    this.recordEvent(event);
+    return event;
+  }
+  evaluateAll() {
+    if (this.isTickRunning) return;
+    this.isTickRunning = true;
+    try {
+      const now = Date.now();
+      for (const trigger of db.priceThresholdTriggers.values()) {
+        const pair = db.tradingPairs.get(trigger.pairId);
+        if (!pair || !pair.lastPrice) continue;
+        const currentUnits = BigInt(pair.lastPrice);
+        const thresholdUnits = BigInt(trigger.thresholdPriceUnits);
+        if (trigger.status === "COOLDOWN" && trigger.lastTriggeredAt) {
+          const elapsedMs = now - trigger.lastTriggeredAt;
+          if (elapsedMs >= trigger.cooldownSec * 1e3) {
+            if (trigger.autoResetAfterCooldown && trigger.enabled) {
+              trigger.status = "ARMED";
+              trigger.updatedAt = now;
+              db.priceThresholdTriggers.set(trigger.id, trigger);
+            }
+          } else {
+            trigger.lastObservedPriceUnits = currentUnits.toString();
+            continue;
+          }
+        }
+        if (!trigger.enabled || trigger.status !== "ARMED") {
+          trigger.lastObservedPriceUnits = currentUnits.toString();
+          continue;
+        }
+        const prevUnits = trigger.lastObservedPriceUnits ? BigInt(trigger.lastObservedPriceUnits) : currentUnits;
+        let breached = false;
+        if (trigger.condition === "ABOVE_OR_EQUAL") {
+          breached = currentUnits >= thresholdUnits;
+        } else if (trigger.condition === "BELOW_OR_EQUAL") {
+          breached = currentUnits <= thresholdUnits;
+        } else if (trigger.condition === "CROSS_EITHER") {
+          const crossedUp = prevUnits < thresholdUnits && currentUnits >= thresholdUnits;
+          const crossedDown = prevUnits > thresholdUnits && currentUnits <= thresholdUnits;
+          breached = crossedUp || crossedDown || currentUnits === thresholdUnits;
+        }
+        trigger.lastObservedPriceUnits = currentUnits.toString();
+        if (breached) {
+          this.fireTrigger(trigger, currentUnits, now);
+        }
+      }
+    } catch (err) {
+      console.error("[PriceThresholdService] Evaluation loop error:", err);
+    } finally {
+      this.isTickRunning = false;
+    }
+  }
+  fireTrigger(trigger, currentUnits, now) {
+    const adjustmentSummary = trigger.action !== "NONE" ? this.executeLadderAction(trigger, currentUnits, false) : `Alert threshold tercapai pada ${trigger.pairId} (Suara: ${trigger.soundEnabled ? trigger.soundTone : "OFF"}).`;
+    trigger.triggerCount += 1;
+    trigger.lastTriggeredAt = now;
+    trigger.updatedAt = now;
+    if (trigger.autoResetAfterCooldown) {
+      trigger.status = "COOLDOWN";
+    } else {
+      trigger.status = "TRIGGERED";
+      trigger.enabled = false;
+    }
+    db.priceThresholdTriggers.set(trigger.id, trigger);
+    const event = {
+      id: `pte-${crypto20.randomUUID().slice(0, 8)}`,
+      triggerId: trigger.id,
+      triggerName: trigger.name,
+      pairId: trigger.pairId,
+      environment: trigger.environment,
+      condition: trigger.condition,
+      thresholdPriceUnits: trigger.thresholdPriceUnits,
+      breachedPriceUnits: currentUnits.toString(),
+      quoteCurrency: trigger.quoteCurrency,
+      quoteDecimals: trigger.quoteDecimals,
+      soundEnabled: trigger.soundEnabled,
+      soundTone: trigger.soundTone,
+      action: trigger.action,
+      targetBotId: trigger.targetBotId,
+      adjustmentSummary,
+      timestamp: now
+    };
+    this.recordEvent(event);
+    db.auditLogs.push({
+      id: crypto20.randomUUID(),
+      actorId: "PRICE_THRESHOLD_ENGINE",
+      action: "PRICE_THRESHOLD_TRIGGERED",
+      resource: trigger.id,
+      details: `${trigger.name} (${trigger.pairId}): ${adjustmentSummary}`,
+      createdAt: now
+    });
+    db.scheduleSave();
+  }
+  recordEvent(event) {
+    db.priceThresholdEvents.push(event);
+    if (db.priceThresholdEvents.length > 500) {
+      db.priceThresholdEvents = db.priceThresholdEvents.slice(-500);
+    }
+    marketWsService.broadcast("ticker", {
+      type: "price_threshold_triggered",
+      event
+    });
+  }
+  resolveTargetBots(trigger) {
+    if (trigger.targetBotId) {
+      const bot = db.botInstances.get(trigger.targetBotId);
+      return bot ? [bot] : [];
+    }
+    return Array.from(db.botInstances.values()).filter(
+      (b) => b.pairId === trigger.pairId && b.environment === trigger.environment && LADDER_CAPABLE_BOT_TYPES.has(b.botType) && (b.status === "RUNNING" || b.status === "PAUSED" || b.status === "READY")
+    );
+  }
+  executeLadderAction(trigger, currentPriceUnits, isTest) {
+    const bots = this.resolveTargetBots(trigger);
+    if (bots.length === 0) {
+      return `Tidak ada bot ladder/MM aktif pada ${trigger.pairId} (${trigger.environment}) untuk disesuaikan.`;
+    }
+    const pair = db.tradingPairs.get(trigger.pairId);
+    const quoteDec = pair?.quoteDecimals ?? trigger.quoteDecimals;
+    const currentPriceFloat = Number(currentPriceUnits) / 10 ** quoteDec;
+    const stepRatio = Math.max(1e-3, trigger.adjustStepPct / 100);
+    const tag = isTest ? "[TEST THRESHOLD]" : "[PRICE THRESHOLD]";
+    let adjustedCount = 0;
+    const adjustedNames = [];
+    for (const bot of bots) {
+      const addLog = botWorkerManager.addLog.bind(botWorkerManager);
+      if (trigger.action === "PAUSE_BOT") {
+        if (bot.status === "RUNNING") {
+          botWorkerManager.pauseWorker(bot.id);
+          addLog(bot, `${tag} Bot dijeda otomatis oleh trigger "${trigger.name}".`, "RISK");
+          adjustedCount++;
+          adjustedNames.push(bot.name);
+        }
+        continue;
+      }
+      if (bot.botType === "SMART_HFT_LADDER" && bot.smartHftConfig) {
+        const cfg = bot.smartHftConfig;
+        const oldMin = parseFloat(String(cfg.min_price_bound || currentPriceFloat * 0.96));
+        const oldMax = parseFloat(String(cfg.max_price_bound || currentPriceFloat * 1.04));
+        const halfBandRatio = oldMin > 0 && oldMax > oldMin ? Math.min(0.15, Math.max(0.01, (oldMax - oldMin) / (2 * Math.max(1e-8, (oldMax + oldMin) / 2)))) : 0.04;
+        if (trigger.action === "LADDER_RECENTER") {
+          cfg.bound_percentage = void 0;
+          cfg.min_price_bound = (currentPriceFloat * (1 - halfBandRatio)).toFixed(quoteDec);
+          cfg.max_price_bound = (currentPriceFloat * (1 + halfBandRatio)).toFixed(quoteDec);
+          cfg.lastAnchorPrice = currentPriceFloat.toFixed(quoteDec);
+        } else if (trigger.action === "LADDER_WIDEN_SPREAD") {
+          const newHalf = Math.min(0.15, halfBandRatio * (1 + stepRatio * 4));
+          cfg.min_price_bound = (currentPriceFloat * (1 - newHalf)).toFixed(quoteDec);
+          cfg.max_price_bound = (currentPriceFloat * (1 + newHalf)).toFixed(quoteDec);
+          cfg.min_spread_bps = Math.min(500, Math.round((cfg.min_spread_bps || 20) * (1 + stepRatio * 2)));
+          cfg.spread_percentage = Number(((cfg.spread_percentage || 0.2) * (1 + stepRatio * 2)).toFixed(3));
+        } else if (trigger.action === "LADDER_SHIFT_UP") {
+          cfg.bound_percentage = void 0;
+          cfg.min_price_bound = (oldMin * (1 + stepRatio)).toFixed(quoteDec);
+          cfg.max_price_bound = (oldMax * (1 + stepRatio)).toFixed(quoteDec);
+        } else if (trigger.action === "LADDER_SHIFT_DOWN") {
+          cfg.bound_percentage = void 0;
+          cfg.min_price_bound = Math.max(1 / 10 ** quoteDec, oldMin * (1 - stepRatio)).toFixed(quoteDec);
+          cfg.max_price_bound = Math.max(2 / 10 ** quoteDec, oldMax * (1 - stepRatio)).toFixed(quoteDec);
+        }
+        cfg.lastRepriceTimestamp = 0;
+        addLog(
+          bot,
+          `${tag} Penyesuaian Smart HFT Ladder (${trigger.action}, step ${trigger.adjustStepPct}%) -> Bounds [${cfg.min_price_bound} .. ${cfg.max_price_bound}]`,
+          "ORDER"
+        );
+        if (bot.status === "RUNNING") {
+          SmartHftLadderBotExecutor.executeCycle(bot, addLog);
+        }
+        adjustedCount++;
+        adjustedNames.push(bot.name);
+      } else if (bot.botType === "DEPTH_LIQUIDITY" && bot.depthLiquidityConfig) {
+        const cfg = bot.depthLiquidityConfig;
+        if (trigger.action === "LADDER_RECENTER") {
+          cfg.min_limit_buy_price = (currentPriceFloat * (1 - stepRatio * 3)).toFixed(quoteDec);
+          cfg.max_limit_buy_price = (currentPriceFloat * (1 - stepRatio * 0.4)).toFixed(quoteDec);
+          cfg.min_limit_sell_price = (currentPriceFloat * (1 + stepRatio * 0.4)).toFixed(quoteDec);
+          cfg.max_limit_sell_price = (currentPriceFloat * (1 + stepRatio * 3)).toFixed(quoteDec);
+        } else if (trigger.action === "LADDER_WIDEN_SPREAD") {
+          cfg.bid_level_offsets_bps = cfg.bid_level_offsets_bps.map((b) => Math.round(b * (1 + stepRatio * 2)));
+          cfg.ask_level_offsets_bps = cfg.ask_level_offsets_bps.map((a) => Math.round(a * (1 + stepRatio * 2)));
+          if (cfg.min_limit_buy_price) cfg.min_limit_buy_price = (parseFloat(cfg.min_limit_buy_price) * (1 - stepRatio)).toFixed(quoteDec);
+          if (cfg.max_limit_sell_price) cfg.max_limit_sell_price = (parseFloat(cfg.max_limit_sell_price) * (1 + stepRatio)).toFixed(quoteDec);
+        } else if (trigger.action === "LADDER_SHIFT_UP" || trigger.action === "LADDER_SHIFT_DOWN") {
+          const factor = trigger.action === "LADDER_SHIFT_UP" ? 1 + stepRatio : Math.max(0.1, 1 - stepRatio);
+          if (cfg.min_limit_buy_price) cfg.min_limit_buy_price = (parseFloat(cfg.min_limit_buy_price) * factor).toFixed(quoteDec);
+          if (cfg.max_limit_buy_price) cfg.max_limit_buy_price = (parseFloat(cfg.max_limit_buy_price) * factor).toFixed(quoteDec);
+          if (cfg.min_limit_sell_price) cfg.min_limit_sell_price = (parseFloat(cfg.min_limit_sell_price) * factor).toFixed(quoteDec);
+          if (cfg.max_limit_sell_price) cfg.max_limit_sell_price = (parseFloat(cfg.max_limit_sell_price) * factor).toFixed(quoteDec);
+        }
+        cfg.last_refresh_timestamp = 0;
+        cfg.next_refresh_timestamp = 0;
+        addLog(
+          bot,
+          `${tag} Penyesuaian Depth Ladder (${trigger.action}, step ${trigger.adjustStepPct}%) diterapkan.`,
+          "ORDER"
+        );
+        if (bot.status === "RUNNING") {
+          DepthLiquidityBotExecutor.cancelOpenDepthOrders(bot, addLog, `${tag} ${trigger.action}`);
+          DepthLiquidityBotExecutor.executeCycle(bot, addLog);
+        }
+        adjustedCount++;
+        adjustedNames.push(bot.name);
+      } else if (bot.botType === "MOVEMENT_DEPTH_LIQUIDITY" && bot.movementDepthConfig) {
+        const cfg = bot.movementDepthConfig;
+        if (trigger.action === "LADDER_RECENTER") {
+          MovementDepthLiquidityBotExecutor.resetAnchor(bot, currentPriceFloat.toFixed(quoteDec), addLog);
+        } else if (trigger.action === "LADDER_WIDEN_SPREAD") {
+          cfg.spread_bps = Math.min(500, Math.round((cfg.spread_bps || 20) * (1 + stepRatio * 2)));
+          cfg.bid_level_offsets_bps = cfg.bid_level_offsets_bps.map((b) => Math.round(b * (1 + stepRatio * 2)));
+          cfg.ask_level_offsets_bps = cfg.ask_level_offsets_bps.map((a) => Math.round(a * (1 + stepRatio * 2)));
+        } else if (trigger.action === "LADDER_SHIFT_UP" || trigger.action === "LADDER_SHIFT_DOWN") {
+          const factor = trigger.action === "LADDER_SHIFT_UP" ? 1 + stepRatio : Math.max(0.1, 1 - stepRatio);
+          const nextAnchor = (parseFloat(cfg.anchor_local_price || String(currentPriceFloat)) * factor).toFixed(quoteDec);
+          MovementDepthLiquidityBotExecutor.resetAnchor(bot, nextAnchor, addLog);
+        }
+        cfg.last_refresh_timestamp = 0;
+        cfg.next_refresh_timestamp = 0;
+        addLog(
+          bot,
+          `${tag} Penyesuaian Movement Depth (${trigger.action}, step ${trigger.adjustStepPct}%) diterapkan.`,
+          "ORDER"
+        );
+        if (bot.status === "RUNNING") {
+          MovementDepthLiquidityBotExecutor.cancelOpenBotOrders(bot, addLog, `${tag} ${trigger.action}`);
+          MovementDepthLiquidityBotExecutor.executeCycle(bot, addLog);
+        }
+        adjustedCount++;
+        adjustedNames.push(bot.name);
+      } else if (bot.botType === "QUANT_HFT_MM" && bot.quantHftConfig) {
+        const cfg = bot.quantHftConfig;
+        if (trigger.action === "LADDER_WIDEN_SPREAD") {
+          cfg.target_spread_pct = Number((cfg.target_spread_pct * (1 + stepRatio * 2)).toFixed(4));
+          cfg.max_spread_pct = Number(Math.max(cfg.target_spread_pct * 2, cfg.max_spread_pct * (1 + stepRatio)).toFixed(4));
+        } else if (trigger.action === "LADDER_SHIFT_UP") {
+          cfg.inventory_skew_factor = Math.min(1, Number((cfg.inventory_skew_factor + 0.15).toFixed(2)));
+        } else if (trigger.action === "LADDER_SHIFT_DOWN") {
+          cfg.inventory_skew_factor = Math.max(-1, Number((cfg.inventory_skew_factor - 0.15).toFixed(2)));
+        }
+        addLog(bot, `${tag} Parameter Quant HFT disesuaikan (${trigger.action}).`, "ORDER");
+        if (bot.status === "RUNNING") {
+          QuantHftBotExecutor.executeCycle(bot, addLog);
+        }
+        adjustedCount++;
+        adjustedNames.push(bot.name);
+      } else if (bot.botType === "ADVANCED_MM" && bot.advancedMMConfig) {
+        const cfg = bot.advancedMMConfig;
+        if (trigger.action === "LADDER_WIDEN_SPREAD") {
+          cfg.spread_min_bps = Math.min(500, Math.round(cfg.spread_min_bps * (1 + stepRatio * 2)));
+          cfg.spread_max_bps = Math.min(1e3, Math.round(cfg.spread_max_bps * (1 + stepRatio * 2)));
+        } else if (trigger.action === "LADDER_SHIFT_UP") {
+          cfg.price_offset_bps = Math.min(500, Math.round((cfg.price_offset_bps || 0) + trigger.adjustStepPct * 100));
+        } else if (trigger.action === "LADDER_SHIFT_DOWN") {
+          cfg.price_offset_bps = Math.max(-500, Math.round((cfg.price_offset_bps || 0) - trigger.adjustStepPct * 100));
+        } else if (trigger.action === "LADDER_RECENTER") {
+          cfg.price_offset_bps = 0;
+        }
+        cfg.lastRepriceTimestamp = 0;
+        addLog(bot, `${tag} Parameter Advanced MM disesuaikan (${trigger.action}).`, "ORDER");
+        if (bot.status === "RUNNING") {
+          AdvancedMarketMakerBotExecutor.executeTick(bot, addLog);
+        }
+        adjustedCount++;
+        adjustedNames.push(bot.name);
+      }
+      bot.updatedAt = Date.now();
+      db.botInstances.set(bot.id, bot);
+      marketWsService.broadcastBotUpdate(bot);
+    }
+    if (adjustedCount === 0) {
+      return `Bot ditemukan (${bots.length}) tetapi tidak memerlukan perubahan status saat ini.`;
+    }
+    return `${trigger.action} (${trigger.adjustStepPct}%) dieksekusi pada ${adjustedCount} bot: ${adjustedNames.join(", ")}.`;
+  }
+};
+var priceThresholdService = new PriceThresholdService();
+
+// server/routes/mmConsole.ts
 var mmConsoleRouter = Router11();
 var requireMMOrAdmin = (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -14080,7 +17354,7 @@ mmConsoleRouter.post("/order-bot/create", requireMMOrAdmin, (req, res) => {
       jitter_timing_pct: Number(jitter_timing_pct || 10),
       jitter_price_pct: Number(jitter_price_pct || 2)
     };
-    const botId = `bot-ord-${crypto18.randomUUID().slice(0, 8)}`;
+    const botId = `bot-ord-${crypto21.randomUUID().slice(0, 8)}`;
     const bot = {
       id: botId,
       name,
@@ -14157,7 +17431,7 @@ mmConsoleRouter.post("/volume-bot/create", requireMMOrAdmin, (req, res) => {
       vol_idr_start_threshold: String(vol_idr_start_threshold || "0"),
       volume_sell_account_id: volume_sell_account_id || void 0
     };
-    const botId = `bot-vol-${crypto18.randomUUID().slice(0, 8)}`;
+    const botId = `bot-vol-${crypto21.randomUUID().slice(0, 8)}`;
     const bot = {
       id: botId,
       name,
@@ -14199,7 +17473,7 @@ mmConsoleRouter.post("/instance/clone", requireMMOrAdmin, (req, res) => {
     if (!sourceBot) {
       return res.status(404).json({ error: "Source bot tidak ditemukan." });
     }
-    const clonedId = `bot-${sourceBot.botType.toLowerCase().slice(0, 3)}-${crypto18.randomUUID().slice(0, 8)}`;
+    const clonedId = `bot-${sourceBot.botType.toLowerCase().slice(0, 3)}-${crypto21.randomUUID().slice(0, 8)}`;
     const clonedOrderConfig = sourceBot.orderBotConfig ? {
       ...JSON.parse(JSON.stringify(sourceBot.orderBotConfig)),
       ...overrides?.orderBotConfig || {}
@@ -14226,6 +17500,14 @@ mmConsoleRouter.post("/instance/clone", requireMMOrAdmin, (req, res) => {
       activeOrderIds: [],
       lastRepriceTimestamp: void 0
     } : void 0;
+    const clonedMdConfig = sourceBot.movementDepthConfig ? {
+      ...JSON.parse(JSON.stringify(sourceBot.movementDepthConfig)),
+      ...overrides?.movementDepthConfig || {},
+      activeOrderIds: [],
+      lastRepriceTimestamp: void 0,
+      leader_baseline_price: void 0,
+      last_leader_return_pct: 0
+    } : void 0;
     const clonedQuantHftConfig = sourceBot.quantHftConfig ? {
       ...JSON.parse(JSON.stringify(sourceBot.quantHftConfig)),
       ...overrides?.quantHftConfig || {},
@@ -14247,6 +17529,7 @@ mmConsoleRouter.post("/instance/clone", requireMMOrAdmin, (req, res) => {
       volumeBotConfig: clonedVolumeConfig,
       priceFollowerConfig: clonedPfConfig,
       depthLiquidityConfig: clonedDlConfig,
+      movementDepthConfig: clonedMdConfig,
       quantHftConfig: clonedQuantHftConfig,
       gridConfig: sourceBot.gridConfig ? JSON.parse(JSON.stringify(sourceBot.gridConfig)) : void 0,
       stats: {
@@ -14352,6 +17635,28 @@ mmConsoleRouter.post("/instance/:id/update", requireMMOrAdmin, (req, res) => {
         ...req.body.depthLiquidityConfig,
         account_id: req.body.depthLiquidityConfig.account_id || bot.accountId
       };
+    }
+    if (req.body.movementDepthConfig) {
+      const nextLeaderSym = (req.body.movementDepthConfig.leader_symbol || bot.movementDepthConfig?.leader_symbol || "").trim().toUpperCase();
+      const prevAnchor = bot.movementDepthConfig?.anchor_local_price;
+      const nextAnchor = req.body.movementDepthConfig.anchor_local_price;
+      const leaderChanged = Boolean(nextLeaderSym && nextLeaderSym !== bot.movementDepthConfig?.leader_symbol);
+      const anchorChanged = nextAnchor !== void 0 && String(nextAnchor) !== String(prevAnchor);
+      const updatedMovementConfig = {
+        ...bot.movementDepthConfig,
+        ...req.body.movementDepthConfig,
+        leader_symbol: nextLeaderSym,
+        account_id: req.body.movementDepthConfig.account_id || bot.accountId
+      };
+      if (leaderChanged || anchorChanged) {
+        const snap = priceAggregatorService.getSymbolSnapshot(nextLeaderSym, updatedMovementConfig.leader_provider || "AGGREGATED");
+        if (snap.price > 0) {
+          updatedMovementConfig.leader_baseline_price = snap.price;
+          updatedMovementConfig.last_leader_price = snap.price;
+          updatedMovementConfig.last_leader_return_pct = 0;
+        }
+      }
+      bot.movementDepthConfig = updatedMovementConfig;
     }
     if (req.body.quantHftConfig) {
       bot.quantHftConfig = {
@@ -14494,6 +17799,20 @@ mmConsoleRouter.post("/instance/:id/refresh-liquidity", requireMMOrAdmin, (req, 
         message: `Likuiditas bot ${bot.name} berhasil disegarkan secara instan dengan randomisasi tick baru.`,
         bot
       });
+    } else if (bot.botType === "MOVEMENT_DEPTH_LIQUIDITY" && bot.movementDepthConfig) {
+      bot.movementDepthConfig.last_refresh_timestamp = 0;
+      bot.movementDepthConfig.lastRepriceTimestamp = 0;
+      botWorkerManager.addLog(bot, `\u26A1 Trigger manual refresh Depth Movement (WS) oleh ${user.email}. Menyinkronkan pergerakan ${bot.movementDepthConfig.leader_symbol}...`, "INFO");
+      const executed = MovementDepthLiquidityBotExecutor.executeCycle(bot, (b, msg, type) => {
+        botWorkerManager.addLog(b, msg, type);
+      });
+      db.scheduleSave();
+      return res.json({
+        success: true,
+        executed,
+        message: `Likuiditas Depth Movement bot ${bot.name} berhasil disegarkan secara instan.`,
+        bot
+      });
     } else if (bot.botType === "PRICE_FOLLOWER" && bot.priceFollowerConfig) {
       bot.priceFollowerConfig.lastRepriceTimestamp = 0;
       botWorkerManager.addLog(bot, `\u26A1 Trigger manual refresh harga referensi oleh ${user.email}.`, "INFO");
@@ -14509,6 +17828,45 @@ mmConsoleRouter.post("/instance/:id/refresh-liquidity", requireMMOrAdmin, (req, 
       });
     }
     res.json({ success: true, message: `Bot ${bot.name} tidak memiliki konfigurasi ladder depth.`, bot });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+mmConsoleRouter.post("/instance/:id/reset-anchor", requireMMOrAdmin, (req, res) => {
+  try {
+    const user = req.user;
+    const bot = db.botInstances.get(req.params.id);
+    if (!bot) return res.status(404).json({ error: "Bot tidak ditemukan" });
+    if (bot.botType !== "MOVEMENT_DEPTH_LIQUIDITY" || !bot.movementDepthConfig) {
+      return res.status(400).json({ error: "Fitur Reset Anchor hanya berlaku untuk bot Depth Movement (WS)." });
+    }
+    const result = MovementDepthLiquidityBotExecutor.resetAnchor(
+      bot,
+      req.body?.anchor_local_price,
+      (b, msg, type) => botWorkerManager.addLog(b, msg, type)
+    );
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+    if (bot.status === "RUNNING") {
+      MovementDepthLiquidityBotExecutor.executeCycle(bot, (b, msg, type) => {
+        botWorkerManager.addLog(b, msg, type);
+      });
+    }
+    db.auditLogs.push({
+      id: crypto21.randomUUID(),
+      actorId: user.id,
+      action: "MOVEMENT_BOT_ANCHOR_RESET",
+      resource: `bot:${bot.id}`,
+      details: `Anchor lokal (${result.anchorLocalPrice}) & baseline ${bot.movementDepthConfig.leader_symbol} (${result.leaderBaselinePrice}) di-reset oleh ${user.email}`,
+      createdAt: Date.now()
+    });
+    db.scheduleSave();
+    res.json({
+      success: true,
+      message: `Anchor bot ${bot.name} dikunci ulang ke harga lokal ${result.anchorLocalPrice} (Baseline ${bot.movementDepthConfig.leader_symbol}: ${result.leaderBaselinePrice}).`,
+      bot
+    });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -14651,7 +18009,7 @@ mmConsoleRouter.post("/csv/import-confirm", requireMMOrAdmin, (req, res) => {
     for (const r of rows) {
       const data = r.data || r;
       const bType = data.botType || defaultBotType || "ORDER_BOT";
-      const botId = `bot-${bType.toLowerCase().slice(0, 3)}-${crypto18.randomUUID().slice(0, 8)}`;
+      const botId = `bot-${bType.toLowerCase().slice(0, 3)}-${crypto21.randomUUID().slice(0, 8)}`;
       let orderCfg;
       let volCfg;
       if (bType === "ORDER_BOT") {
@@ -14867,6 +18225,28 @@ mmConsoleRouter.get("/external-feeds", requireMMOrAdmin, (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+mmConsoleRouter.get("/external-feeds/whitelist", requireMMOrAdmin, (req, res) => {
+  try {
+    const items = Array.from(db.externalWsWhitelist.values()).filter((entry) => entry.enabled).map((entry) => {
+      const snap = priceAggregatorService.getSymbolSnapshot(entry.symbol, "AGGREGATED");
+      return {
+        ...entry,
+        binancePrice: snap.binancePrice,
+        bybitPrice: snap.bybitPrice,
+        binanceFresh: snap.binanceFresh,
+        bybitFresh: snap.bybitFresh
+      };
+    });
+    res.json({
+      success: true,
+      items,
+      binanceStatus: priceAggregatorService.binance.getConnectionStatus(),
+      bybitStatus: priceAggregatorService.bybit.getConnectionStatus()
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 mmConsoleRouter.post("/external-feeds/reconnect", requireMMOrAdmin, async (req, res) => {
   try {
     const { provider } = req.body;
@@ -14918,6 +18298,62 @@ mmConsoleRouter.get("/fx-rate", requireMMOrAdmin, (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+mmConsoleRouter.get("/fx-status", requireMMOrAdmin, (_req, res) => {
+  try {
+    const currentRate = fxConversionService.getCurrentRate();
+    const config = fxConversionService.getConfig();
+    const history = fxConversionService.getAuditHistory();
+    res.json({
+      success: true,
+      effectiveRateIdr: currentRate.rate,
+      source: currentRate.source,
+      status: currentRate.isStale ? "STALE" : "ACTIVE",
+      isStale: currentRate.isStale,
+      updatedAt: currentRate.updatedAt,
+      validUntil: currentRate.validUntil,
+      updatedBy: currentRate.updatedBy,
+      notes: currentRate.notes,
+      currentRate,
+      config,
+      history
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+mmConsoleRouter.post("/fx-rate", requireAdmin, (req, res) => {
+  try {
+    const user = req.user;
+    const rawRate = req.body?.rateIdr ?? req.body?.newRate;
+    const notes = req.body?.reason ?? req.body?.notes;
+    const validityHours = req.body?.validityHours ?? 24;
+    const confirmOutOfBand = Boolean(req.body?.confirmOutOfBand);
+    const parsedRate = parseFloat(String(rawRate));
+    if (!Number.isFinite(parsedRate) || parsedRate <= 0) {
+      return res.status(400).json({ error: "Nilai kurs rateIdr / newRate wajib berupa angka positif." });
+    }
+    const result = fxConversionService.updateManualRate(
+      parsedRate,
+      user.email,
+      notes,
+      parseInt(String(validityHours), 10),
+      confirmOutOfBand
+    );
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+    res.json({
+      success: true,
+      effectiveRateIdr: result.rateRecord?.rate,
+      source: result.rateRecord?.source,
+      message: `Kurs USDT/IDR berhasil diperbarui menjadi Rp ${result.rateRecord?.rate.toLocaleString("id-ID")}. Kunci manual diaktifkan.`,
+      rateRecord: result.rateRecord,
+      config: fxConversionService.getConfig()
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 mmConsoleRouter.post("/fx-rate/config", requireAdmin, (req, res) => {
@@ -15044,7 +18480,7 @@ mmConsoleRouter.post("/price-follower/create", requireMMOrAdmin, (req, res) => {
       enabled: true,
       dry_run: Boolean(dry_run)
     };
-    const botId = `bot-fol-${crypto18.randomUUID().slice(0, 8)}`;
+    const botId = `bot-fol-${crypto21.randomUUID().slice(0, 8)}`;
     const bot = {
       id: botId,
       name,
@@ -15169,7 +18605,7 @@ mmConsoleRouter.post("/depth-liquidity/create", requireMMOrAdmin, (req, res) => 
       enabled: true,
       activeOrderIds: []
     };
-    const botId = `bot-dep-${crypto18.randomUUID().slice(0, 8)}`;
+    const botId = `bot-dep-${crypto21.randomUUID().slice(0, 8)}`;
     const bot = {
       id: botId,
       name,
@@ -15204,6 +18640,179 @@ mmConsoleRouter.post("/depth-liquidity/create", requireMMOrAdmin, (req, res) => 
     db.botInstances.set(bot.id, bot);
     db.scheduleSave();
     res.json({ success: true, message: `Depth & Liquidity Bot "${bot.name}" berhasil dibuat.`, bot });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+mmConsoleRouter.post("/movement-depth/create", requireMMOrAdmin, (req, res) => {
+  try {
+    const user = req.user;
+    const {
+      name,
+      pairId,
+      environment,
+      account_id,
+      leader_symbol,
+      leader_provider,
+      anchor_local_price,
+      movement_sensitivity,
+      movement_threshold_bps,
+      min_price_guard,
+      max_price_guard,
+      spread_bps,
+      spacing_mode,
+      level_spacing_idr,
+      anti_stacking_enabled,
+      number_of_bid_levels,
+      number_of_ask_levels,
+      bid_level_offsets_bps,
+      ask_level_offsets_bps,
+      bid_quantities,
+      ask_quantities,
+      quantity_randomization_enabled,
+      random_min_quantity,
+      random_max_quantity,
+      minimum_reprice_interval_ms,
+      minimum_price_change_bps,
+      maximum_open_orders,
+      maximum_total_bid_value_idr,
+      maximum_total_ask_quantity,
+      maximum_inventory,
+      maximum_order_value_idr,
+      max_data_age_ms,
+      tick_size,
+      lot_size,
+      dry_run,
+      liquidity_refresh_cooldown_sec,
+      randomize_placement_enabled,
+      price_randomization_ticks
+    } = req.body;
+    if (!name || !pairId) {
+      return res.status(400).json({ error: "Nama bot dan Trading Pair wajib diisi." });
+    }
+    const pair = db.tradingPairs.get(pairId);
+    if (!pair) {
+      return res.status(404).json({ error: `Trading pair target ${pairId} tidak ditemukan.` });
+    }
+    const cleanLeaderSym = String(leader_symbol || "").trim().toUpperCase();
+    const wlEntry = db.externalWsWhitelist.get(cleanLeaderSym);
+    if (!cleanLeaderSym || !wlEntry || !wlEntry.enabled) {
+      return res.status(400).json({
+        error: `Pair acuan WebSocket "${cleanLeaderSym || "-"}" belum aktif di Whitelist Admin. Hubungi Admin untuk menambahkannya ke whitelist WS Binance/Bybit.`
+      });
+    }
+    let resolvedAnchor = parseFloat(String(anchor_local_price || "0"));
+    if (!(resolvedAnchor > 0)) {
+      resolvedAnchor = Number(BigInt(pair.lastPrice || "0")) / 10 ** (pair.quoteDecimals || 2);
+    }
+    if (!(resolvedAnchor > 0)) {
+      return res.status(400).json({ error: "Target Local Anchor Price wajib diisi angka positif > 0." });
+    }
+    const sensitivityNum = Number(movement_sensitivity ?? 1);
+    if (!Number.isFinite(sensitivityNum) || sensitivityNum === 0) {
+      return res.status(400).json({ error: "Sensitivitas pergerakan (Beta) harus angka != 0." });
+    }
+    const providerChoice = leader_provider === "BINANCE" || leader_provider === "BYBIT" ? leader_provider : "AGGREGATED";
+    const initialSnap = priceAggregatorService.getSymbolSnapshot(cleanLeaderSym, providerChoice);
+    const compatibleTick = MovementDepthLiquidityBotExecutor.getCompatibleTickSize(
+      pairId,
+      tick_size ? Number(tick_size) : void 0,
+      resolvedAnchor
+    );
+    const defaultSpacing = Math.max(compatibleTick, Math.round(resolvedAnchor * 5e-3 / compatibleTick) * compatibleTick);
+    const isUsdtPair = pair.quoteCurrency === "USDT";
+    const defaultQtyArray = pairId === "USDT-IDR" ? ["25.0", "50.0", "75.0", "100.0", "150.0"] : isUsdtPair ? ["10.0", "20.0", "35.0", "50.0", "75.0"] : ["10.0", "20.0", "30.0", "50.0", "80.0"];
+    const movementDepthConfig = {
+      account_id: account_id || user.id,
+      market_symbol: pairId,
+      leader_symbol: cleanLeaderSym,
+      leader_provider: providerChoice,
+      anchor_local_price: String(resolvedAnchor),
+      leader_baseline_price: initialSnap.price > 0 ? initialSnap.price : void 0,
+      last_leader_price: initialSnap.price > 0 ? initialSnap.price : void 0,
+      last_leader_return_pct: 0,
+      last_projected_local_price: resolvedAnchor,
+      movement_sensitivity: sensitivityNum,
+      movement_threshold_bps: Math.max(1, Number(movement_threshold_bps || minimum_price_change_bps || 10)),
+      min_price_guard: min_price_guard ? String(min_price_guard) : void 0,
+      max_price_guard: max_price_guard ? String(max_price_guard) : void 0,
+      spread_bps: Math.max(2, Number(spread_bps || 20)),
+      spacing_mode: spacing_mode || "PERCENT_BPS",
+      level_spacing_idr: Number(level_spacing_idr || defaultSpacing),
+      anti_stacking_enabled: anti_stacking_enabled !== void 0 ? Boolean(anti_stacking_enabled) : true,
+      number_of_bid_levels: Math.min(20, Math.max(1, Number(number_of_bid_levels || 5))),
+      number_of_ask_levels: Math.min(20, Math.max(1, Number(number_of_ask_levels || 5))),
+      bid_level_offsets_bps: Array.isArray(bid_level_offsets_bps) ? bid_level_offsets_bps : [20, 45, 75, 110, 150],
+      ask_level_offsets_bps: Array.isArray(ask_level_offsets_bps) ? ask_level_offsets_bps : [20, 45, 75, 110, 150],
+      bid_quantities: Array.isArray(bid_quantities) ? bid_quantities : defaultQtyArray,
+      ask_quantities: Array.isArray(ask_quantities) ? ask_quantities : defaultQtyArray,
+      quantity_randomization_enabled: Boolean(quantity_randomization_enabled),
+      random_min_quantity: String(random_min_quantity || "5.0"),
+      random_max_quantity: String(random_max_quantity || "25.0"),
+      minimum_reprice_interval_ms: Number(minimum_reprice_interval_ms || 3e3),
+      minimum_price_change_bps: Number(minimum_price_change_bps || 10),
+      maximum_open_orders: Number(maximum_open_orders || 40),
+      maximum_total_bid_value_idr: String(maximum_total_bid_value_idr || "500000000000"),
+      maximum_total_ask_quantity: String(maximum_total_ask_quantity || "10000000.0"),
+      maximum_inventory: String(maximum_inventory || "10000000.0"),
+      maximum_order_value_idr: String(maximum_order_value_idr || "10000000000"),
+      max_data_age_ms: Number(max_data_age_ms || 3e4),
+      tick_size: compatibleTick,
+      lot_size: String(lot_size || "0.0001"),
+      dry_run: Boolean(dry_run),
+      liquidity_refresh_cooldown_sec: Math.max(2, Number(liquidity_refresh_cooldown_sec || 10)),
+      randomize_placement_enabled: randomize_placement_enabled !== void 0 ? Boolean(randomize_placement_enabled) : true,
+      price_randomization_ticks: Math.max(1, Number(price_randomization_ticks || 2)),
+      enabled: true,
+      activeOrderIds: []
+    };
+    const botId = `bot-mov-${crypto21.randomUUID().slice(0, 8)}`;
+    const bot = {
+      id: botId,
+      name,
+      botType: "MOVEMENT_DEPTH_LIQUIDITY",
+      pairId,
+      environment: environment || "DEMO",
+      ownerUserId: user.id,
+      accountId: account_id || user.id,
+      version: 1,
+      status: "READY",
+      lastHeartbeat: Date.now(),
+      movementDepthConfig,
+      stats: {
+        ordersSubmitted: 0,
+        ordersAccepted: 0,
+        ordersFilled: 0,
+        executedVolume: "0",
+        totalTrades: 0
+      },
+      deployedOrderIds: [],
+      logs: [
+        {
+          timestamp: Date.now(),
+          message: `Bot Depth Movement (WS) "${name}" dibuat untuk ${pairId}. Mengikuti % pergerakan ${cleanLeaderSym} (${providerChoice}, Beta ${sensitivityNum}x) dari Anchor Lokal ${resolvedAnchor} ${pair.quoteCurrency}.`,
+          type: "INFO"
+        }
+      ],
+      createdBy: user.email,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    db.botInstances.set(botId, bot);
+    db.auditLogs.push({
+      id: crypto21.randomUUID(),
+      actorId: user.id,
+      action: "MOVEMENT_DEPTH_BOT_CREATED",
+      resource: `bot:${botId}`,
+      details: `Bot Depth Movement (WS) ${name} (${pairId}) mengikuti ${cleanLeaderSym} dibuat oleh ${user.email}`,
+      createdAt: Date.now()
+    });
+    db.scheduleSave();
+    res.json({
+      success: true,
+      bot,
+      message: `Bot Depth Movement (WS) ${name} berhasil dibuat untuk ${pairId} dengan acuan ${cleanLeaderSym}.`
+    });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -15264,7 +18873,7 @@ mmConsoleRouter.post("/quant-hft/create", requireMMOrAdmin, (req, res) => {
       reprice_interval_ms: Number(reprice_interval_ms || 1500),
       activeOrderIds: []
     };
-    const botId = `bot-qhft-${Date.now()}-${crypto18.randomBytes(2).toString("hex")}`;
+    const botId = `bot-qhft-${Date.now()}-${crypto21.randomBytes(2).toString("hex")}`;
     const bot = {
       id: botId,
       name,
@@ -15493,7 +19102,7 @@ mmConsoleRouter.post("/smart-hft/create", requireMMOrAdmin, (req, res) => {
       totalBars,
       lastRepriceTimestamp: 0
     };
-    const botId = `bot-shft-${Date.now()}-${crypto18.randomBytes(2).toString("hex")}`;
+    const botId = `bot-shft-${Date.now()}-${crypto21.randomBytes(2).toString("hex")}`;
     const bot = {
       id: botId,
       name,
@@ -15545,6 +19154,67 @@ mmConsoleRouter.get("/smart-hft/python-script", (req, res) => {
       return res.send(code);
     }
     res.json({ code, filename: "smart_hft_ladder_bot.py" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+mmConsoleRouter.get("/smart-hft/backtest/datasets", requireMMOrAdmin, (req, res) => {
+  try {
+    const pairId = typeof req.query.pairId === "string" ? req.query.pairId : void 0;
+    const datasets = HftBacktestEngine.getAvailableDatasets(pairId);
+    res.json({ success: true, ...datasets });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+mmConsoleRouter.post("/smart-hft/backtest/run", requireMMOrAdmin, (req, res) => {
+  try {
+    const body = req.body || {};
+    const pairId = String(body.pairId || "BTC-IDR");
+    if (!db.tradingPairs.has(pairId)) {
+      return res.status(400).json({ error: `Pair trading '${pairId}' tidak ditemukan.` });
+    }
+    const allowedModes = [
+      "LEDGER_SETTLED_TRADES",
+      "ALL_HISTORICAL_TRADES",
+      "KLINE_OHLCV_REPLAY"
+    ];
+    const dataSourceMode = allowedModes.includes(body.dataSourceMode) ? body.dataSourceMode : "LEDGER_SETTLED_TRADES";
+    const requestPayload = {
+      pairId,
+      dataSourceMode,
+      startTime: body.startTime !== void 0 && body.startTime !== null && body.startTime !== "" ? Number(body.startTime) : void 0,
+      endTime: body.endTime !== void 0 && body.endTime !== null && body.endTime !== "" ? Number(body.endTime) : void 0,
+      initialBaseBalance: String(body.initialBaseBalance ?? "1"),
+      initialQuoteBalance: String(body.initialQuoteBalance ?? "150000000"),
+      makerFeeBps: body.makerFeeBps !== void 0 ? Number(body.makerFeeBps) : -2,
+      takerFeeBps: body.takerFeeBps !== void 0 ? Number(body.takerFeeBps) : 10,
+      slippageBps: body.slippageBps !== void 0 ? Number(body.slippageBps) : 0,
+      timeframe: body.timeframe || "15m",
+      pattern: body.pattern || "HEAD_AND_SHOULDERS",
+      total_orders: Math.max(2, Math.min(100, Number(body.total_orders ?? 40))),
+      bound_percentage: body.bound_percentage !== void 0 ? Number(body.bound_percentage) : 3,
+      min_price_bound: body.min_price_bound ? String(body.min_price_bound) : void 0,
+      max_price_bound: body.max_price_bound ? String(body.max_price_bound) : void 0,
+      min_buy_lot: String(body.min_buy_lot ?? "0.02"),
+      max_buy_lot: String(body.max_buy_lot ?? "0.50"),
+      min_sell_lot: String(body.min_sell_lot ?? "0.02"),
+      max_sell_lot: String(body.max_sell_lot ?? "0.50"),
+      min_spread_bps: body.min_spread_bps !== void 0 ? Number(body.min_spread_bps) : 25,
+      spread_percentage: body.spread_percentage !== void 0 ? Number(body.spread_percentage) : void 0,
+      reprice_interval_ms: Math.max(500, Math.min(36e5, Number(body.reprice_interval_ms ?? 4e3))),
+      klineTimeframe: body.klineTimeframe ? String(body.klineTimeframe) : void 0,
+      label: body.label ? String(body.label).slice(0, 64) : void 0
+    };
+    const result = HftBacktestEngine.runBacktest(requestPayload);
+    res.json({ success: true, result });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+mmConsoleRouter.get("/smart-hft/backtest/history", requireMMOrAdmin, (_req, res) => {
+  try {
+    res.json({ success: true, history: HftBacktestEngine.getHistory() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -15642,7 +19312,7 @@ mmConsoleRouter.post("/advanced-bot/create", requireMMOrAdmin, (req, res) => {
       activeOrderIds: [],
       riskWarnings: []
     };
-    const botId = `bot-amm-${Date.now()}-${crypto18.randomBytes(2).toString("hex")}`;
+    const botId = `bot-amm-${Date.now()}-${crypto21.randomBytes(2).toString("hex")}`;
     const bot = {
       id: botId,
       name,
@@ -15925,11 +19595,717 @@ mmConsoleRouter.get("/engine/telemetry", requireMMOrAdmin, (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+mmConsoleRouter.get("/thresholds", requireMMOrAdmin, (req, res) => {
+  try {
+    const environment = req.query.environment;
+    const pairId = req.query.pairId;
+    const triggers = priceThresholdService.listTriggers(environment, pairId);
+    const events = priceThresholdService.listEvents(environment, 80);
+    res.json({ success: true, triggers, events });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+mmConsoleRouter.post("/thresholds", requireMMOrAdmin, (req, res) => {
+  try {
+    const user = req.user;
+    const {
+      name,
+      pairId,
+      environment,
+      condition,
+      thresholdPrice,
+      soundEnabled,
+      soundTone,
+      action,
+      targetBotId,
+      adjustStepPct,
+      cooldownSec,
+      autoResetAfterCooldown
+    } = req.body;
+    if (!pairId || !thresholdPrice) {
+      return res.status(400).json({ error: "pairId dan thresholdPrice wajib diisi." });
+    }
+    const trigger = priceThresholdService.createTrigger({
+      name,
+      pairId,
+      environment: environment || "DEMO",
+      condition: condition || "ABOVE_OR_EQUAL",
+      thresholdPrice: String(thresholdPrice),
+      soundEnabled: soundEnabled !== false,
+      soundTone: soundTone || "CHIME",
+      action: action || "NONE",
+      targetBotId: targetBotId || void 0,
+      adjustStepPct: adjustStepPct !== void 0 ? Number(adjustStepPct) : 1.5,
+      cooldownSec: cooldownSec !== void 0 ? Number(cooldownSec) : 30,
+      autoResetAfterCooldown: autoResetAfterCooldown !== false,
+      createdBy: user.email || user.id
+    });
+    res.json({
+      success: true,
+      message: `Aturan threshold "${trigger.name}" aktif pada ${trigger.pairId}.`,
+      trigger
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+mmConsoleRouter.put("/thresholds/:id", requireMMOrAdmin, (req, res) => {
+  try {
+    const trigger = priceThresholdService.updateTrigger(req.params.id, req.body || {});
+    res.json({
+      success: true,
+      message: `Aturan threshold "${trigger.name}" diperbarui.`,
+      trigger
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+mmConsoleRouter.delete("/thresholds/:id", requireMMOrAdmin, (req, res) => {
+  try {
+    const deleted = priceThresholdService.deleteTrigger(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: "Aturan threshold tidak ditemukan." });
+    }
+    res.json({ success: true, message: "Aturan threshold dihapus." });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+mmConsoleRouter.post("/thresholds/:id/test", requireMMOrAdmin, (req, res) => {
+  try {
+    const executeBotAdjustment = req.body?.executeBotAdjustment !== false;
+    const event = priceThresholdService.triggerManualTest(req.params.id, executeBotAdjustment);
+    res.json({
+      success: true,
+      message: event.adjustmentSummary,
+      event
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// server/routes/futures.ts
+import { Router as Router12 } from "express";
+
+// server/services/FuturesEngine.ts
+init_database();
+import crypto22 from "crypto";
+init_PrecisionMath();
+var FuturesEngineService = class {
+  constructor() {
+    this.timer = null;
+    this.isTicking = false;
+  }
+  start() {
+    if (this.timer) return;
+    this.timer = setInterval(() => {
+      this.evaluateMarkAndOrders();
+    }, 1500);
+    console.log("[DIMONEX FuturesEngine] Real Perpetual Futures engine aktif (1500ms mark/order loop).");
+  }
+  stop() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+  resolvePairDecimals(pair) {
+    const baseDecimals = pair.baseDecimals ?? 8;
+    const quoteDecimals = pair.quoteDecimals !== void 0 && pair.quoteDecimals !== null ? pair.quoteDecimals : pair.quoteCurrency === "USDT" ? 6 : 2;
+    return { baseDecimals, quoteDecimals };
+  }
+  getNext8hFundingTimestamp(now = Date.now()) {
+    const eightHoursMs = 8 * 60 * 60 * 1e3;
+    return Math.ceil((now + 1e3) / eightHoursMs) * eightHoursMs;
+  }
+  getLiveBookPrices(pair) {
+    const book = matchingEngine.getOrderBook(pair.id);
+    const lastUnits = BigInt(pair.lastPrice || "0");
+    const bestBidUnits = book.bids.length > 0 && BigInt(book.bids[0].price) > 0n ? BigInt(book.bids[0].price) : lastUnits;
+    const bestAskUnits = book.asks.length > 0 && BigInt(book.asks[0].price) > 0n ? BigInt(book.asks[0].price) : lastUnits;
+    return { lastUnits, bestBidUnits, bestAskUnits };
+  }
+  calculateNotionalQuoteUnits(sizeUnits, baseDecimals, priceUnits) {
+    return PrecisionMath.calculateQuoteAmount(sizeUnits, baseDecimals, priceUnits);
+  }
+  calculateLiquidationPriceUnits(side, entryPriceUnits, leverage) {
+    if (entryPriceUnits <= 0n) return 1n;
+    const lev = BigInt(Math.max(1, Math.min(125, Math.round(leverage))));
+    const maintBuffer = entryPriceUnits * 50n / 10000n;
+    if (side === "LONG") {
+      if (lev <= 1n) {
+        return maintBuffer >= entryPriceUnits ? 1n : maintBuffer || 1n;
+      }
+      const raw = entryPriceUnits * (lev - 1n) / lev + maintBuffer;
+      if (raw >= entryPriceUnits) return entryPriceUnits > 1n ? entryPriceUnits - 1n : 1n;
+      return raw > 0n ? raw : 1n;
+    } else {
+      const raw = entryPriceUnits * (lev + 1n) / lev - maintBuffer;
+      return raw > entryPriceUnits ? raw : entryPriceUnits + 1n;
+    }
+  }
+  computeUnrealizedPnl(pos, markUnits) {
+    const size = BigInt(pos.sizeUnits);
+    const entry = BigInt(pos.entryPriceUnits);
+    const baseScale = 10n ** BigInt(pos.baseDecimals);
+    const diff = pos.side === "LONG" ? markUnits - entry : entry - markUnits;
+    const pnlUnits = size * diff / baseScale;
+    const margin = BigInt(pos.marginLockedUnits);
+    const roePct = margin > 0n ? Number(pnlUnits * 10000n / margin) / 100 : 0;
+    return { unrealizedPnlUnits: pnlUnits, roePct };
+  }
+  getFuturesMarkets() {
+    const now = Date.now();
+    const nextFundingTimestamp = this.getNext8hFundingTimestamp(now);
+    const markets = [];
+    for (const pair of db.tradingPairs.values()) {
+      if (!pair.isActive) continue;
+      const { baseDecimals, quoteDecimals } = this.resolvePairDecimals(pair);
+      const { lastUnits, bestBidUnits, bestAskUnits } = this.getLiveBookPrices(pair);
+      let fundingRatePct = 0.01;
+      if (lastUnits > 0n && bestBidUnits > 0n && bestAskUnits > 0n) {
+        const mid = (bestBidUnits + bestAskUnits) / 2n;
+        const spreadBps = Number((mid - lastUnits) * 10000n / lastUnits);
+        fundingRatePct = Number(Math.max(-0.075, Math.min(0.075, 0.01 + spreadBps * 5e-4)).toFixed(4));
+      }
+      let openInterestQuoteUnits = 0n;
+      for (const pos of db.futuresPositions.values()) {
+        if (pos.status === "OPEN" && pos.pairId === pair.id) {
+          openInterestQuoteUnits += this.calculateNotionalQuoteUnits(
+            BigInt(pos.sizeUnits),
+            baseDecimals,
+            lastUnits > 0n ? lastUnits : BigInt(pos.entryPriceUnits)
+          );
+        }
+      }
+      markets.push({
+        pairId: pair.id,
+        baseCurrency: pair.baseCurrency,
+        quoteCurrency: pair.quoteCurrency,
+        baseDecimals,
+        quoteDecimals,
+        lastPrice: lastUnits.toString(),
+        bestBid: bestBidUnits.toString(),
+        bestAsk: bestAskUnits.toString(),
+        high24h: pair.high24h || lastUnits.toString(),
+        low24h: pair.low24h || lastUnits.toString(),
+        volume24h: pair.volume24h || "0",
+        priceChangePercent24h: pair.priceChangePercent24h || pair.priceChange24h || "0",
+        minOrderSize: pair.minOrderSize,
+        maxOrderSize: pair.maxOrderSize,
+        makerFeeBps: pair.makerFeeBps,
+        takerFeeBps: pair.takerFeeBps,
+        fundingRatePct,
+        nextFundingTimestamp,
+        maxLeverage: 125,
+        openInterestQuoteUnits: openInterestQuoteUnits.toString()
+      });
+    }
+    return markets;
+  }
+  getUserFuturesState(userId) {
+    const positions = [];
+    const history = [];
+    const openOrders = [];
+    const orderHistory = [];
+    for (const pos of db.futuresPositions.values()) {
+      if (pos.userId !== userId) continue;
+      if (pos.status === "OPEN") {
+        const pair = db.tradingPairs.get(pos.pairId);
+        const markUnits = pair && pair.lastPrice ? BigInt(pair.lastPrice) : BigInt(pos.markPriceUnits);
+        const { unrealizedPnlUnits, roePct } = this.computeUnrealizedPnl(pos, markUnits);
+        pos.markPriceUnits = markUnits.toString();
+        pos.unrealizedPnlUnits = unrealizedPnlUnits.toString();
+        pos.roePct = roePct;
+        positions.push({ ...pos });
+      } else {
+        history.push({ ...pos });
+      }
+    }
+    for (const ord of db.futuresOrders.values()) {
+      if (ord.userId !== userId) continue;
+      if (ord.status === "OPEN") {
+        openOrders.push({ ...ord });
+      } else {
+        orderHistory.push({ ...ord });
+      }
+    }
+    positions.sort((a, b) => b.updatedAt - a.updatedAt);
+    history.sort((a, b) => (b.closedAt || b.updatedAt) - (a.closedAt || a.updatedAt));
+    openOrders.sort((a, b) => b.createdAt - a.createdAt);
+    orderHistory.sort((a, b) => b.updatedAt - a.updatedAt);
+    return {
+      positions,
+      history: history.slice(0, 100),
+      openOrders,
+      orderHistory: orderHistory.slice(0, 100)
+    };
+  }
+  placeOrder(input) {
+    const user = db.users.get(input.userId);
+    if (!user || user.status !== "active") {
+      throw new Error("Akun tidak aktif atau tidak ditemukan.");
+    }
+    const pair = db.tradingPairs.get(input.pairId);
+    if (!pair || !pair.isActive || pair.isHalted) {
+      throw new Error(`Market Futures ${input.pairId} tidak tersedia atau sedang di-halt.`);
+    }
+    const leverage = Math.round(Number(input.leverage));
+    if (!Number.isFinite(leverage) || leverage < 1 || leverage > 125) {
+      throw new Error("Leverage harus antara 1x hingga 125x.");
+    }
+    const { baseDecimals, quoteDecimals } = this.resolvePairDecimals(pair);
+    const sizeUnits = PrecisionMath.parseToUnits(input.quantity, baseDecimals);
+    if (sizeUnits <= 0n) {
+      throw new Error("Jumlah kontrak/size harus lebih besar dari 0.");
+    }
+    const minSize = BigInt(pair.minOrderSize || "1");
+    const maxSize = BigInt(pair.maxOrderSize || "0");
+    if (sizeUnits < minSize) {
+      throw new Error(
+        `Ukuran minimal untuk ${pair.id} adalah ${PrecisionMath.formatFromUnits(minSize, baseDecimals)} ${pair.baseCurrency}.`
+      );
+    }
+    if (maxSize > 0n && sizeUnits > maxSize) {
+      throw new Error(
+        `Ukuran maksimal untuk ${pair.id} adalah ${PrecisionMath.formatFromUnits(maxSize, baseDecimals)} ${pair.baseCurrency}.`
+      );
+    }
+    const { lastUnits, bestBidUnits, bestAskUnits } = this.getLiveBookPrices(pair);
+    const liveMarketEntryUnits = input.side === "LONG" ? bestAskUnits > 0n ? bestAskUnits : lastUnits : bestBidUnits > 0n ? bestBidUnits : lastUnits;
+    if (liveMarketEntryUnits <= 0n) {
+      throw new Error(`Harga pasar live untuk ${pair.id} belum tersedia.`);
+    }
+    let orderPriceUnits = liveMarketEntryUnits;
+    if (input.orderType === "LIMIT") {
+      if (!input.limitPrice || !String(input.limitPrice).trim()) {
+        throw new Error(`Harga limit (${pair.quoteCurrency}, ${quoteDecimals} desimal) wajib diisi.`);
+      }
+      orderPriceUnits = PrecisionMath.parseToUnits(input.limitPrice, quoteDecimals);
+      if (orderPriceUnits <= 0n) {
+        throw new Error("Harga limit harus lebih besar dari 0.");
+      }
+    }
+    const notionalUnits = this.calculateNotionalQuoteUnits(sizeUnits, baseDecimals, orderPriceUnits);
+    if (notionalUnits <= 0n) {
+      throw new Error("Nilai posisi (notional) terlalu kecil untuk presisi pair ini.");
+    }
+    const levBig = BigInt(leverage);
+    const marginRequiredUnits = (notionalUnits + levBig - 1n) / levBig;
+    const feeBps = input.orderType === "MARKET" ? pair.takerFeeBps : pair.makerFeeBps;
+    const feeReservedUnits = PrecisionMath.calculateFee(notionalUnits, feeBps);
+    const totalLockNeeded = marginRequiredUnits + feeReservedUnits;
+    const quoteAcc = db.createOrGetAccount(user.id, pair.quoteCurrency);
+    const availQuote = BigInt(quoteAcc.balanceAvailable);
+    if (availQuote < totalLockNeeded) {
+      throw new Error(
+        `Saldo ${pair.quoteCurrency} tidak mencukupi. Butuh ${PrecisionMath.formatFromUnits(totalLockNeeded, quoteDecimals)} ${pair.quoteCurrency} (Margin + Fee), tersedia ${PrecisionMath.formatFromUnits(availQuote, quoteDecimals)} ${pair.quoteCurrency}.`
+      );
+    }
+    LedgerService.lockBalance(user.id, pair.quoteCurrency, totalLockNeeded);
+    const now = Date.now();
+    const order = {
+      id: `ford-${crypto22.randomUUID().slice(0, 8)}`,
+      userId: user.id,
+      pairId: pair.id,
+      baseCurrency: pair.baseCurrency,
+      quoteCurrency: pair.quoteCurrency,
+      baseDecimals,
+      quoteDecimals,
+      side: input.side,
+      orderType: input.orderType,
+      marginMode: input.marginMode || "CROSS",
+      leverage,
+      limitPriceUnits: orderPriceUnits.toString(),
+      quantityUnits: sizeUnits.toString(),
+      marginRequiredUnits: marginRequiredUnits.toString(),
+      feeReservedUnits: feeReservedUnits.toString(),
+      status: "OPEN",
+      createdAt: now,
+      updatedAt: now
+    };
+    const isMarketableLimit = input.orderType === "LIMIT" && (input.side === "LONG" && orderPriceUnits >= liveMarketEntryUnits || input.side === "SHORT" && orderPriceUnits <= liveMarketEntryUnits);
+    if (input.orderType === "MARKET" || isMarketableLimit) {
+      const execPriceUnits = input.orderType === "MARKET" ? liveMarketEntryUnits : orderPriceUnits;
+      const position = this.fillOrderIntoPosition(order, execPriceUnits, pair);
+      db.futuresOrders.set(order.id, order);
+      db.scheduleSave();
+      return { order, position, executedImmediately: true };
+    }
+    db.futuresOrders.set(order.id, order);
+    db.scheduleSave();
+    return { order, executedImmediately: false };
+  }
+  fillOrderIntoPosition(order, execPriceUnits, pair) {
+    const now = Date.now();
+    const sizeUnits = BigInt(order.quantityUnits);
+    const marginUnits = BigInt(order.marginRequiredUnits);
+    const feeUnits = BigInt(order.feeReservedUnits);
+    if (feeUnits > 0n) {
+      const unlockedFee = LedgerService.unlockBalanceUpToLocked(order.userId, order.quoteCurrency, feeUnits);
+      if (unlockedFee > 0n) {
+        const userQuoteAcc = db.createOrGetAccount(order.userId, order.quoteCurrency);
+        const sysFeeAcc = db.createOrGetAccount(SYSTEM_FEE_ID, order.quoteCurrency);
+        LedgerService.executeJournal({
+          idempotencyKey: `fut-open-fee-${order.id}`,
+          txType: "FUTURES_FEE",
+          referenceId: order.id,
+          description: `Futures open fee ${order.pairId} ${order.side}`,
+          entries: [
+            { accountId: userQuoteAcc.id, entryType: "DEBIT", amount: unlockedFee },
+            { accountId: sysFeeAcc.id, entryType: "CREDIT", amount: unlockedFee }
+          ]
+        });
+      }
+    }
+    const existingPos = Array.from(db.futuresPositions.values()).find(
+      (p) => p.status === "OPEN" && p.userId === order.userId && p.pairId === order.pairId && p.side === order.side && p.marginMode === order.marginMode
+    );
+    const markUnits = BigInt(pair.lastPrice || execPriceUnits.toString());
+    let position;
+    if (existingPos) {
+      const oldSize = BigInt(existingPos.sizeUnits);
+      const oldEntry = BigInt(existingPos.entryPriceUnits);
+      const newSize = oldSize + sizeUnits;
+      const weightedEntry = (oldSize * oldEntry + sizeUnits * execPriceUnits) / newSize;
+      const newMargin = BigInt(existingPos.marginLockedUnits) + marginUnits;
+      const newOpenFee = BigInt(existingPos.openFeeUnits) + feeUnits;
+      const notional = this.calculateNotionalQuoteUnits(newSize, order.baseDecimals, weightedEntry);
+      const effLev = newMargin > 0n ? Number(notional / newMargin) : order.leverage;
+      const boundedLev = Math.max(1, Math.min(125, effLev || order.leverage));
+      existingPos.sizeUnits = newSize.toString();
+      existingPos.entryPriceUnits = weightedEntry.toString();
+      existingPos.markPriceUnits = markUnits.toString();
+      existingPos.leverage = boundedLev;
+      existingPos.liqPriceUnits = this.calculateLiquidationPriceUnits(
+        existingPos.side,
+        weightedEntry,
+        boundedLev
+      ).toString();
+      existingPos.marginLockedUnits = newMargin.toString();
+      existingPos.openFeeUnits = newOpenFee.toString();
+      const { unrealizedPnlUnits, roePct } = this.computeUnrealizedPnl(existingPos, markUnits);
+      existingPos.unrealizedPnlUnits = unrealizedPnlUnits.toString();
+      existingPos.roePct = roePct;
+      existingPos.updatedAt = now;
+      db.futuresPositions.set(existingPos.id, existingPos);
+      position = existingPos;
+    } else {
+      const liqPriceUnits = this.calculateLiquidationPriceUnits(
+        order.side,
+        execPriceUnits,
+        order.leverage
+      );
+      position = {
+        id: `fpos-${crypto22.randomUUID().slice(0, 8)}`,
+        userId: order.userId,
+        pairId: order.pairId,
+        baseCurrency: order.baseCurrency,
+        quoteCurrency: order.quoteCurrency,
+        baseDecimals: order.baseDecimals,
+        quoteDecimals: order.quoteDecimals,
+        side: order.side,
+        marginMode: order.marginMode,
+        leverage: order.leverage,
+        sizeUnits: sizeUnits.toString(),
+        entryPriceUnits: execPriceUnits.toString(),
+        markPriceUnits: markUnits.toString(),
+        liqPriceUnits: liqPriceUnits.toString(),
+        marginLockedUnits: marginUnits.toString(),
+        openFeeUnits: feeUnits.toString(),
+        unrealizedPnlUnits: "0",
+        realizedPnlUnits: "0",
+        roePct: 0,
+        status: "OPEN",
+        openedAt: now,
+        updatedAt: now
+      };
+      const { unrealizedPnlUnits, roePct } = this.computeUnrealizedPnl(position, markUnits);
+      position.unrealizedPnlUnits = unrealizedPnlUnits.toString();
+      position.roePct = roePct;
+      db.futuresPositions.set(position.id, position);
+    }
+    order.status = "FILLED";
+    order.filledAt = now;
+    order.positionId = position.id;
+    order.updatedAt = now;
+    return position;
+  }
+  cancelOrder(userId, orderId) {
+    const order = db.futuresOrders.get(orderId);
+    if (!order) {
+      throw new Error("Order Futures tidak ditemukan.");
+    }
+    if (order.userId !== userId) {
+      throw new Error("Tidak memiliki izin untuk membatalkan order ini.");
+    }
+    if (order.status !== "OPEN") {
+      throw new Error(`Order tidak dapat dibatalkan (status: ${order.status}).`);
+    }
+    const lockedTotal = BigInt(order.marginRequiredUnits) + BigInt(order.feeReservedUnits);
+    if (lockedTotal > 0n) {
+      LedgerService.unlockBalanceUpToLocked(order.userId, order.quoteCurrency, lockedTotal);
+    }
+    order.status = "CANCELLED";
+    order.cancelledAt = Date.now();
+    order.updatedAt = Date.now();
+    db.futuresOrders.set(order.id, order);
+    db.scheduleSave();
+    return order;
+  }
+  closePosition(userId, positionId, forceLiquidated = false) {
+    const pos = db.futuresPositions.get(positionId);
+    if (!pos) {
+      throw new Error("Posisi Futures tidak ditemukan.");
+    }
+    if (!forceLiquidated && pos.userId !== userId) {
+      throw new Error("Tidak memiliki izin untuk menutup posisi ini.");
+    }
+    if (pos.status !== "OPEN") {
+      throw new Error(`Posisi sudah ditutup (status: ${pos.status}).`);
+    }
+    const pair = db.tradingPairs.get(pos.pairId);
+    const { lastUnits, bestBidUnits, bestAskUnits } = pair ? this.getLiveBookPrices(pair) : {
+      lastUnits: BigInt(pos.markPriceUnits),
+      bestBidUnits: BigInt(pos.markPriceUnits),
+      bestAskUnits: BigInt(pos.markPriceUnits)
+    };
+    const closePriceUnits = forceLiquidated ? BigInt(pos.markPriceUnits || lastUnits.toString()) : pos.side === "LONG" ? bestBidUnits > 0n ? bestBidUnits : lastUnits : bestAskUnits > 0n ? bestAskUnits : lastUnits;
+    const sizeUnits = BigInt(pos.sizeUnits);
+    const marginUnits = BigInt(pos.marginLockedUnits);
+    const { unrealizedPnlUnits: rawPnlUnits } = this.computeUnrealizedPnl(pos, closePriceUnits);
+    LedgerService.unlockBalanceUpToLocked(pos.userId, pos.quoteCurrency, marginUnits);
+    const userQuoteAcc = db.createOrGetAccount(pos.userId, pos.quoteCurrency);
+    const treasuryAcc = db.createOrGetAccount(SYSTEM_TREASURY_ID, pos.quoteCurrency);
+    const sysFeeAcc = db.createOrGetAccount(SYSTEM_FEE_ID, pos.quoteCurrency);
+    let effectiveRealizedPnl = rawPnlUnits;
+    if (forceLiquidated) {
+      const availNow = BigInt(userQuoteAcc.balanceAvailable);
+      const forfeit = marginUnits > availNow ? availNow : marginUnits;
+      if (forfeit > 0n) {
+        LedgerService.executeJournal({
+          idempotencyKey: `fut-liq-${pos.id}`,
+          txType: "FUTURES_PNL",
+          referenceId: pos.id,
+          description: `Futures liquidation settlement ${pos.pairId} ${pos.side}`,
+          entries: [
+            { accountId: userQuoteAcc.id, entryType: "DEBIT", amount: forfeit },
+            { accountId: treasuryAcc.id, entryType: "CREDIT", amount: forfeit }
+          ]
+        });
+      }
+      effectiveRealizedPnl = -forfeit;
+      pos.closeFeeUnits = "0";
+      pos.status = "LIQUIDATED";
+    } else {
+      if (rawPnlUnits > 0n) {
+        LedgerService.executeJournal({
+          idempotencyKey: `fut-pnl-${pos.id}`,
+          txType: "FUTURES_PNL",
+          referenceId: pos.id,
+          description: `Futures profit settlement ${pos.pairId} ${pos.side}`,
+          entries: [
+            { accountId: treasuryAcc.id, entryType: "DEBIT", amount: rawPnlUnits },
+            { accountId: userQuoteAcc.id, entryType: "CREDIT", amount: rawPnlUnits }
+          ]
+        });
+      } else if (rawPnlUnits < 0n) {
+        const lossAbs = -rawPnlUnits;
+        const availNow = BigInt(userQuoteAcc.balanceAvailable);
+        const maxDebit = pos.marginMode === "ISOLATED" ? marginUnits < availNow ? marginUnits : availNow : availNow;
+        const debitAmount = lossAbs > maxDebit ? maxDebit : lossAbs;
+        if (debitAmount > 0n) {
+          LedgerService.executeJournal({
+            idempotencyKey: `fut-pnl-${pos.id}`,
+            txType: "FUTURES_PNL",
+            referenceId: pos.id,
+            description: `Futures loss settlement ${pos.pairId} ${pos.side}`,
+            entries: [
+              { accountId: userQuoteAcc.id, entryType: "DEBIT", amount: debitAmount },
+              { accountId: treasuryAcc.id, entryType: "CREDIT", amount: debitAmount }
+            ]
+          });
+        }
+        effectiveRealizedPnl = -debitAmount;
+      }
+      const closeNotional = this.calculateNotionalQuoteUnits(sizeUnits, pos.baseDecimals, closePriceUnits);
+      const takerFeeBps = pair?.takerFeeBps ?? 20;
+      const calcCloseFee = PrecisionMath.calculateFee(closeNotional, takerFeeBps);
+      const freshUserAvail = BigInt(db.createOrGetAccount(pos.userId, pos.quoteCurrency).balanceAvailable);
+      const closeFee = calcCloseFee > freshUserAvail ? freshUserAvail : calcCloseFee;
+      if (closeFee > 0n) {
+        LedgerService.executeJournal({
+          idempotencyKey: `fut-close-fee-${pos.id}`,
+          txType: "FUTURES_FEE",
+          referenceId: pos.id,
+          description: `Futures close fee ${pos.pairId} ${pos.side}`,
+          entries: [
+            { accountId: userQuoteAcc.id, entryType: "DEBIT", amount: closeFee },
+            { accountId: sysFeeAcc.id, entryType: "CREDIT", amount: closeFee }
+          ]
+        });
+      }
+      pos.closeFeeUnits = closeFee.toString();
+      pos.status = "CLOSED";
+    }
+    const now = Date.now();
+    pos.markPriceUnits = closePriceUnits.toString();
+    pos.unrealizedPnlUnits = "0";
+    pos.realizedPnlUnits = effectiveRealizedPnl.toString();
+    pos.roePct = marginUnits > 0n ? Number(effectiveRealizedPnl * 10000n / marginUnits) / 100 : 0;
+    pos.closedAt = now;
+    pos.updatedAt = now;
+    db.futuresPositions.set(pos.id, pos);
+    db.scheduleSave();
+    return pos;
+  }
+  evaluateMarkAndOrders() {
+    if (this.isTicking) return;
+    this.isTicking = true;
+    try {
+      for (const ord of db.futuresOrders.values()) {
+        if (ord.status !== "OPEN") continue;
+        const pair = db.tradingPairs.get(ord.pairId);
+        if (!pair || pair.isHalted || !pair.isActive) continue;
+        const { lastUnits, bestBidUnits, bestAskUnits } = this.getLiveBookPrices(pair);
+        const liveRef = ord.side === "LONG" ? bestAskUnits > 0n ? bestAskUnits : lastUnits : bestBidUnits > 0n ? bestBidUnits : lastUnits;
+        if (liveRef <= 0n) continue;
+        const limitUnits = BigInt(ord.limitPriceUnits);
+        const shouldFill = ord.side === "LONG" && liveRef <= limitUnits || ord.side === "SHORT" && liveRef >= limitUnits;
+        if (shouldFill) {
+          this.fillOrderIntoPosition(ord, limitUnits, pair);
+          db.futuresOrders.set(ord.id, ord);
+          db.scheduleSave();
+          marketWsService.broadcast("ticker", {
+            type: "futures_update",
+            userId: ord.userId,
+            pairId: ord.pairId
+          });
+        }
+      }
+      for (const pos of db.futuresPositions.values()) {
+        if (pos.status !== "OPEN") continue;
+        const pair = db.tradingPairs.get(pos.pairId);
+        if (!pair || !pair.lastPrice) continue;
+        const markUnits = BigInt(pair.lastPrice);
+        const liqUnits = BigInt(pos.liqPriceUnits);
+        pos.markPriceUnits = markUnits.toString();
+        const isLiquidated = pos.side === "LONG" && markUnits <= liqUnits || pos.side === "SHORT" && markUnits >= liqUnits;
+        if (isLiquidated) {
+          this.closePosition(pos.userId, pos.id, true);
+          marketWsService.broadcast("ticker", {
+            type: "futures_update",
+            userId: pos.userId,
+            pairId: pos.pairId
+          });
+        } else {
+          const { unrealizedPnlUnits, roePct } = this.computeUnrealizedPnl(pos, markUnits);
+          pos.unrealizedPnlUnits = unrealizedPnlUnits.toString();
+          pos.roePct = roePct;
+          db.futuresPositions.set(pos.id, pos);
+        }
+      }
+    } catch (err) {
+      console.error("[FuturesEngine] Evaluation loop error:", err);
+    } finally {
+      this.isTicking = false;
+    }
+  }
+};
+var futuresEngine = new FuturesEngineService();
+
+// server/routes/futures.ts
+init_database();
+var futuresRouter = Router12();
+futuresRouter.get("/markets", (_req, res) => {
+  try {
+    const markets = futuresEngine.getFuturesMarkets();
+    res.json({ success: true, markets });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || "Gagal memuat pasar Futures." });
+  }
+});
+futuresRouter.get("/state", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const state = futuresEngine.getUserFuturesState(user.id);
+    const balances = db.getUserAccounts(user.id).map((acc) => ({
+      currency: acc.currency,
+      balanceAvailable: acc.balanceAvailable,
+      balanceLocked: acc.balanceLocked,
+      balanceTotal: (BigInt(acc.balanceAvailable) + BigInt(acc.balanceLocked)).toString()
+    }));
+    res.json({ success: true, ...state, balances });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || "Gagal memuat status akun Futures." });
+  }
+});
+futuresRouter.post("/order", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const { pairId, side, orderType, marginMode, leverage, quantity, limitPrice } = req.body;
+    if (!pairId || !side || !orderType || !quantity) {
+      return res.status(400).json({ error: "Parameter pairId, side, orderType, dan quantity wajib diisi." });
+    }
+    const result = futuresEngine.placeOrder({
+      userId: user.id,
+      pairId: String(pairId),
+      side: side === "SHORT" ? "SHORT" : "LONG",
+      orderType: orderType === "MARKET" ? "MARKET" : "LIMIT",
+      marginMode: marginMode === "ISOLATED" ? "ISOLATED" : "CROSS",
+      leverage: Number(leverage || 10),
+      quantity: String(quantity),
+      limitPrice: limitPrice !== void 0 ? String(limitPrice) : void 0
+    });
+    const state = futuresEngine.getUserFuturesState(user.id);
+    res.json({
+      success: true,
+      message: result.executedImmediately ? `Posisi ${result.order.side} ${result.order.pairId} dibuka.` : `Order Limit ${result.order.side} ${result.order.pairId} ditempatkan di buku order.`,
+      ...result,
+      ...state
+    });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "Gagal menempatkan order Futures." });
+  }
+});
+futuresRouter.delete("/order/:orderId", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const order = futuresEngine.cancelOrder(user.id, req.params.orderId);
+    const state = futuresEngine.getUserFuturesState(user.id);
+    res.json({
+      success: true,
+      message: `Order Limit ${order.pairId} dibatalkan dan margin dibuka kembali.`,
+      order,
+      ...state
+    });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "Gagal membatalkan order Futures." });
+  }
+});
+futuresRouter.post("/position/:positionId/close", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const position = futuresEngine.closePosition(user.id, req.params.positionId, false);
+    const state = futuresEngine.getUserFuturesState(user.id);
+    res.json({
+      success: true,
+      message: `Posisi ${position.side} ${position.pairId} berhasil ditutup di market.`,
+      position,
+      ...state
+    });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "Gagal menutup posisi Futures." });
+  }
+});
 
 // server/routes/observability.ts
 init_database();
-import { Router as Router12 } from "express";
-var observabilityRouter = Router12();
+import { Router as Router13 } from "express";
+var observabilityRouter = Router13();
 observabilityRouter.get("/health", (req, res) => {
   const invariantCheck = LedgerService.verifyGlobalInvariants();
   res.json({
@@ -15984,6 +20360,2078 @@ observabilityRouter.get("/api/ledger/verify-invariants", (req, res) => {
 
 // server/serverApp.ts
 init_FxConversionService();
+init_database();
+init_PriceAggregatorService();
+
+// server/routes/newsAdmin.ts
+import { Router as Router14 } from "express";
+init_database();
+
+// server/services/cms/NewsCmsService.ts
+init_database();
+import crypto25 from "crypto";
+
+// server/services/cms/HtmlSanitizer.ts
+var ALLOWED_TAGS = /* @__PURE__ */ new Set([
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "p",
+  "br",
+  "hr",
+  "strong",
+  "b",
+  "em",
+  "i",
+  "u",
+  "s",
+  "ul",
+  "ol",
+  "li",
+  "blockquote",
+  "code",
+  "pre",
+  "a",
+  "img",
+  "span",
+  "div",
+  "table",
+  "thead",
+  "tbody",
+  "tr",
+  "th",
+  "td"
+]);
+var VOID_TAGS = /* @__PURE__ */ new Set(["br", "hr", "img"]);
+var DANGEROUS_BLOCK_TAGS = [
+  "script",
+  "style",
+  "iframe",
+  "object",
+  "embed",
+  "svg",
+  "math",
+  "form",
+  "input",
+  "button",
+  "textarea",
+  "select",
+  "option",
+  "noscript",
+  "template",
+  "head",
+  "meta",
+  "link",
+  "base",
+  "applet"
+];
+function decodeHtmlEntities(input) {
+  return input.replace(/&#x([0-9a-fA-F]+);?/g, (_, hex) => {
+    const code = parseInt(hex, 16);
+    return Number.isFinite(code) ? String.fromCodePoint(code) : "";
+  }).replace(/&#([0-9]+);?/g, (_, dec) => {
+    const code = parseInt(dec, 10);
+    return Number.isFinite(code) ? String.fromCodePoint(code) : "";
+  }).replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").replace(/&apos;/gi, "'");
+}
+function escapeAttr(value) {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/'/g, "&#39;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function isSafeLinkUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return false;
+  const decoded = decodeHtmlEntities(rawUrl).replace(/[\u0000-\u001F\u007F\s]+/g, "").trim();
+  if (!decoded) return false;
+  if (decoded.startsWith("/") && !decoded.startsWith("//")) {
+    return true;
+  }
+  try {
+    const parsed = new URL(decoded);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+function isSafeMediaUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") return false;
+  const decoded = decodeHtmlEntities(rawUrl).replace(/[\u0000-\u001F\u007F]+/g, "").trim();
+  if (!decoded) return false;
+  if ((decoded.startsWith("/api/public/media/") || decoded.startsWith("/assets/")) && !decoded.includes("..") && !decoded.startsWith("//")) {
+    return true;
+  }
+  try {
+    const parsed = new URL(decoded);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+function parseAttributes(attrString) {
+  const attrs = /* @__PURE__ */ new Map();
+  const regex = /([a-zA-Z0-9_-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+  let match;
+  while ((match = regex.exec(attrString)) !== null) {
+    const name = match[1].toLowerCase();
+    const val = match[2] ?? match[3] ?? match[4] ?? "";
+    if (name.startsWith("on") || name === "style" || name === "srcdoc" || name === "formaction") {
+      continue;
+    }
+    attrs.set(name, val);
+  }
+  return attrs;
+}
+function sanitizeArticleHtml(rawHtml) {
+  if (!rawHtml || typeof rawHtml !== "string") return "";
+  let cleaned = rawHtml.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").replace(/<!--[\s\S]*?-->/g, "");
+  for (const tag of DANGEROUS_BLOCK_TAGS) {
+    const pairedRegex = new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}\\s*>`, "gi");
+    cleaned = cleaned.replace(pairedRegex, "");
+    const selfRegex = new RegExp(`<${tag}\\b[^>]*\\/?>`, "gi");
+    cleaned = cleaned.replace(selfRegex, "");
+  }
+  cleaned = cleaned.replace(/<\/?([a-zA-Z0-9-]+)([^>]*)>/g, (fullMatch, rawTagName, rawAttrs) => {
+    const tag = String(rawTagName).toLowerCase();
+    const isClosing = fullMatch.startsWith("</");
+    if (!ALLOWED_TAGS.has(tag)) {
+      return "";
+    }
+    if (isClosing) {
+      if (VOID_TAGS.has(tag)) return "";
+      return `</${tag}>`;
+    }
+    if (VOID_TAGS.has(tag) && tag !== "img") {
+      return `<${tag} />`;
+    }
+    const attrs = parseAttributes(rawAttrs || "");
+    const safeAttrs = [];
+    if (tag === "a") {
+      const href = attrs.get("href") || "";
+      if (isSafeLinkUrl(href)) {
+        safeAttrs.push(`href="${escapeAttr(href.trim())}"`);
+        if (href.trim().startsWith("http://") || href.trim().startsWith("https://")) {
+          safeAttrs.push('target="_blank"');
+          safeAttrs.push('rel="noopener noreferrer"');
+        }
+      }
+      const title = attrs.get("title");
+      if (title) {
+        safeAttrs.push(`title="${escapeAttr(title.slice(0, 200))}"`);
+      }
+    } else if (tag === "img") {
+      const src = attrs.get("src") || "";
+      if (!isSafeMediaUrl(src)) {
+        return "";
+      }
+      safeAttrs.push(`src="${escapeAttr(src.trim())}"`);
+      const alt = attrs.get("alt") || "DIMONEX image";
+      safeAttrs.push(`alt="${escapeAttr(alt.slice(0, 200))}"`);
+      return `<img ${safeAttrs.join(" ")} />`;
+    }
+    return safeAttrs.length > 0 ? `<${tag} ${safeAttrs.join(" ")}>` : `<${tag}>`;
+  });
+  cleaned = cleaned.replace(/(?:javascript|vbscript)\s*:/gi, "");
+  return cleaned.trim();
+}
+function extractPlainText(html) {
+  if (!html) return "";
+  return decodeHtmlEntities(
+    html.replace(/<br\s*\/?>/gi, " ").replace(/<\/(p|div|h[1-4]|li|blockquote|tr)>/gi, " ").replace(/<[^>]+>/g, "")
+  ).replace(/\s+/g, " ").trim();
+}
+function generateSlug(title) {
+  const base = title.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 120);
+  return base || `announcement-${Date.now()}`;
+}
+
+// server/services/cms/CmsAuditService.ts
+init_database();
+import crypto23 from "crypto";
+function recordCmsAudit(input) {
+  const prev = db.cmsAuditLogs.length > 0 ? db.cmsAuditLogs[db.cmsAuditLogs.length - 1].currentHash : "0".repeat(64);
+  const createdAt = Date.now();
+  const id = crypto23.randomUUID();
+  const canonical = JSON.stringify({
+    id,
+    entityType: input.entityType,
+    entityId: input.entityId,
+    action: input.action,
+    actorId: input.actorId,
+    actorRole: input.actorRole,
+    details: input.details,
+    previousHash: prev,
+    createdAt
+  });
+  const currentHash = crypto23.createHash("sha256").update(canonical).digest("hex");
+  const log = {
+    id,
+    entityType: input.entityType,
+    entityId: input.entityId,
+    action: input.action,
+    actorId: input.actorId,
+    actorEmail: input.actorEmail,
+    actorRole: input.actorRole,
+    ipAddress: input.ipAddress,
+    details: input.details,
+    previousHash: prev,
+    currentHash,
+    createdAt
+  };
+  db.cmsAuditLogs.push(log);
+  db.auditLogs.push({
+    id: crypto23.randomUUID(),
+    actorId: input.actorId,
+    action: `CMS_${input.action}`,
+    resource: `${input.entityType}:${input.entityId}`,
+    details: JSON.stringify(input.details),
+    ipAddress: input.ipAddress,
+    createdAt
+  });
+  db.scheduleSave();
+  return log;
+}
+function getAuditLogsForEntity(entityType, entityId) {
+  return db.cmsAuditLogs.filter((l) => l.entityType === entityType && l.entityId === entityId).sort((a, b) => b.createdAt - a.createdAt);
+}
+
+// server/services/cms/NotificationBroadcastService.ts
+init_database();
+import crypto24 from "crypto";
+var NotificationBroadcastService = class {
+  constructor() {
+    this.workerInterval = null;
+    this.isProcessing = false;
+    this.batchSize = 50;
+    this.baseRetryDelayMs = 1500;
+    this.maxDeliveryAttempts = 4;
+    this.pollIntervalMs = 1e3;
+    this.customDeliveryHook = null;
+  }
+  /**
+   * Optional hook for automated tests to simulate transient channel failures.
+   */
+  setDeliveryHook(hook) {
+    this.customDeliveryHook = hook;
+  }
+  start() {
+    this.recoverPendingCampaigns();
+    if (this.workerInterval) return;
+    this.workerInterval = setInterval(() => {
+      void this.tick();
+    }, this.pollIntervalMs);
+  }
+  stop() {
+    if (this.workerInterval) {
+      clearInterval(this.workerInterval);
+      this.workerInterval = null;
+    }
+  }
+  /**
+   * Recovers any IN-FLIGHT / PENDING campaigns and outbox jobs after a server restart.
+   */
+  recoverPendingCampaigns() {
+    let recoveredJobs = 0;
+    const now = Date.now();
+    for (const job of db.notificationOutboxJobs.values()) {
+      if (job.status === "PROCESSING") {
+        job.status = "PENDING";
+        job.lockedAt = void 0;
+        job.updatedAt = now;
+        recoveredJobs++;
+      } else if (job.status === "PENDING") {
+        recoveredJobs++;
+      }
+    }
+    for (const delivery of db.notificationDeliveries.values()) {
+      if (delivery.status === "PROCESSING") {
+        delivery.status = "QUEUED";
+        delivery.updatedAt = now;
+      }
+    }
+    for (const campaign of db.notificationCampaigns.values()) {
+      if (campaign.status === "QUEUED" || campaign.status === "PROCESSING") {
+        this.recomputeCampaignMetrics(campaign.id);
+        const hasActiveJob = Array.from(db.notificationOutboxJobs.values()).some(
+          (j) => j.campaignId === campaign.id && (j.status === "PENDING" || j.status === "PROCESSING")
+        );
+        if (!hasActiveJob && campaign.queuedCount > 0) {
+          const recoveryJob = {
+            id: crypto24.randomUUID(),
+            campaignId: campaign.id,
+            idempotencyKey: `recover:${campaign.id}:${now}`,
+            eventType: "CAMPAIGN_DISPATCH",
+            payload: { campaignId: campaign.id, recovered: true },
+            status: "PENDING",
+            attempts: 0,
+            maxAttempts: 5,
+            createdAt: now,
+            updatedAt: now
+          };
+          db.notificationOutboxJobs.set(recoveryJob.id, recoveryJob);
+          recoveredJobs++;
+        }
+      }
+    }
+    if (recoveredJobs > 0) {
+      db.scheduleSave();
+      setImmediate(() => {
+        void this.tick();
+      });
+    }
+    return recoveredJobs;
+  }
+  /**
+   * Returns user notification preferences with safe defaults (In-App on, Push/Email opt-in off).
+   */
+  getUserPreferences(userId) {
+    const existing = db.userNotificationPreferences.get(userId);
+    if (existing) return existing;
+    return {
+      userId,
+      inAppEnabled: true,
+      webPushEnabled: false,
+      webPushPermissionGranted: false,
+      emailEnabled: false,
+      updatedAt: Date.now()
+    };
+  }
+  updateUserPreferences(userId, patch) {
+    const current = this.getUserPreferences(userId);
+    const now = Date.now();
+    const nextWebPushPermission = patch.webPushPermissionGranted !== void 0 ? Boolean(patch.webPushPermissionGranted) : current.webPushPermissionGranted;
+    const nextWebPushEnabled = patch.webPushEnabled !== void 0 ? Boolean(patch.webPushEnabled) && nextWebPushPermission : current.webPushEnabled && nextWebPushPermission;
+    const nextEmailEnabled = patch.emailEnabled !== void 0 ? Boolean(patch.emailEnabled) : current.emailEnabled;
+    const updated = {
+      userId,
+      inAppEnabled: patch.inAppEnabled !== void 0 ? Boolean(patch.inAppEnabled) : current.inAppEnabled,
+      webPushEnabled: nextWebPushEnabled,
+      webPushPermissionGranted: nextWebPushPermission,
+      emailEnabled: nextEmailEnabled,
+      emailConsentAt: nextEmailEnabled ? current.emailConsentAt || now : void 0,
+      updatedAt: now
+    };
+    db.userNotificationPreferences.set(userId, updated);
+    db.scheduleSave();
+    return updated;
+  }
+  /**
+   * Resolves all eligible users matching the target segment while excluding disabled/system accounts.
+   */
+  resolveEligibleUsers(targetSegment = "ALL_USERS", targetConfig) {
+    const selectedSet = targetConfig?.selectedUserIds ? new Set(targetConfig.selectedUserIds) : null;
+    const eligible = [];
+    for (const user of db.users.values()) {
+      if (user.status !== "active") continue;
+      if (user.id.startsWith("sys-")) continue;
+      if (targetSegment === "VERIFIED_USERS") {
+        const kyc = db.kyc.get(user.id);
+        if (!kyc || kyc.status !== "approved") continue;
+      } else if (targetSegment === "KYC_TIER") {
+        const kyc = db.kyc.get(user.id);
+        const minTier = targetConfig?.minKycTier ?? 1;
+        if (!kyc || kyc.status !== "approved" || kyc.tierLevel < minTier) continue;
+      } else if (targetSegment === "SELECTED_USERS") {
+        if (!selectedSet || !selectedSet.has(user.id)) continue;
+      }
+      eligible.push(user);
+    }
+    return eligible;
+  }
+  isChannelPermittedForUser(userId, channel) {
+    const prefs = this.getUserPreferences(userId);
+    if (channel === "IN_APP") {
+      return prefs.inAppEnabled !== false;
+    }
+    if (channel === "WEB_PUSH") {
+      return Boolean(prefs.webPushEnabled && prefs.webPushPermissionGranted);
+    }
+    if (channel === "EMAIL") {
+      return Boolean(prefs.emailEnabled && prefs.emailConsentAt);
+    }
+    return false;
+  }
+  /**
+   * Atomically creates a broadcast campaign, its recipient delivery records, and
+   * its durable outbox dispatch job. Does NOT execute delivery synchronously.
+   */
+  createCampaignForAnnouncement(options) {
+    const { announcement } = options;
+    const now = Date.now();
+    const campaignIdempotencyKey = options.idempotencyKey || `campaign:${announcement.id}:v${announcement.version}`;
+    for (const existing of db.notificationCampaigns.values()) {
+      if (existing.idempotencyKey === campaignIdempotencyKey) {
+        return existing;
+      }
+    }
+    const requestedChannels = options.channels && options.channels.length > 0 ? Array.from(new Set(options.channels)) : announcement.notificationChannels && announcement.notificationChannels.length > 0 ? Array.from(new Set(announcement.notificationChannels)) : ["IN_APP"];
+    if (!requestedChannels.includes("IN_APP")) {
+      requestedChannels.unshift("IN_APP");
+    }
+    const targetSegment = options.targetSegment || announcement.targetSegment || "ALL_USERS";
+    const targetConfig = options.targetConfig || announcement.targetConfig;
+    const eligibleUsers = this.resolveEligibleUsers(targetSegment, targetConfig);
+    const campaignId = crypto24.randomUUID();
+    let queuedDeliveries = 0;
+    for (const user of eligibleUsers) {
+      for (const channel of requestedChannels) {
+        if (!this.isChannelPermittedForUser(user.id, channel)) {
+          continue;
+        }
+        const deliveryKey = `${campaignId}:${user.id}:${channel}`;
+        const record = {
+          id: crypto24.randomUUID(),
+          campaignId,
+          userId: user.id,
+          channel,
+          idempotencyKey: deliveryKey,
+          status: "QUEUED",
+          attempts: 0,
+          maxAttempts: this.maxDeliveryAttempts,
+          createdAt: now,
+          updatedAt: now
+        };
+        db.notificationDeliveries.set(record.id, record);
+        queuedDeliveries++;
+      }
+    }
+    const campaign = {
+      id: campaignId,
+      announcementId: announcement.id,
+      announcementSlug: announcement.slug,
+      title: announcement.title,
+      summary: announcement.shortDescription,
+      category: announcement.category,
+      coverImageUrl: announcement.coverImageUrl,
+      channels: requestedChannels,
+      targetSegment,
+      targetConfig,
+      idempotencyKey: campaignIdempotencyKey,
+      status: queuedDeliveries > 0 ? "QUEUED" : "COMPLETED",
+      createdBy: options.actorId,
+      totalEligible: eligibleUsers.length,
+      queuedCount: queuedDeliveries,
+      sentCount: 0,
+      failedCount: 0,
+      readCount: 0,
+      scheduledAt: options.scheduledAt,
+      completedAt: queuedDeliveries === 0 ? now : void 0,
+      createdAt: now,
+      updatedAt: now
+    };
+    db.notificationCampaigns.set(campaign.id, campaign);
+    if (queuedDeliveries > 0) {
+      const outboxJob = {
+        id: crypto24.randomUUID(),
+        campaignId: campaign.id,
+        idempotencyKey: `outbox:${campaignIdempotencyKey}`,
+        eventType: "CAMPAIGN_DISPATCH",
+        payload: {
+          campaignId: campaign.id,
+          announcementId: announcement.id,
+          totalDeliveries: queuedDeliveries
+        },
+        status: "PENDING",
+        attempts: 0,
+        maxAttempts: 5,
+        nextRetryAt: options.scheduledAt && options.scheduledAt > now ? options.scheduledAt : void 0,
+        createdAt: now,
+        updatedAt: now
+      };
+      db.notificationOutboxJobs.set(outboxJob.id, outboxJob);
+    }
+    recordCmsAudit({
+      entityType: "CAMPAIGN",
+      entityId: campaign.id,
+      action: "CAMPAIGN_CREATED",
+      actorId: options.actorId,
+      actorEmail: options.actorEmail,
+      actorRole: options.actorRole,
+      ipAddress: options.ipAddress,
+      details: {
+        announcementId: announcement.id,
+        title: announcement.title,
+        channels: requestedChannels,
+        targetSegment,
+        totalEligible: eligibleUsers.length,
+        queuedDeliveries
+      }
+    });
+    db.saveToDisk();
+    if (queuedDeliveries > 0 && (!options.scheduledAt || options.scheduledAt <= now)) {
+      setImmediate(() => {
+        void this.tick();
+      });
+    }
+    return campaign;
+  }
+  /**
+   * Processes one batch of due outbox jobs & queued delivery records.
+   */
+  async tick() {
+    if (this.isProcessing) return { processed: 0 };
+    this.isProcessing = true;
+    let totalProcessed = 0;
+    try {
+      const now = Date.now();
+      const dueJobs = Array.from(db.notificationOutboxJobs.values()).filter(
+        (j) => j.status === "PENDING" && (!j.nextRetryAt || j.nextRetryAt <= now)
+      ).sort((a, b) => a.createdAt - b.createdAt);
+      for (const job of dueJobs) {
+        const campaign = db.notificationCampaigns.get(job.campaignId);
+        if (!campaign) {
+          job.status = "FAILED";
+          job.lastError = "Campaign not found";
+          job.updatedAt = Date.now();
+          continue;
+        }
+        if (campaign.status === "CANCELLED") {
+          job.status = "CANCELLED";
+          job.updatedAt = Date.now();
+          continue;
+        }
+        if (campaign.scheduledAt && campaign.scheduledAt > Date.now()) {
+          continue;
+        }
+        job.status = "PROCESSING";
+        job.lockedAt = Date.now();
+        job.attempts += 1;
+        job.updatedAt = Date.now();
+        if (!campaign.startedAt) {
+          campaign.startedAt = Date.now();
+        }
+        campaign.status = "PROCESSING";
+        campaign.updatedAt = Date.now();
+        const batchResult = await this.processCampaignBatch(campaign);
+        totalProcessed += batchResult.processed;
+        const latestCampaign = this.recomputeCampaignMetrics(campaign.id);
+        if (!latestCampaign || latestCampaign.status === "CANCELLED") {
+          job.status = "CANCELLED";
+          job.lockedAt = void 0;
+          job.updatedAt = Date.now();
+        } else if (batchResult.remainingQueued === 0) {
+          job.status = "COMPLETED";
+          job.lockedAt = void 0;
+          job.updatedAt = Date.now();
+        } else {
+          job.status = "PENDING";
+          job.lockedAt = void 0;
+          job.nextRetryAt = batchResult.earliestRetryAt;
+          job.updatedAt = Date.now();
+        }
+      }
+      if (totalProcessed > 0 || dueJobs.length > 0) {
+        db.scheduleSave();
+      }
+      const hasImmediateWork = Array.from(db.notificationOutboxJobs.values()).some(
+        (j) => j.status === "PENDING" && (!j.nextRetryAt || j.nextRetryAt <= Date.now())
+      );
+      if (hasImmediateWork && this.workerInterval) {
+        setImmediate(() => {
+          void this.tick();
+        });
+      }
+    } finally {
+      this.isProcessing = false;
+    }
+    return { processed: totalProcessed };
+  }
+  /**
+   * Processes up to `batchSize` runnable deliveries for a single campaign.
+   */
+  async processCampaignBatch(campaign) {
+    const now = Date.now();
+    const allDeliveries = Array.from(db.notificationDeliveries.values()).filter(
+      (d) => d.campaignId === campaign.id
+    );
+    const runnable = allDeliveries.filter(
+      (d) => d.status === "QUEUED" && (!d.nextRetryAt || d.nextRetryAt <= now)
+    );
+    const batch = runnable.slice(0, this.batchSize);
+    let processed = 0;
+    for (const delivery of batch) {
+      const liveCampaign = db.notificationCampaigns.get(campaign.id);
+      if (!liveCampaign || liveCampaign.status === "CANCELLED") {
+        delivery.status = "CANCELLED";
+        delivery.updatedAt = Date.now();
+        continue;
+      }
+      await this.executeSingleDelivery(liveCampaign, delivery);
+      processed++;
+    }
+    let remainingQueued = 0;
+    let earliestRetryAt;
+    for (const d of allDeliveries) {
+      if (d.status === "QUEUED" || d.status === "PROCESSING") {
+        remainingQueued++;
+        if (d.nextRetryAt && (!earliestRetryAt || d.nextRetryAt < earliestRetryAt)) {
+          earliestRetryAt = d.nextRetryAt;
+        }
+      }
+    }
+    return { processed, remainingQueued, earliestRetryAt };
+  }
+  findUserNotificationByIdempotencyKey(key) {
+    for (const n of db.userNotifications.values()) {
+      if (n.idempotencyKey === key) return n;
+    }
+    return void 0;
+  }
+  async executeSingleDelivery(campaign, delivery) {
+    const now = Date.now();
+    delivery.status = "PROCESSING";
+    delivery.attempts += 1;
+    delivery.updatedAt = now;
+    const user = db.users.get(delivery.userId);
+    if (!user || user.status !== "active") {
+      delivery.status = "SKIPPED";
+      delivery.lastError = "Recipient account disabled or not found";
+      delivery.updatedAt = Date.now();
+      return;
+    }
+    if (!this.isChannelPermittedForUser(user.id, delivery.channel)) {
+      delivery.status = "SKIPPED";
+      delivery.lastError = `Channel ${delivery.channel} not permitted by user preferences`;
+      delivery.updatedAt = Date.now();
+      return;
+    }
+    try {
+      if (this.customDeliveryHook) {
+        await this.customDeliveryHook(campaign, delivery, user);
+      }
+      if (delivery.channel === "IN_APP") {
+        const existing = this.findUserNotificationByIdempotencyKey(delivery.idempotencyKey);
+        if (!existing) {
+          const notif = {
+            id: crypto24.randomUUID(),
+            userId: user.id,
+            campaignId: campaign.id,
+            announcementId: campaign.announcementId,
+            announcementSlug: campaign.announcementSlug,
+            category: campaign.category,
+            title: campaign.title,
+            summary: campaign.summary,
+            coverImageUrl: campaign.coverImageUrl,
+            idempotencyKey: delivery.idempotencyKey,
+            isRead: false,
+            createdAt: Date.now()
+          };
+          db.userNotifications.set(notif.id, notif);
+          marketWsService.broadcastUserNotification(user.id, notif);
+        }
+      } else if (delivery.channel === "WEB_PUSH") {
+        marketWsService.broadcastUserNotification(user.id, {
+          id: delivery.id,
+          type: "WEB_PUSH",
+          campaignId: campaign.id,
+          announcementSlug: campaign.announcementSlug,
+          category: campaign.category,
+          title: campaign.title,
+          summary: campaign.summary,
+          createdAt: Date.now()
+        });
+      } else if (delivery.channel === "EMAIL") {
+      }
+      delivery.status = "SENT";
+      delivery.sentAt = Date.now();
+      delivery.lastError = void 0;
+      delivery.nextRetryAt = void 0;
+      delivery.updatedAt = Date.now();
+    } catch (err) {
+      const errorMsg = err?.message || "Unknown delivery error";
+      delivery.lastError = errorMsg;
+      delivery.updatedAt = Date.now();
+      if (delivery.attempts < delivery.maxAttempts) {
+        const delayMs = this.baseRetryDelayMs * Math.pow(2, delivery.attempts - 1);
+        delivery.status = "QUEUED";
+        delivery.nextRetryAt = Date.now() + delayMs;
+      } else {
+        delivery.status = "FAILED";
+        delivery.nextRetryAt = void 0;
+      }
+    }
+  }
+  recomputeCampaignMetrics(campaignId) {
+    const campaign = db.notificationCampaigns.get(campaignId);
+    if (!campaign) return null;
+    let queued = 0;
+    let sent = 0;
+    let failed = 0;
+    for (const d of db.notificationDeliveries.values()) {
+      if (d.campaignId !== campaignId) continue;
+      if (d.status === "QUEUED" || d.status === "PROCESSING") queued++;
+      else if (d.status === "SENT") sent++;
+      else if (d.status === "FAILED") failed++;
+    }
+    let read = 0;
+    for (const n of db.userNotifications.values()) {
+      if (n.campaignId === campaignId && n.isRead) {
+        read++;
+      }
+    }
+    campaign.queuedCount = queued;
+    campaign.sentCount = sent;
+    campaign.failedCount = failed;
+    campaign.readCount = read;
+    campaign.updatedAt = Date.now();
+    if (campaign.status !== "CANCELLED") {
+      if (queued > 0) {
+        campaign.status = campaign.startedAt ? "PROCESSING" : "QUEUED";
+      } else {
+        if (!campaign.completedAt) {
+          campaign.completedAt = Date.now();
+        }
+        if (failed > 0 && sent > 0) {
+          campaign.status = "PARTIALLY_FAILED";
+        } else if (failed > 0 && sent === 0) {
+          campaign.status = "FAILED";
+        } else {
+          campaign.status = "COMPLETED";
+        }
+      }
+    }
+    return campaign;
+  }
+  /**
+   * Safely cancels an in-progress or queued campaign before completion.
+   */
+  cancelCampaign(campaignId, actor) {
+    const campaign = db.notificationCampaigns.get(campaignId);
+    if (!campaign) {
+      throw new Error("Notification campaign not found");
+    }
+    if (campaign.status === "COMPLETED" || campaign.status === "CANCELLED") {
+      throw new Error(`Campaign cannot be cancelled in ${campaign.status} status`);
+    }
+    const now = Date.now();
+    campaign.status = "CANCELLED";
+    campaign.cancelledAt = now;
+    campaign.cancelledBy = actor.id;
+    campaign.updatedAt = now;
+    let cancelledDeliveries = 0;
+    for (const d of db.notificationDeliveries.values()) {
+      if (d.campaignId === campaignId && (d.status === "QUEUED" || d.status === "PROCESSING")) {
+        d.status = "CANCELLED";
+        d.updatedAt = now;
+        cancelledDeliveries++;
+      }
+    }
+    for (const job of db.notificationOutboxJobs.values()) {
+      if (job.campaignId === campaignId && (job.status === "PENDING" || job.status === "PROCESSING")) {
+        job.status = "CANCELLED";
+        job.updatedAt = now;
+      }
+    }
+    this.recomputeCampaignMetrics(campaignId);
+    recordCmsAudit({
+      entityType: "CAMPAIGN",
+      entityId: campaign.id,
+      action: "CAMPAIGN_CANCELLED",
+      actorId: actor.id,
+      actorEmail: actor.email,
+      actorRole: actor.role,
+      ipAddress: actor.ipAddress,
+      details: { cancelledDeliveries, alreadySent: campaign.sentCount }
+    });
+    db.saveToDisk();
+    return campaign;
+  }
+  /**
+   * Retries ONLY failed recipient deliveries for a campaign without duplicating SENT deliveries.
+   */
+  retryFailedDeliveries(campaignId, actor) {
+    const campaign = db.notificationCampaigns.get(campaignId);
+    if (!campaign) {
+      throw new Error("Notification campaign not found");
+    }
+    if (campaign.status === "CANCELLED") {
+      throw new Error("Cannot retry a cancelled campaign");
+    }
+    const now = Date.now();
+    let retriedCount = 0;
+    for (const d of db.notificationDeliveries.values()) {
+      if (d.campaignId === campaignId && d.status === "FAILED") {
+        d.status = "QUEUED";
+        d.attempts = 0;
+        d.nextRetryAt = void 0;
+        d.lastError = void 0;
+        d.updatedAt = now;
+        retriedCount++;
+      }
+    }
+    if (retriedCount === 0) {
+      return { campaign, retriedCount: 0 };
+    }
+    campaign.status = "QUEUED";
+    campaign.completedAt = void 0;
+    campaign.updatedAt = now;
+    this.recomputeCampaignMetrics(campaignId);
+    const retryJob = {
+      id: crypto24.randomUUID(),
+      campaignId: campaign.id,
+      idempotencyKey: `retry:${campaign.id}:${now}`,
+      eventType: "CAMPAIGN_RETRY",
+      payload: { campaignId: campaign.id, retriedCount },
+      status: "PENDING",
+      attempts: 0,
+      maxAttempts: 5,
+      createdAt: now,
+      updatedAt: now
+    };
+    db.notificationOutboxJobs.set(retryJob.id, retryJob);
+    recordCmsAudit({
+      entityType: "CAMPAIGN",
+      entityId: campaign.id,
+      action: "CAMPAIGN_RETRY_QUEUED",
+      actorId: actor.id,
+      actorEmail: actor.email,
+      actorRole: actor.role,
+      ipAddress: actor.ipAddress,
+      details: { retriedCount }
+    });
+    db.saveToDisk();
+    setImmediate(() => {
+      void this.tick();
+    });
+    return { campaign, retriedCount };
+  }
+  listCampaigns(params) {
+    let items = Array.from(db.notificationCampaigns.values()).map((c) => {
+      this.recomputeCampaignMetrics(c.id);
+      return c;
+    });
+    if (params?.status && params.status !== "ALL") {
+      items = items.filter((c) => c.status === params.status);
+    }
+    items.sort((a, b) => b.createdAt - a.createdAt);
+    const page = Math.max(1, Number(params?.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(params?.limit) || 20));
+    const total = items.length;
+    const start = (page - 1) * limit;
+    return {
+      items: items.slice(start, start + limit),
+      pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
+    };
+  }
+  getCampaignDetail(campaignId, deliveryPage = 1, deliveryLimit = 50) {
+    const campaign = this.recomputeCampaignMetrics(campaignId);
+    if (!campaign) return null;
+    const allDeliveries = Array.from(db.notificationDeliveries.values()).filter((d) => d.campaignId === campaignId).sort((a, b) => b.updatedAt - a.updatedAt);
+    const start = (Math.max(1, deliveryPage) - 1) * deliveryLimit;
+    const deliveries = allDeliveries.slice(start, start + deliveryLimit).map((d) => {
+      const user = db.users.get(d.userId);
+      return {
+        ...d,
+        userEmail: user?.email || d.userId
+      };
+    });
+    const outboxJobs = Array.from(db.notificationOutboxJobs.values()).filter((j) => j.campaignId === campaignId).sort((a, b) => b.createdAt - a.createdAt);
+    const auditTrail = db.cmsAuditLogs.filter((l) => l.entityType === "CAMPAIGN" && l.entityId === campaignId).sort((a, b) => b.createdAt - a.createdAt);
+    return {
+      campaign,
+      deliveries,
+      deliveriesPagination: {
+        page: Math.max(1, deliveryPage),
+        limit: deliveryLimit,
+        total: allDeliveries.length,
+        totalPages: Math.max(1, Math.ceil(allDeliveries.length / deliveryLimit))
+      },
+      outboxJobs,
+      auditTrail
+    };
+  }
+  // ---------------------------------------------------------------------------
+  // USER IN-APP NOTIFICATION INBOX OPERATIONS (STRICT PER-USER ISOLATION)
+  // ---------------------------------------------------------------------------
+  listUserNotifications(userId, params) {
+    let items = Array.from(db.userNotifications.values()).filter((n) => n.userId === userId);
+    const unreadCount = items.reduce((acc, n) => acc + (n.isRead ? 0 : 1), 0);
+    if (params?.unreadOnly) {
+      items = items.filter((n) => !n.isRead);
+    }
+    items.sort((a, b) => b.createdAt - a.createdAt);
+    const page = Math.max(1, Number(params?.page) || 1);
+    const limit = Math.min(50, Math.max(1, Number(params?.limit) || 20));
+    const total = items.length;
+    const start = (page - 1) * limit;
+    return {
+      items: items.slice(start, start + limit),
+      unreadCount,
+      pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
+    };
+  }
+  getUnreadCount(userId) {
+    let count = 0;
+    for (const n of db.userNotifications.values()) {
+      if (n.userId === userId && !n.isRead) count++;
+    }
+    return count;
+  }
+  getUserNotificationById(userId, notificationId) {
+    const notif = db.userNotifications.get(notificationId);
+    if (!notif || notif.userId !== userId) return null;
+    return notif;
+  }
+  markNotificationRead(userId, notificationId) {
+    const notif = db.userNotifications.get(notificationId);
+    if (!notif || notif.userId !== userId) return null;
+    if (!notif.isRead) {
+      notif.isRead = true;
+      notif.readAt = Date.now();
+      if (notif.campaignId) {
+        this.recomputeCampaignMetrics(notif.campaignId);
+      }
+      db.scheduleSave();
+    }
+    return notif;
+  }
+  markAllNotificationsRead(userId) {
+    const now = Date.now();
+    let updatedCount = 0;
+    const affectedCampaigns = /* @__PURE__ */ new Set();
+    for (const n of db.userNotifications.values()) {
+      if (n.userId === userId && !n.isRead) {
+        n.isRead = true;
+        n.readAt = now;
+        updatedCount++;
+        if (n.campaignId) affectedCampaigns.add(n.campaignId);
+      }
+    }
+    for (const cid of affectedCampaigns) {
+      this.recomputeCampaignMetrics(cid);
+    }
+    if (updatedCount > 0) {
+      db.scheduleSave();
+    }
+    return { updatedCount };
+  }
+};
+var notificationBroadcastService = new NotificationBroadcastService();
+
+// server/services/cms/NewsCmsService.ts
+var ANNOUNCEMENT_CATEGORIES = [
+  "ANNOUNCEMENT",
+  "PLATFORM_UPDATE",
+  "MAINTENANCE",
+  "NEW_LISTING",
+  "SECURITY_ALERT",
+  "TRADING_COMPETITION",
+  "DEPOSIT_WITHDRAWAL_UPDATE",
+  "IMPORTANT_NOTICE"
+];
+var HIGH_PRIORITY_CATEGORIES = /* @__PURE__ */ new Set([
+  "SECURITY_ALERT",
+  "IMPORTANT_NOTICE",
+  "MAINTENANCE"
+]);
+var NewsCmsService = class {
+  constructor() {
+    this.schedulerInterval = null;
+    this.pollIntervalMs = 5e3;
+  }
+  startScheduler() {
+    if (this.schedulerInterval) return;
+    this.processScheduledPublications();
+    this.schedulerInterval = setInterval(() => {
+      this.processScheduledPublications();
+    }, this.pollIntervalMs);
+  }
+  stopScheduler() {
+    if (this.schedulerInterval) {
+      clearInterval(this.schedulerInterval);
+      this.schedulerInterval = null;
+    }
+  }
+  ensureUniqueSlug(desired, excludeId) {
+    const base = generateSlug(desired);
+    let candidate = base;
+    let suffix = 2;
+    const isTaken = (slug) => {
+      for (const a of db.announcements.values()) {
+        if (a.slug === slug && a.id !== excludeId) return true;
+      }
+      return false;
+    };
+    while (isTaken(candidate)) {
+      candidate = `${base}-${suffix}`;
+      suffix++;
+    }
+    return candidate;
+  }
+  validateCategory(category) {
+    if (!ANNOUNCEMENT_CATEGORIES.includes(category)) {
+      throw new Error(`Invalid announcement category: ${category}`);
+    }
+    return category;
+  }
+  sanitizeChannels(channels) {
+    const allowed = /* @__PURE__ */ new Set(["IN_APP", "WEB_PUSH", "EMAIL"]);
+    const list = (channels || ["IN_APP"]).filter((c) => allowed.has(c));
+    if (!list.includes("IN_APP")) list.unshift("IN_APP");
+    return Array.from(new Set(list));
+  }
+  recordVersionSnapshot(announcement, editedBy, changeSummary) {
+    const snapshot = {
+      id: crypto25.randomUUID(),
+      announcementId: announcement.id,
+      version: announcement.version,
+      title: announcement.title,
+      slug: announcement.slug,
+      category: announcement.category,
+      shortDescription: announcement.shortDescription,
+      contentHtml: announcement.contentHtml,
+      coverImageUrl: announcement.coverImageUrl,
+      status: announcement.status,
+      editedBy,
+      changeSummary,
+      createdAt: Date.now()
+    };
+    db.announcementVersions.push(snapshot);
+  }
+  createAnnouncement(input, actor) {
+    const title = String(input.title || "").trim();
+    if (title.length < 3 || title.length > 240) {
+      throw new Error("Title must be between 3 and 240 characters");
+    }
+    const category = this.validateCategory(input.category || "ANNOUNCEMENT");
+    const sanitizedHtml = sanitizeArticleHtml(input.contentHtml || "");
+    const contentText = extractPlainText(sanitizedHtml);
+    const shortDescription = String(input.shortDescription || contentText.slice(0, 220)).trim();
+    if (shortDescription.length < 3 || shortDescription.length > 600) {
+      throw new Error("Short description must be between 3 and 600 characters");
+    }
+    let coverImageUrl;
+    if (input.coverImageUrl && String(input.coverImageUrl).trim()) {
+      const candidate = String(input.coverImageUrl).trim();
+      if (!isSafeMediaUrl(candidate)) {
+        throw new Error("Invalid cover image URL");
+      }
+      coverImageUrl = candidate;
+    }
+    const slug = this.ensureUniqueSlug(input.slug ? String(input.slug) : title);
+    const requiresApproval = Boolean(input.requiresApproval) || HIGH_PRIORITY_CATEGORIES.has(category);
+    const now = Date.now();
+    const authorUser = db.users.get(actor.id);
+    const authorKyc = db.kyc.get(actor.id);
+    const announcement = {
+      id: crypto25.randomUUID(),
+      title,
+      slug,
+      category,
+      shortDescription,
+      contentHtml: sanitizedHtml,
+      contentText,
+      coverImageUrl,
+      authorAdminId: actor.id,
+      authorName: authorKyc?.fullName || authorUser?.email || "DIMONEX Editorial",
+      lastEditedBy: actor.id,
+      status: "DRAFT",
+      isPinned: Boolean(input.isPinned),
+      requiresApproval,
+      notificationEnabled: Boolean(input.notificationEnabled),
+      notificationChannels: this.sanitizeChannels(input.notificationChannels),
+      targetSegment: input.targetSegment || "ALL_USERS",
+      targetConfig: input.targetConfig,
+      scheduledAt: input.scheduledAt,
+      version: 1,
+      createdAt: now,
+      updatedAt: now
+    };
+    db.announcements.set(announcement.id, announcement);
+    this.recordVersionSnapshot(announcement, actor.id, "Initial draft created");
+    recordCmsAudit({
+      entityType: "ANNOUNCEMENT",
+      entityId: announcement.id,
+      action: "ANNOUNCEMENT_CREATED",
+      actorId: actor.id,
+      actorEmail: actor.email,
+      actorRole: actor.role,
+      ipAddress: actor.ipAddress,
+      details: {
+        title: announcement.title,
+        slug: announcement.slug,
+        category: announcement.category,
+        requiresApproval: announcement.requiresApproval
+      }
+    });
+    db.saveToDisk();
+    return announcement;
+  }
+  updateAnnouncement(id, input, actor) {
+    const existing = db.announcements.get(id);
+    if (!existing) {
+      throw new Error("Announcement not found");
+    }
+    if (input.title !== void 0) {
+      const title = String(input.title).trim();
+      if (title.length < 3 || title.length > 240) {
+        throw new Error("Title must be between 3 and 240 characters");
+      }
+      existing.title = title;
+    }
+    if (input.slug !== void 0 && String(input.slug).trim()) {
+      existing.slug = this.ensureUniqueSlug(String(input.slug), existing.id);
+    }
+    if (input.category !== void 0) {
+      existing.category = this.validateCategory(input.category);
+    }
+    if (input.contentHtml !== void 0) {
+      existing.contentHtml = sanitizeArticleHtml(input.contentHtml);
+      existing.contentText = extractPlainText(existing.contentHtml);
+    }
+    if (input.shortDescription !== void 0) {
+      const desc = String(input.shortDescription).trim();
+      if (desc.length < 3 || desc.length > 600) {
+        throw new Error("Short description must be between 3 and 600 characters");
+      }
+      existing.shortDescription = desc;
+    }
+    if (input.coverImageUrl !== void 0) {
+      if (input.coverImageUrl === null || String(input.coverImageUrl).trim() === "") {
+        existing.coverImageUrl = void 0;
+      } else {
+        const candidate = String(input.coverImageUrl).trim();
+        if (!isSafeMediaUrl(candidate)) {
+          throw new Error("Invalid cover image URL");
+        }
+        existing.coverImageUrl = candidate;
+      }
+    }
+    if (input.isPinned !== void 0) {
+      existing.isPinned = Boolean(input.isPinned);
+    }
+    if (input.requiresApproval !== void 0 || input.category !== void 0) {
+      existing.requiresApproval = Boolean(input.requiresApproval ?? existing.requiresApproval) || HIGH_PRIORITY_CATEGORIES.has(existing.category);
+    }
+    if (input.notificationEnabled !== void 0) {
+      existing.notificationEnabled = Boolean(input.notificationEnabled);
+    }
+    if (input.notificationChannels !== void 0) {
+      existing.notificationChannels = this.sanitizeChannels(input.notificationChannels);
+    }
+    if (input.targetSegment !== void 0) {
+      existing.targetSegment = input.targetSegment;
+    }
+    if (input.targetConfig !== void 0) {
+      existing.targetConfig = input.targetConfig;
+    }
+    if (existing.requiresApproval && existing.status !== "PUBLISHED" && (input.title !== void 0 || input.contentHtml !== void 0 || input.shortDescription !== void 0)) {
+      existing.approvedBy = void 0;
+      existing.approvedAt = void 0;
+      if (existing.status === "PENDING_APPROVAL") {
+        existing.status = "DRAFT";
+      }
+    }
+    existing.version += 1;
+    existing.lastEditedBy = actor.id;
+    existing.updatedAt = Date.now();
+    this.recordVersionSnapshot(existing, actor.id, input.changeSummary || `Updated v${existing.version}`);
+    recordCmsAudit({
+      entityType: "ANNOUNCEMENT",
+      entityId: existing.id,
+      action: "ANNOUNCEMENT_UPDATED",
+      actorId: actor.id,
+      actorEmail: actor.email,
+      actorRole: actor.role,
+      ipAddress: actor.ipAddress,
+      details: {
+        version: existing.version,
+        changeSummary: input.changeSummary || "Content edited"
+      }
+    });
+    db.saveToDisk();
+    return existing;
+  }
+  previewAnnouncement(id) {
+    const announcement = db.announcements.get(id);
+    if (!announcement) {
+      throw new Error("Announcement not found");
+    }
+    const safeHtml = sanitizeArticleHtml(announcement.contentHtml);
+    return {
+      ...announcement,
+      contentHtml: safeHtml,
+      contentText: extractPlainText(safeHtml),
+      previewGeneratedAt: Date.now()
+    };
+  }
+  submitForApproval(id, actor) {
+    const announcement = db.announcements.get(id);
+    if (!announcement) {
+      throw new Error("Announcement not found");
+    }
+    if (announcement.status === "PUBLISHED" || announcement.status === "ARCHIVED") {
+      throw new Error(`Cannot submit announcement in ${announcement.status} status`);
+    }
+    announcement.status = "PENDING_APPROVAL";
+    announcement.requiresApproval = true;
+    announcement.updatedAt = Date.now();
+    recordCmsAudit({
+      entityType: "ANNOUNCEMENT",
+      entityId: announcement.id,
+      action: "ANNOUNCEMENT_SUBMITTED_FOR_APPROVAL",
+      actorId: actor.id,
+      actorEmail: actor.email,
+      actorRole: actor.role,
+      ipAddress: actor.ipAddress,
+      details: { version: announcement.version }
+    });
+    db.saveToDisk();
+    return announcement;
+  }
+  /**
+   * Maker-Checker Approval: Creator CANNOT approve their own announcement.
+   */
+  approveAnnouncement(id, actor, note) {
+    const announcement = db.announcements.get(id);
+    if (!announcement) {
+      throw new Error("Announcement not found");
+    }
+    if (announcement.status !== "PENDING_APPROVAL") {
+      throw new Error(`Announcement must be in PENDING_APPROVAL status to approve (current: ${announcement.status})`);
+    }
+    if (announcement.authorAdminId === actor.id) {
+      throw new Error("Maker-Checker Violation: Announcement creator cannot approve their own announcement");
+    }
+    announcement.approvedBy = actor.id;
+    announcement.approvedAt = Date.now();
+    announcement.updatedAt = Date.now();
+    recordCmsAudit({
+      entityType: "ANNOUNCEMENT",
+      entityId: announcement.id,
+      action: "ANNOUNCEMENT_APPROVED",
+      actorId: actor.id,
+      actorEmail: actor.email,
+      actorRole: actor.role,
+      ipAddress: actor.ipAddress,
+      details: { version: announcement.version, note: note || "Approved by checker" }
+    });
+    db.saveToDisk();
+    return announcement;
+  }
+  /**
+   * Publishes an announcement immediately and atomically enqueues a global notification
+   * broadcast campaign if `notifyAllUsers` / `notificationEnabled` is true.
+   */
+  publishAnnouncement(id, actor, options) {
+    const announcement = db.announcements.get(id);
+    if (!announcement) {
+      throw new Error("Announcement not found");
+    }
+    if (announcement.status === "ARCHIVED") {
+      throw new Error("Archived announcements cannot be published directly; create a new revision or unarchive first");
+    }
+    if (announcement.requiresApproval) {
+      if (!announcement.approvedBy) {
+        throw new Error(
+          "Maker-Checker approval required before publishing high-priority announcements. Submit for approval and have a second admin approve."
+        );
+      }
+      if (announcement.approvedBy === announcement.authorAdminId) {
+        throw new Error("Maker-Checker violation: approver must differ from creator");
+      }
+    }
+    announcement.contentHtml = sanitizeArticleHtml(announcement.contentHtml);
+    announcement.contentText = extractPlainText(announcement.contentHtml);
+    const notifyEnabled = options?.notifyAllUsers !== void 0 ? Boolean(options.notifyAllUsers) : announcement.notificationEnabled;
+    if (options?.notificationChannels) {
+      announcement.notificationChannels = this.sanitizeChannels(options.notificationChannels);
+    }
+    if (options?.targetSegment) {
+      announcement.targetSegment = options.targetSegment;
+    }
+    if (options?.targetConfig) {
+      announcement.targetConfig = options.targetConfig;
+    }
+    announcement.notificationEnabled = notifyEnabled;
+    const now = Date.now();
+    announcement.status = "PUBLISHED";
+    announcement.publishedAt = now;
+    announcement.publishedBy = actor.id;
+    announcement.scheduledAt = void 0;
+    announcement.updatedAt = now;
+    this.recordVersionSnapshot(announcement, actor.id, "Published");
+    recordCmsAudit({
+      entityType: "ANNOUNCEMENT",
+      entityId: announcement.id,
+      action: "ANNOUNCEMENT_PUBLISHED",
+      actorId: actor.id,
+      actorEmail: actor.email,
+      actorRole: actor.role,
+      ipAddress: actor.ipAddress,
+      details: {
+        version: announcement.version,
+        slug: announcement.slug,
+        notifyAllUsers: notifyEnabled,
+        channels: announcement.notificationChannels,
+        targetSegment: announcement.targetSegment
+      }
+    });
+    let campaign = null;
+    if (notifyEnabled) {
+      campaign = notificationBroadcastService.createCampaignForAnnouncement({
+        announcement,
+        actorId: actor.id,
+        actorEmail: actor.email,
+        actorRole: actor.role,
+        ipAddress: actor.ipAddress,
+        channels: announcement.notificationChannels,
+        targetSegment: announcement.targetSegment,
+        targetConfig: announcement.targetConfig
+      });
+    } else {
+      db.saveToDisk();
+    }
+    marketWsService.broadcastAnnouncementPublished({
+      id: announcement.id,
+      slug: announcement.slug,
+      title: announcement.title,
+      category: announcement.category,
+      publishedAt: announcement.publishedAt
+    });
+    return { announcement, campaign };
+  }
+  /**
+   * Schedules or reschedules future publication of an announcement.
+   */
+  scheduleAnnouncement(id, scheduledAt, actor, options) {
+    const announcement = db.announcements.get(id);
+    if (!announcement) {
+      throw new Error("Announcement not found");
+    }
+    if (announcement.status === "PUBLISHED" || announcement.status === "ARCHIVED") {
+      throw new Error(`Cannot schedule announcement in ${announcement.status} status`);
+    }
+    if (!Number.isFinite(scheduledAt) || scheduledAt <= Date.now()) {
+      throw new Error("Scheduled publication timestamp must be in the future");
+    }
+    if (announcement.requiresApproval && !announcement.approvedBy) {
+      throw new Error("Maker-Checker approval required before scheduling high-priority announcements");
+    }
+    const wasScheduled = announcement.status === "SCHEDULED";
+    announcement.status = "SCHEDULED";
+    announcement.scheduledAt = scheduledAt;
+    if (options?.notifyAllUsers !== void 0) {
+      announcement.notificationEnabled = Boolean(options.notifyAllUsers);
+    }
+    if (options?.notificationChannels) {
+      announcement.notificationChannels = this.sanitizeChannels(options.notificationChannels);
+    }
+    if (options?.targetSegment) {
+      announcement.targetSegment = options.targetSegment;
+    }
+    if (options?.targetConfig) {
+      announcement.targetConfig = options.targetConfig;
+    }
+    announcement.updatedAt = Date.now();
+    recordCmsAudit({
+      entityType: "ANNOUNCEMENT",
+      entityId: announcement.id,
+      action: wasScheduled ? "ANNOUNCEMENT_RESCHEDULED" : "ANNOUNCEMENT_SCHEDULED",
+      actorId: actor.id,
+      actorEmail: actor.email,
+      actorRole: actor.role,
+      ipAddress: actor.ipAddress,
+      details: {
+        scheduledAt,
+        scheduledIso: new Date(scheduledAt).toISOString(),
+        notifyAllUsers: announcement.notificationEnabled
+      }
+    });
+    db.saveToDisk();
+    return announcement;
+  }
+  archiveAnnouncement(id, actor) {
+    const announcement = db.announcements.get(id);
+    if (!announcement) {
+      throw new Error("Announcement not found");
+    }
+    const prevStatus = announcement.status;
+    announcement.status = "ARCHIVED";
+    announcement.isPinned = false;
+    announcement.archivedAt = Date.now();
+    announcement.archivedBy = actor.id;
+    announcement.updatedAt = Date.now();
+    recordCmsAudit({
+      entityType: "ANNOUNCEMENT",
+      entityId: announcement.id,
+      action: "ANNOUNCEMENT_ARCHIVED",
+      actorId: actor.id,
+      actorEmail: actor.email,
+      actorRole: actor.role,
+      ipAddress: actor.ipAddress,
+      details: { previousStatus: prevStatus }
+    });
+    db.saveToDisk();
+    return announcement;
+  }
+  togglePinAnnouncement(id, isPinned, actor) {
+    const announcement = db.announcements.get(id);
+    if (!announcement) {
+      throw new Error("Announcement not found");
+    }
+    if (announcement.status === "ARCHIVED" && isPinned) {
+      throw new Error("Archived announcements cannot be pinned");
+    }
+    announcement.isPinned = Boolean(isPinned);
+    announcement.updatedAt = Date.now();
+    recordCmsAudit({
+      entityType: "ANNOUNCEMENT",
+      entityId: announcement.id,
+      action: announcement.isPinned ? "ANNOUNCEMENT_PINNED" : "ANNOUNCEMENT_UNPINNED",
+      actorId: actor.id,
+      actorEmail: actor.email,
+      actorRole: actor.role,
+      ipAddress: actor.ipAddress,
+      details: { isPinned: announcement.isPinned }
+    });
+    db.saveToDisk();
+    return announcement;
+  }
+  /**
+   * Background scheduler tick: publishes all SCHEDULED announcements whose scheduledAt <= now.
+   */
+  processScheduledPublications(nowMs = Date.now()) {
+    const published = [];
+    for (const announcement of db.announcements.values()) {
+      if (announcement.status === "SCHEDULED" && announcement.scheduledAt !== void 0 && announcement.scheduledAt <= nowMs) {
+        try {
+          const { announcement: pub } = this.publishAnnouncement(announcement.id, {
+            id: announcement.lastEditedBy || announcement.authorAdminId,
+            role: "SYSTEM_SCHEDULER"
+          });
+          published.push(pub);
+        } catch (err) {
+          console.error(`[NewsCmsService] Scheduled publish failed for ${announcement.id}:`, err);
+        }
+      }
+    }
+    return published;
+  }
+  // ---------------------------------------------------------------------------
+  // ADMIN QUERIES
+  // ---------------------------------------------------------------------------
+  listAdminAnnouncements(params) {
+    let items = Array.from(db.announcements.values());
+    if (params?.category && params.category !== "ALL") {
+      items = items.filter((a) => a.category === params.category);
+    }
+    if (params?.status && params.status !== "ALL") {
+      items = items.filter((a) => a.status === params.status);
+    }
+    if (params?.pinnedOnly) {
+      items = items.filter((a) => a.isPinned);
+    }
+    if (params?.search && params.search.trim()) {
+      const q = params.search.trim().toLowerCase();
+      items = items.filter(
+        (a) => a.title.toLowerCase().includes(q) || a.slug.toLowerCase().includes(q) || a.shortDescription.toLowerCase().includes(q) || a.contentText.toLowerCase().includes(q)
+      );
+    }
+    items.sort((a, b) => {
+      if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+      return b.updatedAt - a.updatedAt;
+    });
+    const page = Math.max(1, Number(params?.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(params?.limit) || 15));
+    const total = items.length;
+    const start = (page - 1) * limit;
+    return {
+      items: items.slice(start, start + limit),
+      pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
+    };
+  }
+  getAdminAnnouncementDetail(id) {
+    const announcement = db.announcements.get(id);
+    if (!announcement) return null;
+    const versions = db.announcementVersions.filter((v) => v.announcementId === id).sort((a, b) => b.version - a.version);
+    const auditLogs = getAuditLogsForEntity("ANNOUNCEMENT", id);
+    const campaigns = Array.from(db.notificationCampaigns.values()).filter((c) => c.announcementId === id).sort((a, b) => b.createdAt - a.createdAt);
+    return {
+      announcement,
+      versions,
+      auditLogs,
+      campaigns
+    };
+  }
+  // ---------------------------------------------------------------------------
+  // PUBLIC QUERIES (STRICTLY PUBLISHED ONLY — ZERO DRAFTS/ARCHIVED LEAKAGE)
+  // ---------------------------------------------------------------------------
+  listPublicAnnouncements(params) {
+    let items = Array.from(db.announcements.values()).filter(
+      (a) => a.status === "PUBLISHED" && a.publishedAt !== void 0
+    );
+    if (params?.category && params.category !== "ALL") {
+      items = items.filter((a) => a.category === params.category);
+    }
+    if (params?.search && params.search.trim()) {
+      const q = params.search.trim().toLowerCase();
+      items = items.filter(
+        (a) => a.title.toLowerCase().includes(q) || a.shortDescription.toLowerCase().includes(q)
+      );
+    }
+    items.sort((a, b) => {
+      if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+      return (b.publishedAt || 0) - (a.publishedAt || 0);
+    });
+    const page = Math.max(1, Number(params?.page) || 1);
+    const limit = Math.min(50, Math.max(1, Number(params?.limit) || 12));
+    const total = items.length;
+    const start = (page - 1) * limit;
+    return {
+      items: items.slice(start, start + limit).map((a) => ({
+        id: a.id,
+        title: a.title,
+        slug: a.slug,
+        category: a.category,
+        shortDescription: a.shortDescription,
+        coverImageUrl: a.coverImageUrl,
+        isPinned: a.isPinned,
+        publishedAt: a.publishedAt,
+        authorName: a.authorName || "DIMONEX Official"
+      })),
+      pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
+    };
+  }
+  getPublicAnnouncementBySlug(slug) {
+    const cleanSlug = String(slug || "").trim().toLowerCase();
+    for (const a of db.announcements.values()) {
+      if (a.slug.toLowerCase() === cleanSlug && a.status === "PUBLISHED") {
+        return {
+          id: a.id,
+          title: a.title,
+          slug: a.slug,
+          category: a.category,
+          shortDescription: a.shortDescription,
+          contentHtml: sanitizeArticleHtml(a.contentHtml),
+          coverImageUrl: a.coverImageUrl,
+          isPinned: a.isPinned,
+          publishedAt: a.publishedAt,
+          updatedAt: a.updatedAt,
+          version: a.version,
+          authorName: a.authorName || "DIMONEX Official"
+        };
+      }
+    }
+    return null;
+  }
+};
+var newsCmsService = new NewsCmsService();
+
+// server/services/cms/MediaValidationService.ts
+init_database();
+import crypto26 from "crypto";
+import fs5 from "fs";
+import path5 from "path";
+var MAX_MEDIA_UPLOAD_BYTES = 2 * 1024 * 1024;
+var MIME_TO_EXT = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+  "image/gif": "gif"
+};
+var EXT_TO_MIME = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif"
+};
+function getMediaDirectory() {
+  const dir = path5.resolve(getExchangeDataDirectory(), "media");
+  if (!fs5.existsSync(dir)) {
+    fs5.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+function detectImageSignature(buffer) {
+  if (!buffer || buffer.length < 12) return null;
+  if (buffer[0] === 137 && buffer[1] === 80 && buffer[2] === 78 && buffer[3] === 71 && buffer[4] === 13 && buffer[5] === 10 && buffer[6] === 26 && buffer[7] === 10) {
+    return "image/png";
+  }
+  if (buffer[0] === 255 && buffer[1] === 216 && buffer[2] === 255) {
+    return "image/jpeg";
+  }
+  if (buffer[0] === 82 && buffer[1] === 73 && buffer[2] === 70 && buffer[3] === 70 && buffer[8] === 87 && buffer[9] === 69 && buffer[10] === 66 && buffer[11] === 80) {
+    return "image/webp";
+  }
+  if (buffer[0] === 71 && buffer[1] === 73 && buffer[2] === 70 && buffer[3] === 56 && (buffer[4] === 55 || buffer[4] === 57) && buffer[5] === 97) {
+    return "image/gif";
+  }
+  return null;
+}
+function containsEmbeddedScriptPayload(buffer) {
+  const sample = buffer.subarray(0, Math.min(buffer.length, 4096)).toString("utf8").toLowerCase();
+  return sample.includes("<script") || sample.includes("<svg") || sample.includes("<?php") || sample.includes("<html") || sample.includes("javascript:");
+}
+function validateImagePayload(base64Data, declaredMimeType) {
+  if (!base64Data || typeof base64Data !== "string") {
+    throw new Error("File image data is required");
+  }
+  let effectiveMime = declaredMimeType?.toLowerCase().trim() || "";
+  let rawBase64 = base64Data.trim();
+  const dataUrlMatch = /^data:([a-zA-Z0-9/+.-]+);base64,([\s\S]+)$/.exec(rawBase64);
+  if (dataUrlMatch) {
+    const dataUrlMime = dataUrlMatch[1].toLowerCase().trim();
+    if (effectiveMime && effectiveMime !== dataUrlMime) {
+      throw new Error("Declared MIME type does not match data URL MIME type");
+    }
+    effectiveMime = dataUrlMime;
+    rawBase64 = dataUrlMatch[2];
+  }
+  const allowedMimes = /* @__PURE__ */ new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+  if (!effectiveMime || !allowedMimes.has(effectiveMime)) {
+    throw new Error(
+      `Unsupported file MIME type "${effectiveMime || "unknown"}". Allowed types: PNG, JPEG, WebP, GIF.`
+    );
+  }
+  const maxEncodedLen = Math.ceil(MAX_MEDIA_UPLOAD_BYTES * 4 / 3) + 128;
+  if (rawBase64.length > maxEncodedLen) {
+    throw new Error(`File exceeds maximum upload limit of ${MAX_MEDIA_UPLOAD_BYTES / (1024 * 1024)} MB`);
+  }
+  const buffer = Buffer.from(rawBase64, "base64");
+  if (!buffer || buffer.length === 0) {
+    throw new Error("Uploaded file is empty or invalid base64");
+  }
+  if (buffer.length > MAX_MEDIA_UPLOAD_BYTES) {
+    throw new Error(`File exceeds maximum upload limit of ${MAX_MEDIA_UPLOAD_BYTES / (1024 * 1024)} MB`);
+  }
+  const detectedMime = detectImageSignature(buffer);
+  if (!detectedMime) {
+    throw new Error("Invalid image file signature. File content does not match a supported image format.");
+  }
+  if (detectedMime !== effectiveMime) {
+    throw new Error(
+      `MIME type mismatch: declared ${effectiveMime}, but binary signature is ${detectedMime}.`
+    );
+  }
+  if (containsEmbeddedScriptPayload(buffer)) {
+    throw new Error("Security check failed: suspicious script or markup payload detected in image.");
+  }
+  const sha256Hash = crypto26.createHash("sha256").update(buffer).digest("hex");
+  return {
+    buffer,
+    mimeType: detectedMime,
+    ext: MIME_TO_EXT[detectedMime],
+    sha256Hash
+  };
+}
+function resolveSafeMediaPath(filename) {
+  if (!filename || typeof filename !== "string") return null;
+  const cleanName = filename.trim();
+  const match = /^([a-zA-Z0-9_-]{8,128})\.(png|jpg|webp|gif)$/.exec(cleanName);
+  if (!match) return null;
+  const baseDir = getMediaDirectory();
+  const resolved = path5.resolve(baseDir, cleanName);
+  if (!resolved.startsWith(baseDir + path5.sep)) {
+    return null;
+  }
+  const ext = match[2];
+  const mimeType = EXT_TO_MIME[ext];
+  if (!mimeType) return null;
+  return { filePath: resolved, mimeType };
+}
+function saveUploadedMedia(input) {
+  const validated = validateImagePayload(input.base64Data, input.declaredMimeType);
+  const id = crypto26.randomUUID();
+  const safeFilename = `${id.replace(/-/g, "")}.${validated.ext}`;
+  const resolved = resolveSafeMediaPath(safeFilename);
+  if (!resolved) {
+    throw new Error("Failed to resolve confined media storage path");
+  }
+  fs5.writeFileSync(resolved.filePath, validated.buffer);
+  const safeOriginalName = (input.originalName || safeFilename).replace(/[^a-zA-Z0-9._ -]/g, "_").slice(0, 120);
+  const asset = {
+    id,
+    filename: safeFilename,
+    originalName: safeOriginalName,
+    mimeType: validated.mimeType,
+    sizeBytes: validated.buffer.length,
+    sha256Hash: validated.sha256Hash,
+    url: `/api/public/media/${safeFilename}`,
+    altText: input.altText ? String(input.altText).trim().slice(0, 200) : safeOriginalName,
+    uploadedBy: input.uploadedBy,
+    createdAt: Date.now()
+  };
+  db.mediaAssets.set(asset.id, asset);
+  db.scheduleSave();
+  return asset;
+}
+function deleteUploadedMedia(mediaId) {
+  const existing = db.mediaAssets.get(mediaId);
+  if (!existing) return false;
+  const resolved = resolveSafeMediaPath(existing.filename);
+  if (resolved && fs5.existsSync(resolved.filePath)) {
+    try {
+      fs5.unlinkSync(resolved.filePath);
+    } catch {
+    }
+  }
+  db.mediaAssets.delete(mediaId);
+  db.scheduleSave();
+  return true;
+}
+
+// server/routes/newsAdmin.ts
+var newsAdminRouter = Router14();
+var adminPublishRateMap = /* @__PURE__ */ new Map();
+function createAdminRateLimiter(windowMs, maxRequests, label) {
+  return (req, res, next) => {
+    const user = req.user;
+    const key = `${label}:${user?.id || req.ip || "unknown"}`;
+    const now = Date.now();
+    const recent = (adminPublishRateMap.get(key) || []).filter((ts) => now - ts < windowMs);
+    if (recent.length >= maxRequests) {
+      return res.status(429).json({
+        error: `Rate limit exceeded for ${label}. Please wait before retrying.`,
+        retryAfterMs: windowMs - (now - recent[0])
+      });
+    }
+    recent.push(now);
+    adminPublishRateMap.set(key, recent);
+    next();
+  };
+}
+var publishRateLimit = createAdminRateLimiter(6e4, 20, "admin_publish");
+var uploadRateLimit = createAdminRateLimiter(6e4, 30, "admin_media_upload");
+function getActor(req) {
+  const user = req.user;
+  return {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    ipAddress: req.ip || req.headers["x-forwarded-for"] || "unknown"
+  };
+}
+newsAdminRouter.get("/news/categories", requireAdmin, (_req, res) => {
+  res.json({ categories: ANNOUNCEMENT_CATEGORIES });
+});
+newsAdminRouter.get("/news", requireAdmin, (req, res) => {
+  try {
+    const result = newsCmsService.listAdminAnnouncements({
+      search: typeof req.query.search === "string" ? req.query.search : void 0,
+      category: typeof req.query.category === "string" ? req.query.category : void 0,
+      status: typeof req.query.status === "string" ? req.query.status : void 0,
+      pinnedOnly: req.query.pinned === "true",
+      page: req.query.page ? Number(req.query.page) : 1,
+      limit: req.query.limit ? Number(req.query.limit) : 15
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+newsAdminRouter.post("/news", requireAdmin, (req, res) => {
+  try {
+    const actor = getActor(req);
+    const announcement = newsCmsService.createAnnouncement(req.body || {}, actor);
+    res.status(201).json(announcement);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+newsAdminRouter.get("/news/:id", requireAdmin, (req, res) => {
+  const detail = newsCmsService.getAdminAnnouncementDetail(req.params.id);
+  if (!detail) {
+    return res.status(404).json({ error: "Announcement not found" });
+  }
+  res.json(detail);
+});
+newsAdminRouter.patch("/news/:id", requireAdmin, (req, res) => {
+  try {
+    const actor = getActor(req);
+    const updated = newsCmsService.updateAnnouncement(req.params.id, req.body || {}, actor);
+    res.json(updated);
+  } catch (err) {
+    const status = err.message.includes("not found") ? 404 : 400;
+    res.status(status).json({ error: err.message });
+  }
+});
+newsAdminRouter.post("/news/:id/preview", requireAdmin, (req, res) => {
+  try {
+    const preview = newsCmsService.previewAnnouncement(req.params.id);
+    res.json(preview);
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
+});
+newsAdminRouter.post("/news/:id/submit", requireAdmin, (req, res) => {
+  try {
+    const actor = getActor(req);
+    const updated = newsCmsService.submitForApproval(req.params.id, actor);
+    res.json(updated);
+  } catch (err) {
+    const status = err.message.includes("not found") ? 404 : 400;
+    res.status(status).json({ error: err.message });
+  }
+});
+newsAdminRouter.post("/news/:id/approve", requireAdmin, (req, res) => {
+  try {
+    const actor = getActor(req);
+    const updated = newsCmsService.approveAnnouncement(
+      req.params.id,
+      actor,
+      typeof req.body?.note === "string" ? req.body.note : void 0
+    );
+    res.json(updated);
+  } catch (err) {
+    const msg = err.message || "Approval failed";
+    const status = msg.includes("not found") ? 404 : msg.includes("Maker-Checker") ? 403 : 400;
+    res.status(status).json({ error: msg });
+  }
+});
+newsAdminRouter.post("/news/:id/publish", requireAdmin, publishRateLimit, (req, res) => {
+  try {
+    const actor = getActor(req);
+    const body = req.body || {};
+    const result = newsCmsService.publishAnnouncement(req.params.id, actor, {
+      notifyAllUsers: body.notifyAllUsers !== void 0 ? Boolean(body.notifyAllUsers) : body.notificationEnabled !== void 0 ? Boolean(body.notificationEnabled) : void 0,
+      notificationChannels: Array.isArray(body.notificationChannels) ? body.notificationChannels : void 0,
+      targetSegment: body.targetSegment,
+      targetConfig: body.targetConfig
+    });
+    res.json(result);
+  } catch (err) {
+    const msg = err.message || "Publish failed";
+    const status = msg.includes("not found") ? 404 : msg.includes("Maker-Checker") ? 403 : 400;
+    res.status(status).json({ error: msg });
+  }
+});
+newsAdminRouter.post("/news/:id/schedule", requireAdmin, publishRateLimit, (req, res) => {
+  try {
+    const actor = getActor(req);
+    const body = req.body || {};
+    const rawTs = body.scheduledAt;
+    const scheduledAt = typeof rawTs === "number" ? rawTs : typeof rawTs === "string" ? Date.parse(rawTs) : NaN;
+    if (!Number.isFinite(scheduledAt)) {
+      return res.status(400).json({ error: "Valid scheduledAt timestamp is required" });
+    }
+    const updated = newsCmsService.scheduleAnnouncement(req.params.id, scheduledAt, actor, {
+      notifyAllUsers: body.notifyAllUsers !== void 0 ? Boolean(body.notifyAllUsers) : body.notificationEnabled !== void 0 ? Boolean(body.notificationEnabled) : void 0,
+      notificationChannels: Array.isArray(body.notificationChannels) ? body.notificationChannels : void 0,
+      targetSegment: body.targetSegment,
+      targetConfig: body.targetConfig
+    });
+    res.json(updated);
+  } catch (err) {
+    const msg = err.message || "Schedule failed";
+    const status = msg.includes("not found") ? 404 : msg.includes("Maker-Checker") ? 403 : 400;
+    res.status(status).json({ error: msg });
+  }
+});
+newsAdminRouter.post("/news/:id/archive", requireAdmin, (req, res) => {
+  try {
+    const actor = getActor(req);
+    const updated = newsCmsService.archiveAnnouncement(req.params.id, actor);
+    res.json(updated);
+  } catch (err) {
+    const status = err.message.includes("not found") ? 404 : 400;
+    res.status(status).json({ error: err.message });
+  }
+});
+newsAdminRouter.post("/news/:id/pin", requireAdmin, (req, res) => {
+  try {
+    const actor = getActor(req);
+    const isPinned = Boolean(req.body?.isPinned);
+    const updated = newsCmsService.togglePinAnnouncement(req.params.id, isPinned, actor);
+    res.json(updated);
+  } catch (err) {
+    const status = err.message.includes("not found") ? 404 : 400;
+    res.status(status).json({ error: err.message });
+  }
+});
+newsAdminRouter.get("/notification-campaigns", requireAdmin, (req, res) => {
+  const result = notificationBroadcastService.listCampaigns({
+    status: typeof req.query.status === "string" ? req.query.status : void 0,
+    page: req.query.page ? Number(req.query.page) : 1,
+    limit: req.query.limit ? Number(req.query.limit) : 20
+  });
+  res.json(result);
+});
+newsAdminRouter.get("/notification-campaigns/:id", requireAdmin, (req, res) => {
+  const detail = notificationBroadcastService.getCampaignDetail(
+    req.params.id,
+    req.query.page ? Number(req.query.page) : 1,
+    req.query.limit ? Number(req.query.limit) : 50
+  );
+  if (!detail) {
+    return res.status(404).json({ error: "Notification campaign not found" });
+  }
+  res.json(detail);
+});
+newsAdminRouter.post("/notification-campaigns/:id/retry", requireAdmin, publishRateLimit, (req, res) => {
+  try {
+    const actor = getActor(req);
+    const result = notificationBroadcastService.retryFailedDeliveries(req.params.id, actor);
+    res.json(result);
+  } catch (err) {
+    const status = err.message.includes("not found") ? 404 : 400;
+    res.status(status).json({ error: err.message });
+  }
+});
+newsAdminRouter.post("/notification-campaigns/:id/cancel", requireAdmin, (req, res) => {
+  try {
+    const actor = getActor(req);
+    const campaign = notificationBroadcastService.cancelCampaign(req.params.id, actor);
+    res.json({ campaign });
+  } catch (err) {
+    const status = err.message.includes("not found") ? 404 : 400;
+    res.status(status).json({ error: err.message });
+  }
+});
+newsAdminRouter.get("/media", requireAdmin, (req, res) => {
+  const search = typeof req.query.search === "string" ? req.query.search.trim().toLowerCase() : "";
+  let items = Array.from(db.mediaAssets.values());
+  if (search) {
+    items = items.filter(
+      (m) => m.originalName.toLowerCase().includes(search) || (m.altText || "").toLowerCase().includes(search)
+    );
+  }
+  items.sort((a, b) => b.createdAt - a.createdAt);
+  res.json({ items, total: items.length });
+});
+newsAdminRouter.post("/media/upload", requireAdmin, uploadRateLimit, (req, res) => {
+  try {
+    const actor = getActor(req);
+    const { originalName, mimeType, base64Data, altText } = req.body || {};
+    const asset = saveUploadedMedia({
+      originalName: String(originalName || "upload.png"),
+      declaredMimeType: typeof mimeType === "string" ? mimeType : void 0,
+      base64Data: String(base64Data || ""),
+      altText: typeof altText === "string" ? altText : void 0,
+      uploadedBy: actor.id
+    });
+    recordCmsAudit({
+      entityType: "MEDIA",
+      entityId: asset.id,
+      action: "MEDIA_UPLOADED",
+      actorId: actor.id,
+      actorEmail: actor.email,
+      actorRole: actor.role,
+      ipAddress: actor.ipAddress,
+      details: {
+        filename: asset.filename,
+        mimeType: asset.mimeType,
+        sizeBytes: asset.sizeBytes
+      }
+    });
+    res.status(201).json(asset);
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Image upload failed" });
+  }
+});
+newsAdminRouter.delete("/media/:id", requireAdmin, (req, res) => {
+  const actor = getActor(req);
+  const existing = db.mediaAssets.get(req.params.id);
+  if (!existing) {
+    return res.status(404).json({ error: "Media asset not found" });
+  }
+  deleteUploadedMedia(req.params.id);
+  recordCmsAudit({
+    entityType: "MEDIA",
+    entityId: existing.id,
+    action: "MEDIA_DELETED",
+    actorId: actor.id,
+    actorEmail: actor.email,
+    actorRole: actor.role,
+    ipAddress: actor.ipAddress,
+    details: { filename: existing.filename, originalName: existing.originalName }
+  });
+  res.json({ success: true });
+});
+
+// server/routes/newsPublic.ts
+import { Router as Router15 } from "express";
+import fs6 from "fs";
+var newsPublicRouter = Router15();
+newsPublicRouter.get("/news", (req, res) => {
+  try {
+    const result = newsCmsService.listPublicAnnouncements({
+      category: typeof req.query.category === "string" ? req.query.category : void 0,
+      search: typeof req.query.search === "string" ? req.query.search : void 0,
+      page: req.query.page ? Number(req.query.page) : 1,
+      limit: req.query.limit ? Number(req.query.limit) : 12
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+newsPublicRouter.get("/news/:slug", (req, res) => {
+  const article = newsCmsService.getPublicAnnouncementBySlug(req.params.slug);
+  if (!article) {
+    return res.status(404).json({ error: "Announcement not found" });
+  }
+  res.json(article);
+});
+newsPublicRouter.get("/media/:filename", (req, res) => {
+  const resolved = resolveSafeMediaPath(req.params.filename);
+  if (!resolved || !fs6.existsSync(resolved.filePath)) {
+    return res.status(404).json({ error: "Media asset not found" });
+  }
+  res.setHeader("Content-Type", resolved.mimeType);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Disposition", "inline");
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  res.sendFile(resolved.filePath);
+});
+
+// server/routes/notifications.ts
+import { Router as Router16 } from "express";
+var notificationsRouter = Router16();
+notificationsRouter.get("/", requireAuth, (req, res) => {
+  const user = req.user;
+  const result = notificationBroadcastService.listUserNotifications(user.id, {
+    unreadOnly: req.query.unreadOnly === "true",
+    page: req.query.page ? Number(req.query.page) : 1,
+    limit: req.query.limit ? Number(req.query.limit) : 20
+  });
+  res.json(result);
+});
+notificationsRouter.get("/unread-count", requireAuth, (req, res) => {
+  const user = req.user;
+  const unreadCount = notificationBroadcastService.getUnreadCount(user.id);
+  res.json({ unreadCount });
+});
+notificationsRouter.get("/preferences", requireAuth, (req, res) => {
+  const user = req.user;
+  const preferences = notificationBroadcastService.getUserPreferences(user.id);
+  res.json(preferences);
+});
+notificationsRouter.put("/preferences", requireAuth, (req, res) => {
+  const user = req.user;
+  const body = req.body || {};
+  const updated = notificationBroadcastService.updateUserPreferences(user.id, {
+    inAppEnabled: body.inAppEnabled,
+    webPushEnabled: body.webPushEnabled,
+    webPushPermissionGranted: body.webPushPermissionGranted,
+    emailEnabled: body.emailEnabled
+  });
+  res.json(updated);
+});
+notificationsRouter.post("/read-all", requireAuth, (req, res) => {
+  const user = req.user;
+  const result = notificationBroadcastService.markAllNotificationsRead(user.id);
+  res.json({ success: true, ...result, unreadCount: 0 });
+});
+notificationsRouter.get("/:id", requireAuth, (req, res) => {
+  const user = req.user;
+  const notif = notificationBroadcastService.getUserNotificationById(user.id, req.params.id);
+  if (!notif) {
+    return res.status(404).json({ error: "Notification not found" });
+  }
+  res.json(notif);
+});
+notificationsRouter.post("/:id/read", requireAuth, (req, res) => {
+  const user = req.user;
+  const notif = notificationBroadcastService.markNotificationRead(user.id, req.params.id);
+  if (!notif) {
+    return res.status(404).json({ error: "Notification not found" });
+  }
+  res.json({
+    notification: notif,
+    unreadCount: notificationBroadcastService.getUnreadCount(user.id)
+  });
+});
+
+// server/serverApp.ts
 async function startServer() {
   const app = express();
   const server = http.createServer(app);
@@ -15993,7 +22441,7 @@ async function startServer() {
     portVal || (process.env.PORT && process.env.PORT !== "8080" ? process.env.PORT : "3000"),
     10
   );
-  app.use(express.json());
+  app.use(express.json({ limit: "5mb" }));
   const wss = new WebSocketServer2({ server, path: "/ws" });
   wss.on("error", (err) => {
     console.error("[DIMONEX] WebSocket Server error:", err?.message || err);
@@ -16007,11 +22455,15 @@ async function startServer() {
   app.use("/api/api-keys", apiKeyRouter);
   app.use("/api/admin/listings", listingRouter);
   app.use("/api/listing", listingRouter);
+  app.use("/api/admin", newsAdminRouter);
   app.use("/api/admin", adminRouter);
+  app.use("/api/public", newsPublicRouter);
+  app.use("/api/notifications", notificationsRouter);
   app.use("/api/risk", riskRouter);
   app.use("/api/bot", botRouter);
   app.use("/api/mm", mmConsoleRouter);
   app.use("/api/bot/mm", mmConsoleRouter);
+  app.use("/api/futures", futuresRouter);
   app.use("/", observabilityRouter);
   app.all("/api/*", (req, res) => {
     res.status(404).json({
@@ -16023,13 +22475,13 @@ async function startServer() {
     res.type("text/plain");
     res.send("User-agent: *\nDisallow: /api/\nDisallow: /admin\nAllow: /\n");
   });
-  const distPath = path5.resolve(process.cwd(), "dist");
-  const indexPath = path5.resolve(distPath, "index.html");
-  const distExists = fs5.existsSync(indexPath);
+  const distPath = path6.resolve(process.cwd(), "dist");
+  const indexPath = path6.resolve(distPath, "index.html");
+  const distExists = fs7.existsSync(indexPath);
   if (distExists) {
     app.use(express.static(distPath));
     app.get("*", (req, res, next) => {
-      if (fs5.existsSync(indexPath)) {
+      if (fs7.existsSync(indexPath)) {
         res.sendFile(indexPath, (err) => {
           if (err && !res.headersSent) {
             next(err);
@@ -16066,6 +22518,9 @@ async function startServer() {
   });
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`[DIMONEX] Full-Stack Exchange Engine listening on http://0.0.0.0:${PORT} (Mode: ${distExists ? "PRODUCTION / STATIC" : "DEVELOPMENT / VITE"})`);
+    const binanceWsSymbols = db.getEnabledExternalWsSymbols("binance");
+    const bybitWsSymbols = db.getEnabledExternalWsSymbols("bybit");
+    priceAggregatorService.syncWhitelistSymbols(binanceWsSymbols, bybitWsSymbols);
     setTimeout(() => {
       fxConversionService.fetchAndSyncLiveRate("system@dimonex.id", 12).then((res) => {
         if (res.success && res.rateRecord) {
@@ -16074,7 +22529,18 @@ async function startServer() {
       }).catch((err) => {
         console.warn("[DIMONEX FX Engine] Initial FX rate sync failed:", err.message);
       });
+      for (const entry of db.externalWsWhitelist.values()) {
+        if (entry.enabled) {
+          priceAggregatorService.seedSymbolFromCatalog(entry.symbol, entry.providers).catch(() => {
+          });
+        }
+      }
     }, 1500);
+    priceThresholdService.start();
+    futuresEngine.start();
+    marketLifecycleScheduler.start();
+    newsCmsService.startScheduler();
+    notificationBroadcastService.start();
     setInterval(() => {
       fxConversionService.fetchAndSyncLiveRate("system@dimonex.id", 12).catch(() => {
       });
@@ -16247,6 +22713,34 @@ export {
  * @license
  * SPDX-License-Identifier: Apache-2.0
  * 
+ * server/services/listing/ListingAuditService.ts
+ * Append-only Cryptographic Audit Trail for Initial Listing.
+ * Uses canonical JSON serialization and SHA-256 hash chaining to ensure tamper-evident records.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
+ * server/services/listing/ListingActivationService.ts
+ * Idempotent Market Activation Pipeline using Transactional Outbox,
+ * Engine Readiness Verification, and Reconciliation.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * server/services/MarketLifecycleScheduler.ts
+ * Authoritative market lifecycle manager & background scheduler for DIMONEX:
+ * 1. Ensures SCHEDULED Initial Listings have a pre-launch TradingPair entry so users can open
+ *    the Market Chart and watch the live Launch Countdown Timer before trading opens.
+ * 2. Automatically activates SCHEDULED listings when `Date.now() >= listing.scheduledAt`.
+ * 3. Manages Market Delisting (Scheduled Delisting with live chart countdown, Immediate Delisting
+ *    with atomic order cancellation & ledger refund, Cancel Delist, and Relist).
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
  * trading.ts
  * Core trading REST endpoints: order placement, cancellation, depth, trades, and pairs.
  */
@@ -16272,22 +22766,6 @@ export {
  * admin.ts
  * Admin Panel routes: KYC review, pair listing/halt, fee configuration,
  * withdrawal approvals, and system audit logs.
- */
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- * 
- * server/services/listing/ListingAuditService.ts
- * Append-only Cryptographic Audit Trail for Initial Listing.
- * Uses canonical JSON serialization and SHA-256 hash chaining to ensure tamper-evident records.
- */
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- * 
- * server/services/listing/ListingActivationService.ts
- * Idempotent Market Activation Pipeline using Transactional Outbox,
- * Engine Readiness Verification, and Reconciliation.
  */
 /**
  * @license
@@ -16378,6 +22856,23 @@ export {
  * - Full Token & Multi-Pair Support:
  *   - Pair-aware quoting (IDR and USDT quote currencies).
  *   - Compatible with ALL active markets (BTC, ETH, SOL, DOGE, ADA, and newly listed tokens).
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
+ * MovementDepthLiquidityBot.ts
+ * Multi-Level Depth & Liquidity Market-Making Bot driven by RELATIVE % MOVEMENT
+ * of an Admin-whitelisted Binance/Bybit WebSocket leader pair (e.g. BTCUSDT),
+ * projected onto the target market's independent local anchor price.
+ *
+ * Key Differences from External Price Follower / Nominal Depth Bot:
+ * - Does NOT copy external nominal token prices (ideal for newly listed or custom-priced tokens).
+ * - Computes percentage return of the external leader since anchor capture:
+ *     leaderReturn = (leaderCurrentPrice - leaderBaselinePrice) / leaderBaselinePrice
+ * - Projects that relative % movement onto the local anchor price with configurable Beta sensitivity:
+ *     projectedLocalPrice = anchorLocalPrice * (1 + leaderReturn * movementSensitivity)
+ * - Deploys full multi-level Bid/Ask Depth Liquidity ladders with Anti-Stacking & Anti-Crossing.
  */
 /**
  * @license
@@ -16480,6 +22975,23 @@ export {
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * HftBacktestEngine.ts
+ * Deterministic, Non-Mutating Historical Ledger Backtesting Engine for Smart HFT Ladder Configs.
+ *
+ * Architectural Guarantees:
+ * 1. Read-Only against live exchange state: NEVER mutates db.orders, db.trades, db.ledgerAccounts,
+ *    db.journalTransactions, db.ledgerEntries, or MatchingEngine state.
+ * 2. Grounded in Immutable Ledger & Historical Trade Data:
+ *    - Verifies historical trades against immutable TRADE_SETTLEMENT JournalTransactions
+ *      and LedgerEntries, producing a SHA-256 dataset integrity hash.
+ *    - Also supports full historical trade replay and Kline OHLCV intra-bar replay.
+ * 3. Reuses the exact SmartHftLadderBotExecutor BigInt ladder math & pattern simulator
+ *    used in production so pre-deployment validation matches live engine behavior.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
  * 
  * PortfolioRebalanceService.ts
  * DIMONEX Automated Portfolio Rebalancing & HFT Performance Engine.
@@ -16493,6 +23005,16 @@ export {
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * PriceThresholdService.ts
+ * Real-time Market Maker Price Threshold Monitor & Automated Ladder Adjustment Engine.
+ * Evaluates authoritative pair.lastPrice in exact BigInt quote units, emits WebSocket alerts
+ * (triggering client-side Web Audio notifications), and executes automated ladder adjustments
+ * across targeted or pair-matched MM/Ladder bots.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
  * 
  * mmConsole.ts
  * Authenticated Market Maker (MM) Console Router for DIMONEX.
@@ -16501,9 +23023,105 @@ export {
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * FuturesEngine.ts
+ * Real Perpetual Futures Trading Engine for DIMONEX.
+ * - Uses ALL real market pairs from db.tradingPairs (both IDR & USDT quote pairs).
+ * - Preserves exact per-pair baseDecimals and quoteDecimals (e.g. IDR = 2, USDT = 6) with BigInt math.
+ * - Enforces double-entry atomic margin locking and PnL/fee settlement via LedgerService.
+ * - Evaluates live resting LIMIT orders and liquidation triggers on a continuous 1500ms loop.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * server/routes/futures.ts
+ * Real Perpetual Futures API Router for DIMONEX.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
  * 
  * observability.ts
  * Prometheus metrics, system health checks, and Ledger Invariant verifier.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * HtmlSanitizer.ts
+ * Strict allowlist HTML sanitizer and URL validator for DIMONEX News & Announcement CMS.
+ * Prevents XSS, script injection, event handler injection, and unsafe URI schemes.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * CmsAuditService.ts
+ * Append-only SHA-256 hash-chained audit logging for News CMS, Media Library,
+ * and Notification Broadcast governance.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * NotificationBroadcastService.ts
+ * Production-grade persistent Transactional Outbox + Batch Worker broadcast engine
+ * for DIMONEX Global Notifications.
+ *
+ * Guarantees:
+ * - Never executes unbounded synchronous loops inside HTTP requests.
+ * - Atomic campaign + outbox job + recipient delivery record creation.
+ * - Idempotency keys prevent duplicate user notifications across retries & restarts.
+ * - Batch recipient processing with configurable batch size.
+ * - Exponential backoff retry for transient delivery failures.
+ * - Worker recovery after server restart.
+ * - Safe cancellation before completion.
+ * - Respects user channel permissions & consent (In-App, Web Push, Email).
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * NewsCmsService.ts
+ * Production News & Announcement CMS service with Maker-Checker governance,
+ * version history, HTML sanitization, scheduled publication worker, and
+ * atomic notification broadcast integration.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * MediaValidationService.ts
+ * Validates uploaded media files using both declared MIME type AND binary file
+ * signatures (magic bytes), enforces upload size limits, blocks polyglots/SVG/scripts,
+ * and stores files strictly inside a confined media directory.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * newsAdmin.ts
+ * Admin Console routes for News & Announcement CMS, Media Library,
+ * and Global Notification Broadcast Center.
+ * Protected by RBAC (requireAdmin), Maker-Checker enforcement, and rate limiting.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * newsPublic.ts
+ * Public News & Announcements endpoints and safely confined uploaded media serving.
+ * Strictly returns ONLY PUBLISHED announcements; drafts, pending, scheduled,
+ * and archived announcements are never exposed.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * notifications.ts
+ * Authenticated user Notification Inbox & Preferences API.
+ * Strictly isolates each user's notifications to prevent IDOR access.
  */
 /**
  * @license

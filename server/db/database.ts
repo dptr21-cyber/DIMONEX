@@ -17,7 +17,10 @@ import {
   Asset, ListingRequest, ListingApproval, Market, ListingAuditEvent,
   TransactionalOutboxEvent, IdempotencyRecord, PortfolioRebalanceConfig,
   ExternalWsWhitelistEntry, PriceThresholdTrigger, PriceThresholdEvent,
-  FuturesOrder, FuturesPosition
+  FuturesOrder, FuturesPosition,
+  MediaAsset, Announcement, AnnouncementVersion, CmsAuditLog,
+  NotificationCampaign, NotificationOutboxJob, NotificationDeliveryRecord,
+  UserNotification, UserNotificationPreferences
 } from './types.js';
 import { PrecisionMath } from '../ledger/PrecisionMath.js';
 
@@ -105,6 +108,15 @@ export interface PersistedExchangeState {
   priceThresholdEvents?: PriceThresholdEvent[];
   futuresOrders?: [string, FuturesOrder][];
   futuresPositions?: [string, FuturesPosition][];
+  mediaAssets?: [string, MediaAsset][];
+  announcements?: [string, Announcement][];
+  announcementVersions?: AnnouncementVersion[];
+  cmsAuditLogs?: CmsAuditLog[];
+  notificationCampaigns?: [string, NotificationCampaign][];
+  notificationOutboxJobs?: [string, NotificationOutboxJob][];
+  notificationDeliveries?: [string, NotificationDeliveryRecord][];
+  userNotifications?: [string, UserNotification][];
+  userNotificationPreferences?: [string, UserNotificationPreferences][];
 }
 
 class DatabaseStore {
@@ -138,6 +150,15 @@ class DatabaseStore {
   priceThresholdEvents: PriceThresholdEvent[] = [];
   futuresOrders: Map<string, FuturesOrder> = new Map();
   futuresPositions: Map<string, FuturesPosition> = new Map();
+  mediaAssets: Map<string, MediaAsset> = new Map();
+  announcements: Map<string, Announcement> = new Map();
+  announcementVersions: AnnouncementVersion[] = [];
+  cmsAuditLogs: CmsAuditLog[] = [];
+  notificationCampaigns: Map<string, NotificationCampaign> = new Map();
+  notificationOutboxJobs: Map<string, NotificationOutboxJob> = new Map();
+  notificationDeliveries: Map<string, NotificationDeliveryRecord> = new Map();
+  userNotifications: Map<string, UserNotification> = new Map();
+  userNotificationPreferences: Map<string, UserNotificationPreferences> = new Map();
   
   private saveTimer: NodeJS.Timeout | null = null;
   private isSaving = false;
@@ -1239,7 +1260,16 @@ class DatabaseStore {
         priceThresholdTriggers: Array.from(this.priceThresholdTriggers.entries()),
         priceThresholdEvents: this.priceThresholdEvents.slice(-500),
         futuresOrders: Array.from(this.futuresOrders.entries()),
-        futuresPositions: Array.from(this.futuresPositions.entries())
+        futuresPositions: Array.from(this.futuresPositions.entries()),
+        mediaAssets: Array.from(this.mediaAssets.entries()),
+        announcements: Array.from(this.announcements.entries()),
+        announcementVersions: this.announcementVersions,
+        cmsAuditLogs: this.cmsAuditLogs,
+        notificationCampaigns: Array.from(this.notificationCampaigns.entries()),
+        notificationOutboxJobs: Array.from(this.notificationOutboxJobs.entries()),
+        notificationDeliveries: Array.from(this.notificationDeliveries.entries()),
+        userNotifications: Array.from(this.userNotifications.entries()),
+        userNotificationPreferences: Array.from(this.userNotificationPreferences.entries())
       };
 
       const jsonStr = JSON.stringify(state, (key, value) =>
@@ -1368,6 +1398,15 @@ class DatabaseStore {
             if (data.priceThresholdEvents) this.priceThresholdEvents = data.priceThresholdEvents.slice(-500);
             if (data.futuresOrders) this.futuresOrders = new Map(data.futuresOrders);
             if (data.futuresPositions) this.futuresPositions = new Map(data.futuresPositions);
+            if (data.mediaAssets) this.mediaAssets = new Map(data.mediaAssets);
+            if (data.announcements) this.announcements = new Map(data.announcements);
+            if (data.announcementVersions) this.announcementVersions = data.announcementVersions;
+            if (data.cmsAuditLogs) this.cmsAuditLogs = data.cmsAuditLogs;
+            if (data.notificationCampaigns) this.notificationCampaigns = new Map(data.notificationCampaigns);
+            if (data.notificationOutboxJobs) this.notificationOutboxJobs = new Map(data.notificationOutboxJobs);
+            if (data.notificationDeliveries) this.notificationDeliveries = new Map(data.notificationDeliveries);
+            if (data.userNotifications) this.userNotifications = new Map(data.userNotifications);
+            if (data.userNotificationPreferences) this.userNotificationPreferences = new Map(data.userNotificationPreferences);
 
             this.lastLoadedMtime = fs.statSync(p).mtimeMs;
             console.log(`[DIMONEX Database] Berhasil memuat snapshot disk (${p}): ${this.users.size} pengguna, ${this.orders.size} order, ${this.trades.length} transaksi, ${this.sessions.size} sesi login aktif.`);
