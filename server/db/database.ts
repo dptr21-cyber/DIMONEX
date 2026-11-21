@@ -20,7 +20,8 @@ import {
   FuturesOrder, FuturesPosition,
   MediaAsset, Announcement, AnnouncementVersion, CmsAuditLog,
   NotificationCampaign, NotificationOutboxJob, NotificationDeliveryRecord,
-  UserNotification, UserNotificationPreferences
+  UserNotification, UserNotificationPreferences,
+  RewardClaimRecord, ReferralRelation, ReferralPayoutRecord
 } from './types.js';
 import { PrecisionMath } from '../ledger/PrecisionMath.js';
 
@@ -117,6 +118,9 @@ export interface PersistedExchangeState {
   notificationDeliveries?: [string, NotificationDeliveryRecord][];
   userNotifications?: [string, UserNotification][];
   userNotificationPreferences?: [string, UserNotificationPreferences][];
+  rewardClaims?: [string, RewardClaimRecord][];
+  referralRelations?: [string, ReferralRelation][];
+  referralPayouts?: [string, ReferralPayoutRecord][];
 }
 
 class DatabaseStore {
@@ -159,6 +163,9 @@ class DatabaseStore {
   notificationDeliveries: Map<string, NotificationDeliveryRecord> = new Map();
   userNotifications: Map<string, UserNotification> = new Map();
   userNotificationPreferences: Map<string, UserNotificationPreferences> = new Map();
+  rewardClaims: Map<string, RewardClaimRecord> = new Map(); // key: `${userId}:${taskId}`
+  referralRelations: Map<string, ReferralRelation> = new Map(); // key: refereeUserId
+  referralPayouts: Map<string, ReferralPayoutRecord> = new Map(); // key: payoutId
   
   private saveTimer: NodeJS.Timeout | null = null;
   private isSaving = false;
@@ -1269,7 +1276,10 @@ class DatabaseStore {
         notificationOutboxJobs: Array.from(this.notificationOutboxJobs.entries()),
         notificationDeliveries: Array.from(this.notificationDeliveries.entries()),
         userNotifications: Array.from(this.userNotifications.entries()),
-        userNotificationPreferences: Array.from(this.userNotificationPreferences.entries())
+        userNotificationPreferences: Array.from(this.userNotificationPreferences.entries()),
+        rewardClaims: Array.from(this.rewardClaims.entries()),
+        referralRelations: Array.from(this.referralRelations.entries()),
+        referralPayouts: Array.from(this.referralPayouts.entries())
       };
 
       const jsonStr = JSON.stringify(state, (key, value) =>
@@ -1407,6 +1417,9 @@ class DatabaseStore {
             if (data.notificationDeliveries) this.notificationDeliveries = new Map(data.notificationDeliveries);
             if (data.userNotifications) this.userNotifications = new Map(data.userNotifications);
             if (data.userNotificationPreferences) this.userNotificationPreferences = new Map(data.userNotificationPreferences);
+            if (data.rewardClaims) this.rewardClaims = new Map(data.rewardClaims);
+            if (data.referralRelations) this.referralRelations = new Map(data.referralRelations);
+            if (data.referralPayouts) this.referralPayouts = new Map(data.referralPayouts);
 
             this.lastLoadedMtime = fs.statSync(p).mtimeMs;
             console.log(`[DIMONEX Database] Berhasil memuat snapshot disk (${p}): ${this.users.size} pengguna, ${this.orders.size} order, ${this.trades.length} transaksi, ${this.sessions.size} sesi login aktif.`);

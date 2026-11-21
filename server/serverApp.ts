@@ -39,6 +39,7 @@ import { newsPublicRouter } from './routes/newsPublic.js';
 import { notificationsRouter } from './routes/notifications.js';
 import { newsCmsService } from './services/cms/NewsCmsService.js';
 import { notificationBroadcastService } from './services/cms/NotificationBroadcastService.js';
+import { rewardsRouter } from './routes/rewards.js';
 
 export async function startServer() {
   const app = express();
@@ -77,6 +78,7 @@ export async function startServer() {
   app.use('/api/admin', adminRouter);
   app.use('/api/public', newsPublicRouter);
   app.use('/api/notifications', notificationsRouter);
+  app.use('/api/rewards', rewardsRouter);
   app.use('/api/risk', riskRouter);
   app.use('/api/bot', botRouter);
   app.use('/api/mm', mmConsoleRouter);

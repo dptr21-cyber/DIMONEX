@@ -54,12 +54,17 @@ export const requireMM = (req: Request, res: Response, next: Function) => {
 
 authRouter.post('/register', (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, referralCode } = req.body;
     if (!email || !password) {
       return res.status(400).json({ error: 'Email dan kata sandi wajib diisi' });
     }
     const ip = req.ip || '127.0.0.1';
-    const result = AuthService.register(email, password, ip);
+    const result = AuthService.register(
+      email,
+      password,
+      ip,
+      typeof referralCode === 'string' ? referralCode : undefined
+    );
     res.json(result);
   } catch (err: any) {
     if (err instanceof BlockedEmailDomainError) {

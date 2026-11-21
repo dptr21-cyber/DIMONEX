@@ -44,7 +44,9 @@ export type JournalTxType =
   | 'TRADE_SETTLEMENT' 
   | 'FEE_COLLECTION'
   | 'FUTURES_FEE'
-  | 'FUTURES_PNL';
+  | 'FUTURES_PNL'
+  | 'REWARD_PAYOUT'
+  | 'REFERRAL_REBATE';
 
 export type LedgerEntryType = 'DEBIT' | 'CREDIT';
 
@@ -469,6 +471,8 @@ export interface User {
   failedLoginAttempts: number;
   lockedUntil?: number; // epoch ms
   preferences?: UserTradingPreferences;
+  referralCode?: string;
+  referredByUserId?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -1258,4 +1262,51 @@ export interface UserNotificationPreferences {
   emailConsentAt?: number;
   updatedAt: number;
 }
+
+// ============================================================================
+// INSTITUTIONAL VIP, TRADER REWARDS & REFERRAL PROGRAM ENTITIES
+// ============================================================================
+
+export type RewardTaskId =
+  | 'SECURITY_2FA'
+  | 'FIRST_DEPOSIT'
+  | 'FIRST_SPOT_TRADE'
+  | 'FUTURES_VOLUME_2K'
+  | 'KYC_TIER_2'
+  | 'SPOT_VOLUME_50K';
+
+export interface RewardClaimRecord {
+  id: string;
+  userId: string;
+  taskId: RewardTaskId;
+  taskTitle: string;
+  currency: string;
+  amountUnits: string; // BigInt unit string (6 decimals for USDT)
+  amountDisplay: string;
+  journalId: string;
+  idempotencyKey: string;
+  claimedAt: number;
+}
+
+export interface ReferralRelation {
+  id: string;
+  referrerUserId: string;
+  refereeUserId: string;
+  referralCodeUsed: string;
+  createdAt: number;
+}
+
+export interface ReferralPayoutRecord {
+  id: string;
+  userId: string;
+  currency: string;
+  amountUnits: string; // BigInt unit string (6 decimals for USDT)
+  amountDisplay: string;
+  rebateRatePct: number;
+  refereeCount: number;
+  journalId: string;
+  idempotencyKey: string;
+  claimedAt: number;
+}
+
 

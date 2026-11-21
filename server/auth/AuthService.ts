@@ -9,6 +9,7 @@
 import crypto from 'crypto';
 import { db } from '../db/database.js';
 import { User, UserRole } from '../db/types.js';
+import { vipRewardsService } from '../services/rewards/VipRewardsService.js';
 
 // Base32 character set for RFC-3548 / RFC-6238 TOTP
 const BASE32_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -155,7 +156,12 @@ export class AuthService {
   /**
    * Register a new user with default role 'user' and pending KYC.
    */
-  static register(email: string, password: string, ip = '127.0.0.1'): { user: Omit<User, 'passwordHash' | 'passwordSalt'>; token: string } {
+  static register(
+    email: string,
+    password: string,
+    ip = '127.0.0.1',
+    referralCode?: string
+  ): { user: Omit<User, 'passwordHash' | 'passwordSalt'>; token: string } {
     const cleanEmail = email.trim().toLowerCase();
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
@@ -190,6 +196,17 @@ export class AuthService {
       throw new Error('Kata sandi harus minimal 8 karakter');
     }
 
+    const cleanReferralCode = referralCode ? referralCode.trim().toUpperCase() : '';
+    if (cleanReferralCode) {
+      if (!/^DMX-[A-Z0-9]{4,12}$/.test(cleanReferralCode)) {
+        throw new Error('Format kode referral tidak valid. Contoh: DMX-XXXXXX.');
+      }
+      const referrer = vipRewardsService.findUserByReferralCode(cleanReferralCode);
+      if (!referrer || referrer.status !== 'active') {
+        throw new Error(`Kode referral "${cleanReferralCode}" tidak ditemukan atau tidak aktif.`);
+      }
+    }
+
     const salt = db.generateSalt();
     const hash = db.hashPassword(password, salt);
     const userId = crypto.randomUUID();
@@ -216,8 +233,16 @@ export class AuthService {
     db.createOrGetAccount(user.id, 'ETH', '0');
     db.createOrGetAccount(user.id, 'USDT', '0');
 
+    // Materialize unique referral code for new account
+    vipRewardsService.ensureUserReferralCode(user.id);
+
+    // Bind validated referral code atomically
+    if (cleanReferralCode) {
+      vipRewardsService.bindReferralCode(user.id, cleanReferralCode);
+    }
+
     // Create cryptographically signed session token
-    const token = this.issueToken(user, 'Web Browser / Chrome', '127.0.0.1');
+    const token = this.issueToken(user, 'Web Browser / Chrome', ip);
 
     const { passwordHash, passwordSalt, ...safeUser } = user;
     return { user: safeUser, token };

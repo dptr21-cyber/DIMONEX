@@ -81,9 +81,14 @@ const TEST_ACCOUNTS = [
 ];
 
 export const AuthModal: React.FC<Props> = ({ isOpen, onClose, onAuthSuccess }) => {
-  const [tab, setTab] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
+  const initialRefCode =
+    typeof window !== 'undefined'
+      ? (new URLSearchParams(window.location.search).get('ref') || '').trim().toUpperCase()
+      : '';
+  const [tab, setTab] = useState<'LOGIN' | 'REGISTER'>(initialRefCode ? 'REGISTER' : 'LOGIN');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [referralCode, setReferralCode] = useState(initialRefCode);
   const [totpCode, setTotpCode] = useState('');
   const [requiresTotp, setRequiresTotp] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -111,7 +116,12 @@ export const AuthModal: React.FC<Props> = ({ isOpen, onClose, onAuthSuccess }) =
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, totpCode: requiresTotp ? totpCode : undefined }),
+        body: JSON.stringify({
+          email,
+          password,
+          totpCode: requiresTotp ? totpCode : undefined,
+          referralCode: tab === 'REGISTER' && referralCode.trim() ? referralCode.trim().toUpperCase() : undefined,
+        }),
       });
 
       let data: any = {};
@@ -206,6 +216,18 @@ export const AuthModal: React.FC<Props> = ({ isOpen, onClose, onAuthSuccess }) =
             onChange={e => setPassword(e.target.value)}
             placeholder="Minimal 8 karakter"
           />
+
+          {tab === 'REGISTER' && (
+            <Input
+              id="auth-referral-code"
+              name="referralCode"
+              label="Kode Referral (Opsional)"
+              type="text"
+              value={referralCode}
+              onChange={e => setReferralCode(e.target.value.toUpperCase())}
+              placeholder="DMX-XXXXXX"
+            />
+          )}
 
           {requiresTotp && (
             <div className="p-3 bg-[#162436]/50 border border-[#6D9FE8]/40 rounded-[7px] space-y-1.5">

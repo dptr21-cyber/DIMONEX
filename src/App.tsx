@@ -1177,6 +1177,8 @@ function AppContent() {
               user={user}
               balances={balances}
               onOpenAuthModal={() => setIsAuthModalOpen(true)}
+              onRefreshBalances={refreshBalances}
+              onNavigate={v => handleSelectView(v as ActiveViewType)}
               displayCurrency={displayCurrency}
             />
           )}
