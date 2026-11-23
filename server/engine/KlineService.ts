@@ -287,6 +287,61 @@ export class KlineService {
   }
 
   /**
+   * Build exact historical candles for a single timeframe on-demand from db.trades
+   * (supports deep left-scroll pagination even when klineStore tail is capped).
+   */
+  private buildCandlesForTimeframeFromTrades(pairId: string, tf: Timeframe): Candle[] {
+    const pair = db.tradingPairs.get(pairId);
+    if (!pair) return [];
+    const pairTrades = (db.trades || [])
+      .filter(t => t.pairId === pairId)
+      .sort((a, b) => a.createdAt - b.createdAt);
+    if (pairTrades.length === 0) return [];
+
+    const quoteDec =
+      pair.quoteDecimals !== undefined && pair.quoteDecimals !== null
+        ? pair.quoteDecimals
+        : pair.quoteCurrency === 'USDT'
+        ? 6
+        : 2;
+    const interval = TIMEFRAME_SECONDS[tf];
+    const map = new Map<number, Candle>();
+    const seenIds = new Set<string>();
+    let prevClose: number | null = null;
+
+    for (const trade of pairTrades) {
+      if (seenIds.has(trade.id)) continue;
+      seenIds.add(trade.id);
+      const price = Number(BigInt(trade.price)) / (10 ** quoteDec);
+      const qty = Number(trade.quantity) / (10 ** pair.baseDecimals);
+      const tradeSec = Math.floor(trade.createdAt / 1000);
+      const candleTime = Math.floor(tradeSec / interval) * interval;
+
+      let existing = map.get(candleTime);
+      if (!existing) {
+        const open: number = prevClose !== null ? prevClose : price;
+        existing = {
+          time: candleTime,
+          open,
+          high: Math.max(open, price),
+          low: Math.min(open, price),
+          close: price,
+          volume: qty,
+        };
+        map.set(candleTime, existing);
+      } else {
+        existing.high = Math.max(existing.high, price);
+        existing.low = Math.min(existing.low, price);
+        existing.close = price;
+        existing.volume = Number((existing.volume + qty).toFixed(6));
+      }
+      prevClose = existing.close;
+    }
+
+    return Array.from(map.values()).sort((a, b) => a.time - b.time);
+  }
+
+  /**
    * Get historical and current candles for a pair and timeframe.
    * Returns empty array if no trades have executed yet for this pair.
    */
@@ -374,8 +429,8 @@ export class KlineService {
   }
 
   /**
-   * TradingView Datafeed compliant getBars method.
-   * Supports filtering by from/to Unix seconds and countBack.
+   * TradingView Datafeed & Pro Chart compliant getBars method.
+   * Supports filtering by from/to Unix seconds, left-scroll pagination from full db.trades history, and limit.
    */
   public getBars(pairId: string, resolution: string = '15m', fromSec?: number, toSec?: number, limit = 300): Candle[] {
     const tf = this.normalizeResolution(resolution);
@@ -392,13 +447,29 @@ export class KlineService {
       }
     }
 
-    let result = candles;
+    // If caller requests earlier history than what is cached in memory tail, query full db.trades history
+    let source = candles;
+    if (
+      candles.length > 0 &&
+      ((toSec !== undefined && toSec < candles[0].time) ||
+        (fromSec !== undefined && fromSec < candles[0].time))
+    ) {
+      const historicalAll = this.buildCandlesForTimeframeFromTrades(pairId, tf);
+      if (historicalAll.length > 0) {
+        const merged = new Map<number, Candle>();
+        for (const c of historicalAll) merged.set(c.time, c);
+        for (const c of candles) merged.set(c.time, c);
+        source = Array.from(merged.values()).sort((a, b) => a.time - b.time);
+      }
+    }
+
+    let result = source;
     if (fromSec !== undefined && toSec !== undefined) {
-      result = candles.filter(c => c.time >= fromSec && c.time <= toSec);
+      result = source.filter(c => c.time >= fromSec && c.time <= toSec);
     } else if (fromSec !== undefined) {
-      result = candles.filter(c => c.time >= fromSec);
+      result = source.filter(c => c.time >= fromSec);
     } else if (toSec !== undefined) {
-      result = candles.filter(c => c.time <= toSec);
+      result = source.filter(c => c.time <= toSec);
     }
 
     if (limit && limit > 0 && result.length > limit) {

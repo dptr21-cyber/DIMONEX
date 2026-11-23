@@ -22,7 +22,8 @@ import {
   NotificationCampaign, NotificationOutboxJob, NotificationDeliveryRecord,
   UserNotification, UserNotificationPreferences,
   RewardTaskConfig, RewardVoucher, VoucherRedemptionRecord,
-  RewardClaimRecord, ReferralRelation, ReferralPayoutRecord
+  RewardClaimRecord, ReferralRelation, ReferralPayoutRecord,
+  VolumeExecutionV2Bot, ChartDrawingRecord
 } from './types.js';
 import { PrecisionMath } from '../ledger/PrecisionMath.js';
 
@@ -125,6 +126,8 @@ export interface PersistedExchangeState {
   rewardClaims?: [string, RewardClaimRecord][];
   referralRelations?: [string, ReferralRelation][];
   referralPayouts?: [string, ReferralPayoutRecord][];
+  volumeExecutionV2Bots?: [string, VolumeExecutionV2Bot][];
+  chartDrawings?: [string, ChartDrawingRecord[]][];
 }
 
 class DatabaseStore {
@@ -173,6 +176,8 @@ class DatabaseStore {
   rewardClaims: Map<string, RewardClaimRecord> = new Map(); // key: `${userId}:${taskId}`
   referralRelations: Map<string, ReferralRelation> = new Map(); // key: refereeUserId
   referralPayouts: Map<string, ReferralPayoutRecord> = new Map(); // key: payoutId
+  volumeExecutionV2Bots: Map<string, VolumeExecutionV2Bot> = new Map(); // key: botId
+  chartDrawings: Map<string, ChartDrawingRecord[]> = new Map(); // key: `${userId}:${pairId}`
   
   private saveTimer: NodeJS.Timeout | null = null;
   private isSaving = false;
@@ -1289,7 +1294,9 @@ class DatabaseStore {
         voucherRedemptions: Array.from(this.voucherRedemptions.entries()),
         rewardClaims: Array.from(this.rewardClaims.entries()),
         referralRelations: Array.from(this.referralRelations.entries()),
-        referralPayouts: Array.from(this.referralPayouts.entries())
+        referralPayouts: Array.from(this.referralPayouts.entries()),
+        volumeExecutionV2Bots: Array.from(this.volumeExecutionV2Bots.entries()),
+        chartDrawings: Array.from(this.chartDrawings.entries())
       };
 
       const jsonStr = JSON.stringify(state, (key, value) =>
@@ -1433,6 +1440,8 @@ class DatabaseStore {
             if (data.rewardClaims) this.rewardClaims = new Map(data.rewardClaims);
             if (data.referralRelations) this.referralRelations = new Map(data.referralRelations);
             if (data.referralPayouts) this.referralPayouts = new Map(data.referralPayouts);
+            if (data.volumeExecutionV2Bots) this.volumeExecutionV2Bots = new Map(data.volumeExecutionV2Bots);
+            if (data.chartDrawings) this.chartDrawings = new Map(data.chartDrawings);
 
             this.lastLoadedMtime = fs.statSync(p).mtimeMs;
             console.log(`[DIMONEX Database] Berhasil memuat snapshot disk (${p}): ${this.users.size} pengguna, ${this.orders.size} order, ${this.trades.length} transaksi, ${this.sessions.size} sesi login aktif.`);

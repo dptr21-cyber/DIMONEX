@@ -69,9 +69,9 @@ export function resolutionToTimeframe(res: string): Timeframe {
     case '360': return '6h';
     case '720': return '12h';
     case '1D':
-    case 'D': return '1D';
+    case 'D': return '1d';
     case '1W':
-    case 'W': return '1W';
+    case 'W': return '1w';
     case '1M':
     case 'M': return '1M';
     default: return '15m';
@@ -305,7 +305,7 @@ export class DimonexDatafeed implements IBasicDataFeed {
           fractional: false,
           has_intraday: true,
           supported_resolutions: SUPPORTED_RESOLUTIONS,
-          intraday_multipliers: ['1', '5', '15', '60', '240'],
+          intraday_multipliers: ['1', '3', '5', '15', '30', '60', '120', '240', '360', '720'],
           has_empty_bars: true,
           has_no_volume: false,
           volume_precision: info.volume_precision || 4,

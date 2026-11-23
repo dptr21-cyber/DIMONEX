@@ -3,14 +3,21 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * TradingChart.tsx
- * Professional Dual-Engine Trading Chart Terminal for DIMONEX Obsidian Iridium.
+ * Professional Dual-Engine & Multi-Chart Trading Terminal for DIMONEX Obsidian Iridium.
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { TradingPairItem, TradeItem } from '../../types/index.js';
+import { LayoutGrid } from 'lucide-react';
+import { TradingPairItem, TradeItem, OrderItem, UserProfile } from '../../types/index.js';
 import { formatQuotePrice, formatPairVolume } from '../../lib/formatters.js';
-import { ChartMode, Timeframe } from './chartTypes.js';
-import { DimonexChart } from './DimonexChart.js';
+import {
+  ChartMode,
+  ChartSeriesType,
+  MultiChartLayoutCount,
+  MultiChartPaneConfig,
+  Timeframe,
+} from './chartTypes.js';
+import { DimonexChart, CHART_TYPE_LABELS } from './DimonexChart.js';
 import { TradingViewChart } from './TradingViewChart.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
 import { AssetIcon } from '../ui/AssetIcon.js';
@@ -21,13 +28,38 @@ interface TradingChartProps {
   recentTrades: TradeItem[];
   onRefreshMarkets?: () => void;
   canvasMinHeightClass?: string;
+  allPairs?: TradingPairItem[];
+  openOrders?: OrderItem[];
+  user?: UserProfile | null;
 }
+
+export const ALL_SUPPORTED_TIMEFRAMES: Timeframe[] = [
+  '1m',
+  '3m',
+  '5m',
+  '15m',
+  '30m',
+  '1h',
+  '2h',
+  '4h',
+  '6h',
+  '12h',
+  '1D',
+  '1W',
+  '1M',
+];
+
+const QUICK_TIMEFRAMES: Timeframe[] = ['1m', '5m', '15m', '1h', '4h', '1D', '1W'];
+const MORE_TIMEFRAMES: Timeframe[] = ['3m', '30m', '2h', '6h', '12h', '1M'];
 
 export const TradingChart: React.FC<TradingChartProps> = ({
   pair,
   recentTrades,
   onRefreshMarkets,
   canvasMinHeightClass = 'min-h-[420px]',
+  allPairs = [],
+  openOrders = [],
+  user = null,
 }) => {
   const [chartMode, setChartModeState] = useState<ChartMode>(() => {
     const saved = localStorage.getItem('dimonex_chart_mode') || localStorage.getItem('dominex_chart_mode');
@@ -41,7 +73,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
 
   const [timeframe, setTimeframeState] = useState<Timeframe>(() => {
     const saved = localStorage.getItem('dimonex_chart_timeframe') || localStorage.getItem('dominex_chart_timeframe');
-    if (saved && ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d', '1D', '1w', '1W', '1M'].includes(saved)) {
+    if (saved && ALL_SUPPORTED_TIMEFRAMES.includes(saved as Timeframe)) {
       return saved as Timeframe;
     }
     return '15m';
@@ -52,14 +84,55 @@ export const TradingChart: React.FC<TradingChartProps> = ({
     localStorage.setItem('dimonex_chart_timeframe', tf);
   };
 
-  const [showMAs, setShowMAsState] = useState<boolean>(() => {
-    return localStorage.getItem('dimonex_chart_mas') !== 'false';
+  const [showMoreTf, setShowMoreTf] = useState(false);
+
+  const [layoutCount, setLayoutCountState] = useState<MultiChartLayoutCount>(() => {
+    const raw = localStorage.getItem('dimonex_chart_layout_count');
+    return raw === '2' ? 2 : raw === '4' ? 4 : 1;
   });
 
-  const setShowMAs = (updater: boolean | ((prev: boolean) => boolean)) => {
-    setShowMAsState(prev => {
-      const next = typeof updater === 'function' ? updater(prev) : updater;
-      localStorage.setItem('dimonex_chart_mas', String(next));
+  const setLayoutCount = (count: MultiChartLayoutCount) => {
+    setLayoutCountState(count);
+    localStorage.setItem('dimonex_chart_layout_count', String(count));
+  };
+
+  const availablePairs = useMemo(() => {
+    if (allPairs.length > 0) return allPairs;
+    return [pair];
+  }, [allPairs, pair]);
+
+  const [paneConfigs, setPaneConfigs] = useState<MultiChartPaneConfig[]>(() => {
+    try {
+      const raw = localStorage.getItem('dimonex_chart_panes_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length === 4) return parsed;
+      }
+    } catch {}
+    return [
+      { id: 'pane-0', pairId: pair.id, timeframe: '15m', chartType: 'CANDLESTICK' },
+      { id: 'pane-1', pairId: availablePairs[1]?.id || pair.id, timeframe: '1h', chartType: 'CANDLESTICK' },
+      { id: 'pane-2', pairId: availablePairs[2]?.id || pair.id, timeframe: '4h', chartType: 'AREA' },
+      { id: 'pane-3', pairId: availablePairs[3]?.id || pair.id, timeframe: '1D', chartType: 'HEIKIN_ASHI' },
+    ];
+  });
+
+  useEffect(() => {
+    setPaneConfigs(prev => {
+      const next = prev.map((p, idx) => (idx === 0 ? { ...p, pairId: pair.id, timeframe } : p));
+      try {
+        localStorage.setItem('dimonex_chart_panes_v1', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  }, [pair.id, timeframe]);
+
+  const updatePaneConfig = (paneIdx: number, patch: Partial<MultiChartPaneConfig>) => {
+    setPaneConfigs(prev => {
+      const next = prev.map((p, idx) => (idx === paneIdx ? { ...p, ...patch } : p));
+      try {
+        localStorage.setItem('dimonex_chart_panes_v1', JSON.stringify(next));
+      } catch {}
       return next;
     });
   };
@@ -87,13 +160,11 @@ export const TradingChart: React.FC<TradingChartProps> = ({
           const data = await res.json();
           if (isMounted) setRefPriceData(data);
         }
-      } catch {
-        // quiet fallback
-      }
+      } catch {}
     };
 
     fetchRefPrice();
-    const interval = setInterval(fetchRefPrice, 10000);
+    const interval = setInterval(fetchRefPrice, 15000);
     return () => {
       isMounted = false;
       clearInterval(interval);
@@ -178,7 +249,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
           </div>
         </div>
 
-        {/* Right: Engine Selector, Timeframe, & Indicator Controls */}
+        {/* Right: Engine Selector, 13 Timeframes, Multi-Chart Layout, & Benchmark */}
         <div className="flex items-center gap-2 flex-wrap">
           {/* Engine Selector */}
           <div className="flex items-center bg-[#090D12] p-0.5 rounded-[7px] border border-[#202B34]">
@@ -206,13 +277,16 @@ export const TradingChart: React.FC<TradingChartProps> = ({
             </button>
           </div>
 
-          {/* Timeframe Selector */}
+          {/* All 13 Verified Timeframes Selector */}
           <div className="flex items-center bg-[#090D12] p-0.5 rounded-[7px] border border-[#202B34] relative font-mono tabular-nums">
-            {(['1m', '5m', '15m', '1h', '4h', '1D', '1W'] as const).map(tf => (
+            {QUICK_TIMEFRAMES.map(tf => (
               <button
                 key={tf}
                 type="button"
-                onClick={() => setTimeframe(tf as Timeframe)}
+                onClick={() => {
+                  setTimeframe(tf);
+                  setShowMoreTf(false);
+                }}
                 className={`px-2 py-1 text-xs font-medium rounded-[5px] transition-colors cursor-pointer ${
                   timeframe === tf
                     ? 'bg-[#8DA5B1] text-[#090D12] font-semibold'
@@ -223,67 +297,82 @@ export const TradingChart: React.FC<TradingChartProps> = ({
               </button>
             ))}
 
-            <div className="relative group">
+            <div className="relative">
               <button
                 type="button"
+                onClick={() => setShowMoreTf(v => !v)}
                 className={`px-2 py-1 text-xs font-medium rounded-[5px] transition-colors flex items-center gap-1 cursor-pointer ${
-                  ['3m', '30m', '2h', '6h', '12h', '1M'].includes(timeframe)
+                  MORE_TIMEFRAMES.includes(timeframe)
                     ? 'bg-[#8DA5B1] text-[#090D12] font-semibold'
                     : 'text-[#71818B] hover:text-[#E4EBEF]'
                 }`}
               >
-                <span>{['3m', '30m', '2h', '6h', '12h', '1M'].includes(timeframe) ? timeframe : '▾'}</span>
+                <span>{MORE_TIMEFRAMES.includes(timeframe) ? timeframe : 'More ▾'}</span>
               </button>
 
-              <div className="absolute right-0 top-full mt-1 hidden group-hover:flex flex-col bg-[#17212B] border border-[#2B3944] rounded-[7px] shadow-lg p-1 z-50 min-w-[72px]">
-                {(['3m', '30m', '2h', '6h', '12h', '1M'] as const).map(extTf => (
-                  <button
-                    key={extTf}
-                    type="button"
-                    onClick={() => setTimeframe(extTf as Timeframe)}
-                    className={`px-3 py-1.5 text-xs font-mono text-left rounded-[5px] transition-colors cursor-pointer ${
-                      timeframe === extTf
-                        ? 'text-[#090D12] font-semibold bg-[#8DA5B1]'
-                        : 'text-[#A1AFB8] hover:text-[#E4EBEF] hover:bg-[#222F3A]'
-                    }`}
-                  >
-                    {extTf}
-                  </button>
-                ))}
-              </div>
+              {showMoreTf && (
+                <div className="absolute right-0 top-full mt-1 flex flex-col bg-[#17212B] border border-[#2B3944] rounded-[7px] shadow-xl p-1 z-50 min-w-[78px]">
+                  {MORE_TIMEFRAMES.map(extTf => (
+                    <button
+                      key={extTf}
+                      type="button"
+                      onClick={() => {
+                        setTimeframe(extTf);
+                        setShowMoreTf(false);
+                      }}
+                      className={`px-3 py-1.5 text-xs font-mono text-left rounded-[5px] transition-colors cursor-pointer ${
+                        timeframe === extTf
+                          ? 'text-[#090D12] font-semibold bg-[#8DA5B1]'
+                          : 'text-[#A1AFB8] hover:text-[#E4EBEF] hover:bg-[#222F3A]'
+                      }`}
+                    >
+                      {extTf}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
-          {/* DIMONEX Pro Specific Tools */}
+          {/* Multi-Chart Layout Selector (1 | 2 | 4) */}
           {chartMode === 'DIMONEX' && (
-            <div className="flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setShowMAs(!showMAs)}
-                title="Toggle Moving Averages (MA 7 / MA 25)"
-                className={`px-2.5 py-1 text-xs font-medium rounded-[7px] border transition-colors cursor-pointer ${
-                  showMAs
-                    ? 'bg-[#2C2415] text-[#D6A85C] border-[#D6A85C]/40'
-                    : 'bg-[#17212B] text-[#71818B] border-[#2B3944] hover:text-[#E4EBEF]'
-                }`}
-              >
-                MA (7, 25)
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setShowRefBenchmark(!showRefBenchmark)}
-                title="Toggle External Reference Benchmark (Binance & Bybit Aggregated)"
-                className={`px-2.5 py-1 text-xs font-medium rounded-[7px] border transition-colors flex items-center gap-1.5 cursor-pointer ${
-                  showRefBenchmark
-                    ? 'bg-[#162436] text-[#6D9FE8] border-[#6D9FE8]/40'
-                    : 'bg-[#17212B] text-[#71818B] border-[#2B3944] hover:text-[#E4EBEF]'
-                }`}
-              >
-                <span className={`w-1.5 h-1.5 rounded-full ${showRefBenchmark ? 'bg-[#6D9FE8]' : 'bg-[#71818B]'}`} />
-                <span>Ext Ref</span>
-              </button>
+            <div className="flex items-center bg-[#090D12] p-0.5 rounded-[7px] border border-[#202B34] font-mono">
+              <span className="px-1.5 text-[#71818B]" title="Multi-Chart Layout">
+                <LayoutGrid className="w-3.5 h-3.5" />
+              </span>
+              {([1, 2, 4] as MultiChartLayoutCount[]).map(cnt => (
+                <button
+                  key={cnt}
+                  type="button"
+                  onClick={() => setLayoutCount(cnt)}
+                  title={`${cnt} Chart Pane${cnt > 1 ? 's' : ''}`}
+                  className={`px-2 py-1 text-xs font-medium rounded-[5px] transition-colors cursor-pointer ${
+                    layoutCount === cnt
+                      ? 'bg-[#1D2832] text-[#E4EBEF] font-semibold border border-[#2B3944]'
+                      : 'text-[#71818B] hover:text-[#E4EBEF] border border-transparent'
+                  }`}
+                >
+                  {cnt}
+                </button>
+              ))}
             </div>
+          )}
+
+          {/* External Ref Toggle */}
+          {chartMode === 'DIMONEX' && (
+            <button
+              type="button"
+              onClick={() => setShowRefBenchmark(!showRefBenchmark)}
+              title="Toggle External Reference Benchmark"
+              className={`px-2.5 py-1 text-xs font-medium rounded-[7px] border transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                showRefBenchmark
+                  ? 'bg-[#162436] text-[#6D9FE8] border-[#6D9FE8]/40'
+                  : 'bg-[#17212B] text-[#71818B] border-[#2B3944] hover:text-[#E4EBEF]'
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${showRefBenchmark ? 'bg-[#6D9FE8]' : 'bg-[#71818B]'}`} />
+              <span>Ext Ref</span>
+            </button>
           )}
         </div>
       </div>
@@ -319,7 +408,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
         </div>
       )}
 
-      {/* Scheduled Delisting Non-Blocking Warning Banner with Live Countdown */}
+      {/* Scheduled Delisting Non-Blocking Warning Banner */}
       <MarketCountdownOverlay
         pair={pair}
         mode="BANNER"
@@ -328,19 +417,7 @@ export const TradingChart: React.FC<TradingChartProps> = ({
 
       {/* Main Active Engine Canvas */}
       <div className={`relative flex-1 w-full transition-[min-height] duration-150 ${canvasMinHeightClass}`}>
-        {chartMode === 'DIMONEX' ? (
-          <DimonexChart
-            pair={pair}
-            recentTrades={recentTrades}
-            timeframe={timeframe}
-            setTimeframe={setTimeframe}
-            showMAs={showMAs}
-            setShowMAs={setShowMAs}
-            showRefBenchmark={showRefBenchmark}
-            setShowRefBenchmark={setShowRefBenchmark}
-            refPriceData={refPriceData}
-          />
-        ) : (
+        {chartMode === 'TRADINGVIEW' ? (
           <TradingViewChart
             pair={pair}
             recentTrades={recentTrades}
@@ -348,6 +425,85 @@ export const TradingChart: React.FC<TradingChartProps> = ({
             onTimeframeChange={setTimeframe}
             onFallbackToPro={() => setChartMode('DIMONEX')}
           />
+        ) : layoutCount === 1 ? (
+          <DimonexChart
+            pair={pair}
+            recentTrades={recentTrades}
+            timeframe={timeframe}
+            setTimeframe={setTimeframe}
+            showRefBenchmark={showRefBenchmark}
+            setShowRefBenchmark={setShowRefBenchmark}
+            refPriceData={refPriceData}
+            openOrders={openOrders}
+            user={user}
+          />
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5 p-1.5 bg-[#090D12] w-full h-full">
+            {paneConfigs.slice(0, layoutCount).map((paneCfg, idx) => {
+              const panePair = availablePairs.find(p => p.id === paneCfg.pairId) || pair;
+              return (
+                <div
+                  key={paneCfg.id}
+                  className="flex flex-col border border-[#202B34] rounded-[8px] overflow-hidden bg-[#090D12] min-h-[320px]"
+                >
+                  <div className="flex items-center justify-between gap-2 px-2.5 py-1 bg-[#141C24] border-b border-[#202B34] text-[11px] font-mono">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[#71818B]">#{idx + 1}</span>
+                      <select
+                        value={panePair.id}
+                        onChange={e => updatePaneConfig(idx, { pairId: e.target.value })}
+                        className="bg-[#090D12] border border-[#2B3944] rounded-[4px] px-1.5 py-0.5 text-[#E4EBEF] text-[11px]"
+                      >
+                        {availablePairs.map(ap => (
+                          <option key={ap.id} value={ap.id}>
+                            {ap.id}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={paneCfg.timeframe}
+                        onChange={e => updatePaneConfig(idx, { timeframe: e.target.value as Timeframe })}
+                        className="bg-[#090D12] border border-[#2B3944] rounded-[4px] px-1.5 py-0.5 text-[#E4EBEF] text-[11px]"
+                      >
+                        {ALL_SUPPORTED_TIMEFRAMES.map(tf => (
+                          <option key={tf} value={tf}>
+                            {tf}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <select
+                      value={paneCfg.chartType}
+                      onChange={e => updatePaneConfig(idx, { chartType: e.target.value as ChartSeriesType })}
+                      className="bg-[#090D12] border border-[#2B3944] rounded-[4px] px-1.5 py-0.5 text-[#A1AFB8] text-[11px]"
+                    >
+                      {CHART_TYPE_LABELS.map(ct => (
+                        <option key={ct.id} value={ct.id}>
+                          {ct.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex-1 min-h-[280px]">
+                    <DimonexChart
+                      pair={panePair}
+                      recentTrades={recentTrades}
+                      timeframe={paneCfg.timeframe}
+                      setTimeframe={tf => updatePaneConfig(idx, { timeframe: tf })}
+                      chartType={paneCfg.chartType}
+                      onChartTypeChange={ct => updatePaneConfig(idx, { chartType: ct })}
+                      showRefBenchmark={idx === 0 ? showRefBenchmark : false}
+                      setShowRefBenchmark={idx === 0 ? setShowRefBenchmark : undefined}
+                      refPriceData={idx === 0 ? refPriceData : null}
+                      openOrders={openOrders}
+                      user={user}
+                      compact
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
 
         {/* Scheduled Initial Listing Countdown or Post-Delisting Overlay */}

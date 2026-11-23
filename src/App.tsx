@@ -921,6 +921,9 @@ function AppContent() {
                     pair={selectedPair}
                     recentTrades={recentTrades}
                     onRefreshMarkets={fetchInitialData}
+                    allPairs={pairs}
+                    openOrders={openOrders}
+                    user={user}
                     canvasMinHeightClass={
                       spotLayout === 'CHART_FOCUS'
                         ? 'min-h-[460px] lg:min-h-[630px]'

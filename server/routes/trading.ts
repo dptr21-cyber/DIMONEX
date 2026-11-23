@@ -13,6 +13,8 @@ import { db } from '../db/database.js';
 import { marketWsService } from '../websocket/MarketDataWs.js';
 import { klineService } from '../engine/KlineService.js';
 import { ensureScheduledPairEntry } from '../services/MarketLifecycleScheduler.js';
+import { priceThresholdService } from '../services/PriceThresholdService.js';
+import { ChartDrawingRecord } from '../db/types.js';
 
 export const tradingRouter = Router();
 
@@ -137,14 +139,15 @@ tradingRouter.get('/trades/:pairId', (req, res) => {
   res.json(pairTrades);
 });
 
-// Get Real Candlestick (OHLCV) History for a pair (supports standard array & Datafeed)
+// Get Real Candlestick (OHLCV) History for a pair (supports standard array, pagination & Datafeed)
 tradingRouter.get('/candles/:pairId', (req, res) => {
   try {
     const pairId = req.params.pairId;
     const resOrTf = (req.query.timeframe as string) || (req.query.resolution as string) || '15m';
     const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : (req.query.countback ? parseInt(req.query.countback as string, 10) : 300);
     const fromSec = req.query.from ? parseInt(req.query.from as string, 10) : undefined;
-    const toSec = req.query.to ? parseInt(req.query.to as string, 10) : undefined;
+    const rawTo = req.query.to || req.query.before;
+    const toSec = rawTo ? parseInt(rawTo as string, 10) : undefined;
 
     const candles = klineService.getBars(pairId, resOrTf, fromSec, toSec, limit);
 
@@ -160,6 +163,15 @@ tradingRouter.get('/candles/:pairId', (req, res) => {
         l: candles.map(c => c.low),
         c: candles.map(c => c.close),
         v: candles.map(c => c.volume)
+      });
+    }
+
+    if (req.query.paginated === '1' || req.query.paginated === 'true') {
+      return res.json({
+        candles,
+        oldestTime: candles.length > 0 ? candles[0].time : null,
+        newestTime: candles.length > 0 ? candles[candles.length - 1].time : null,
+        hasMore: candles.length >= limit,
       });
     }
 
@@ -188,7 +200,7 @@ tradingRouter.get('/config', (_req, res) => {
     symbols_types: [
       { name: 'crypto', value: 'crypto' }
     ],
-    supported_resolutions: ['1', '5', '15', '60', '240', '1D', '1W']
+    supported_resolutions: ['1', '3', '5', '15', '30', '60', '120', '240', '360', '720', '1D', '1W', '1M']
   });
 });
 
@@ -259,8 +271,8 @@ tradingRouter.get('/symbols', (req, res) => {
     minmov2: 0,
     fractional: false,
     has_intraday: true,
-    supported_resolutions: ['1', '5', '15', '60', '240', '1D', '1W'],
-    intraday_multipliers: ['1', '5', '15', '60', '240'],
+    supported_resolutions: ['1', '3', '5', '15', '30', '60', '120', '240', '360', '720', '1D', '1W', '1M'],
+    intraday_multipliers: ['1', '3', '5', '15', '30', '60', '120', '240', '360', '720'],
     has_empty_bars: true,
     has_no_volume: false,
     volume_precision: baseAsset?.decimals || 4,
@@ -461,4 +473,173 @@ tradingRouter.get('/reference-price/:pairId', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Get Authenticated User's Executed Trades & Real Average Entry Position on a Pair (for Chart Overlays)
+tradingRouter.get('/my-trades/:pairId', requireAuth, (req, res) => {
+  const user = (req as any).user;
+  const pairId = req.params.pairId;
+  const pair = db.tradingPairs.get(pairId);
+  if (!pair) return res.status(404).json({ error: 'Pair tidak ditemukan' });
+
+  const myTrades = db.trades
+    .filter(t => t.pairId === pairId && (t.makerUserId === user.id || t.takerUserId === user.id))
+    .slice(-150);
+
+  // Compute exact BigInt weighted average BUY entry & net base position from user's fills
+  let buyQtyUnits = 0n;
+  let buyQuoteUnits = 0n;
+  let sellQtyUnits = 0n;
+
+  const formattedTrades = myTrades.map(t => {
+    const isTaker = t.takerUserId === user.id;
+    const side: 'BUY' | 'SELL' = isTaker
+      ? t.takerSide
+      : t.takerSide === 'BUY'
+      ? 'SELL'
+      : 'BUY';
+    const qty = BigInt(t.quantity || '0');
+    const qVol = BigInt(t.quoteVolume || '0');
+    if (side === 'BUY') {
+      buyQtyUnits += qty;
+      buyQuoteUnits += qVol;
+    } else {
+      sellQtyUnits += qty;
+    }
+    return {
+      id: t.id,
+      pairId: t.pairId,
+      side,
+      price: t.price,
+      quantity: t.quantity,
+      quoteVolume: t.quoteVolume,
+      createdAt: t.createdAt,
+    };
+  });
+
+  const scale = 10n ** BigInt(pair.baseDecimals || 8);
+  const avgEntryPriceUnits = buyQtyUnits > 0n ? ((buyQuoteUnits * scale) / buyQtyUnits).toString() : '0';
+  const netPositionUnits = (buyQtyUnits - sellQtyUnits).toString();
+
+  res.json({
+    pairId,
+    trades: formattedTrades,
+    avgEntryPriceUnits,
+    netPositionUnits,
+  });
+});
+
+// Chart Drawings Persistence per Authenticated User + Pair
+const VALID_DRAWING_TOOLS = new Set([
+  'TREND_LINE',
+  'HORIZONTAL_LINE',
+  'VERTICAL_LINE',
+  'RAY',
+  'RECTANGLE',
+  'BRUSH',
+  'TEXT',
+  'FIB_RETRACEMENT',
+  'FIB_EXTENSION',
+  'PRICE_RANGE',
+]);
+
+tradingRouter.get('/chart-drawings/:pairId', requireAuth, (req, res) => {
+  const user = (req as any).user;
+  const key = `${user.id}:${req.params.pairId}`;
+  res.json(db.chartDrawings.get(key) || []);
+});
+
+tradingRouter.put('/chart-drawings/:pairId', requireAuth, (req, res) => {
+  const user = (req as any).user;
+  const pairId = req.params.pairId;
+  const items = Array.isArray(req.body?.drawings) ? req.body.drawings : Array.isArray(req.body) ? req.body : null;
+  if (!items) {
+    return res.status(400).json({ error: 'Payload drawings harus berupa array.' });
+  }
+  if (items.length > 200) {
+    return res.status(400).json({ error: 'Maksimal 200 drawing per pair.' });
+  }
+
+  const now = Date.now();
+  const sanitized: ChartDrawingRecord[] = [];
+  for (const raw of items) {
+    if (!raw || !VALID_DRAWING_TOOLS.has(raw.tool) || !Array.isArray(raw.points) || raw.points.length === 0) {
+      continue;
+    }
+    const cleanPoints = raw.points
+      .slice(0, 500)
+      .filter((pt: any) => typeof pt?.time === 'number' && Number.isFinite(pt.time) && typeof pt?.price === 'number' && Number.isFinite(pt.price))
+      .map((pt: any) => ({ time: Math.round(pt.time), price: pt.price }));
+    if (cleanPoints.length === 0) continue;
+
+    sanitized.push({
+      id: typeof raw.id === 'string' && raw.id.length > 0 ? raw.id.slice(0, 64) : `drw-${now}-${sanitized.length}`,
+      userId: user.id,
+      pairId,
+      tool: raw.tool,
+      points: cleanPoints,
+      color: typeof raw.color === 'string' ? raw.color.slice(0, 24) : '#8DA5B1',
+      lineWidth: typeof raw.lineWidth === 'number' ? Math.max(1, Math.min(6, raw.lineWidth)) : 2,
+      text: typeof raw.text === 'string' ? raw.text.slice(0, 120) : undefined,
+      createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : now,
+      updatedAt: now,
+    });
+  }
+
+  db.chartDrawings.set(`${user.id}:${pairId}`, sanitized);
+  db.scheduleSave();
+  res.json({ success: true, drawings: sanitized });
+});
+
+tradingRouter.delete('/chart-drawings/:pairId', requireAuth, (req, res) => {
+  const user = (req as any).user;
+  db.chartDrawings.delete(`${user.id}:${req.params.pairId}`);
+  db.scheduleSave();
+  res.json({ success: true, drawings: [] });
+});
+
+// User Chart Price Alerts (Strictly ALERT-ONLY action='NONE', Scoped by userId)
+tradingRouter.get('/price-alerts/:pairId', requireAuth, (req, res) => {
+  const user = (req as any).user;
+  const list = priceThresholdService
+    .listTriggers(undefined, req.params.pairId)
+    .filter(t => t.createdBy === user.id && t.action === 'NONE');
+  res.json(list);
+});
+
+tradingRouter.post('/price-alerts', requireAuth, (req, res) => {
+  try {
+    const user = (req as any).user;
+    const { pairId, condition, thresholdPrice, name } = req.body || {};
+    if (!pairId || !thresholdPrice) {
+      return res.status(400).json({ error: 'pairId dan thresholdPrice wajib diisi.' });
+    }
+    const trigger = priceThresholdService.createTrigger({
+      name: name || `Alert ${pairId} @ ${thresholdPrice}`,
+      pairId,
+      environment: 'PRODUCTION',
+      condition: condition === 'BELOW_OR_EQUAL' || condition === 'CROSS_DOWN' || condition === 'CROSS_UP' ? condition : 'ABOVE_OR_EQUAL',
+      thresholdPrice: String(thresholdPrice),
+      soundEnabled: true,
+      soundTone: 'CHIME',
+      action: 'NONE', // Regular user alerts NEVER manipulate MM bots
+      autoResetAfterCooldown: false,
+      createdBy: user.id,
+    });
+    res.status(201).json({ success: true, alert: trigger });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Gagal membuat price alert' });
+  }
+});
+
+tradingRouter.delete('/price-alerts/:id', requireAuth, (req, res) => {
+  const user = (req as any).user;
+  const existing = priceThresholdService.listTriggers().find(t => t.id === req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Alert tidak ditemukan.' });
+  if (existing.createdBy !== user.id) {
+    return res.status(403).json({ error: 'Tidak diizinkan menghapus alert pengguna lain.' });
+  }
+  priceThresholdService.deleteTrigger(req.params.id);
+  res.json({ success: true });
+});
+
 

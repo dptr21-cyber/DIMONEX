@@ -91,69 +91,185 @@ listingRouter.post('/apply', (req, res) => {
   }
 });
 
-// GET /track/:id - Track listing application status
-listingRouter.get('/track/:id', (req, res) => {
-  try {
-    const query = req.params.id.trim().toUpperCase();
-    const allListings = Array.from(db.listingRequests.values());
+function maskEmailForPublicView(email: string): string {
+  const parts = email.split('@');
+  if (parts.length !== 2) return email;
+  const [local, domain] = parts;
+  if (local.length <= 2) return `${local[0] || '*'}***@${domain}`;
+  return `${local.slice(0, 2)}***@${domain}`;
+}
 
-    // Search by listing ID or asset symbol or createdBy portal email
-    const match = allListings.find(l => {
-      const asset = db.assets.get(l.assetId);
-      return l.id === query || 
-        (asset && asset.symbol === query) ||
-        (l.createdBy && l.createdBy.toUpperCase().includes(query));
-    });
-
-    if (!match) {
-      return res.status(404).json({
-        error: `Pengajuan listing tidak ditemukan untuk ID atau Simbol "${query}"`,
-        code: 'APPLICATION_NOT_FOUND'
-      });
+function findAuditApplicationId(listingId: string): string | undefined {
+  for (let i = db.listingAuditEvents.length - 1; i >= 0; i--) {
+    const ev = db.listingAuditEvents[i];
+    if (ev.aggregateId === listingId && ev.payload && typeof ev.payload.applicationId === 'string') {
+      return ev.payload.applicationId;
     }
+  }
+  return undefined;
+}
 
+function resolveListingTrack(rawInput: string) {
+  const trimmed = rawInput.trim();
+  if (!trimmed) {
+    return { status: 400 as const, error: 'Masukkan Application ID, Simbol Token, atau Pair untuk melacak.', code: 'EMPTY_QUERY' };
+  }
+  if (trimmed.length > 128) {
+    return { status: 400 as const, error: 'Query pelacakan terlalu panjang (maksimal 128 karakter).', code: 'INVALID_QUERY' };
+  }
+
+  const qUpper = trimmed.toUpperCase();
+  const qNormalizedPair = qUpper.replace('/', '-');
+  const pairParts = qNormalizedPair.includes('-') ? qNormalizedPair.split('-').filter(Boolean) : null;
+  const baseFromPair = pairParts && pairParts.length >= 2 ? pairParts[0] : null;
+  const quoteFromPair = pairParts && pairParts.length >= 2 ? pairParts[1] : null;
+
+  // Sort newest first; prefer active / non-cancelled / non-rejected listings when matching by symbol
+  const allListings = Array.from(db.listingRequests.values()).sort((a, b) => {
+    const aTerminal = a.status === 'CANCELLED' || a.status === 'REJECTED' ? 1 : 0;
+    const bTerminal = b.status === 'CANCELLED' || b.status === 'REJECTED' ? 1 : 0;
+    if (aTerminal !== bTerminal) return aTerminal - bTerminal;
+    return b.createdAt - a.createdAt;
+  });
+
+  let matchedByDirectSecret = false;
+
+  // 1. Exact match on applicationId or listing UUID (case-insensitive)
+  let match = allListings.find(l => {
+    const appId = l.applicationId?.toUpperCase();
+    return appId === qUpper || l.id.toUpperCase() === qUpper;
+  });
+  if (match) matchedByDirectSecret = true;
+
+  // 2. Historical audit event match for legacy submissions where applicationId was only logged in listingAuditEvents
+  if (!match) {
+    const auditEvent = [...db.listingAuditEvents]
+      .reverse()
+      .find(ev => ev.payload && typeof ev.payload.applicationId === 'string' && ev.payload.applicationId.toUpperCase() === qUpper);
+    if (auditEvent) {
+      match = db.listingRequests.get(auditEvent.aggregateId);
+      if (match) matchedByDirectSecret = true;
+    }
+  }
+
+  // 3. Exact trading pair match (e.g. BTC-IDR, BTC/IDR, SOL-USDT)
+  if (!match && baseFromPair && quoteFromPair) {
+    match = allListings.find(l => {
+      const asset = db.assets.get(l.assetId);
+      const quote = db.assets.get(l.quoteAssetId);
+      return asset?.symbol.toUpperCase() === baseFromPair && quote?.symbol.toUpperCase() === quoteFromPair;
+    });
+  }
+
+  // 4. Exact asset symbol match
+  if (!match) {
+    match = allListings.find(l => {
+      const asset = db.assets.get(l.assetId);
+      return asset && (asset.symbol.toUpperCase() === qUpper || (baseFromPair && asset.symbol.toUpperCase() === baseFromPair));
+    });
+  }
+
+  // 5. Exact applicant contact email match
+  if (!match && qUpper.includes('@')) {
+    match = allListings.find(l => {
+      if (!l.createdBy) return false;
+      const cleaned = l.createdBy.replace(/^portal:/i, '').toUpperCase();
+      return cleaned === qUpper;
+    });
+    if (match) matchedByDirectSecret = true;
+  }
+
+  // 6. Partial match on applicationId, UUID, asset name, or portal email (min 3 chars)
+  if (!match && qUpper.length >= 3) {
+    match = allListings.find(l => {
+      const asset = db.assets.get(l.assetId);
+      const appId = (l.applicationId || findAuditApplicationId(l.id) || '').toUpperCase();
+      const createdByClean = (l.createdBy || '').replace(/^portal:/i, '').toUpperCase();
+      return (
+        appId.includes(qUpper) ||
+        l.id.toUpperCase().includes(qUpper) ||
+        (asset && asset.name.toUpperCase().includes(qUpper)) ||
+        (qUpper.includes('@') && createdByClean.includes(qUpper))
+      );
+    });
+  }
+
+  if (match) {
     const asset = db.assets.get(match.assetId);
     const quote = db.assets.get(match.quoteAssetId);
     const approval = db.listingApprovals.get(match.id);
-    const market = Array.from(db.markets.values()).find(m => m.listingRequestId === match.id);
-    const mmUser = match.marketMakerAccountId ? db.users.get(match.marketMakerAccountId) : db.users.get('usr-mm-0000-0000-000000000001');
+    const pairKey = `${asset?.symbol || 'TOKEN'}-${quote?.symbol || 'IDR'}`;
+    const market =
+      Array.from(db.markets.values()).find(m => m.listingRequestId === match!.id) ||
+      Array.from(db.markets.values()).find(m => m.symbol.toUpperCase() === pairKey.toUpperCase());
+    const tradingPair = db.tradingPairs.get(pairKey);
+    const mmUser = match.marketMakerAccountId
+      ? db.users.get(match.marketMakerAccountId)
+      : db.users.get('usr-mm-0000-0000-000000000001');
     const projectUser = match.projectOwnerAccountId ? db.users.get(match.projectOwnerAccountId) : null;
 
     const isDepositOpen = asset?.depositEnabled ?? match.depositEnabled ?? true;
     const isWithdrawOpen = asset?.withdrawalEnabled ?? match.withdrawalEnabled ?? true;
+    const resolvedAppId = match.applicationId || findAuditApplicationId(match.id) || match.id;
+    const isMarketLive =
+      market?.status === 'ACTIVE' ||
+      Boolean(tradingPair && tradingPair.isActive && !tradingPair.isDelisted && !tradingPair.isHalted);
 
-    // Compute progress stage
     let stage = 1;
     let stageName = 'Compliance Pre-Screening';
-    if (match.status === 'PENDING_REVIEW') {
+    if (match.status === 'DRAFT') {
+      stage = 1;
+      stageName = 'Draft — Compliance Pre-Screening';
+    } else if (match.status === 'PENDING_REVIEW') {
       stage = 2;
       stageName = 'Maker Review & Risk Assessment';
-    } else if (match.status === 'APPROVED' || match.status === 'SCHEDULED') {
+    } else if (match.status === 'APPROVED') {
       stage = 3;
       stageName = 'Checker Approval & Engine Readiness';
+    } else if (match.status === 'SCHEDULED') {
+      stage = 3;
+      stageName = 'Scheduled for Spot Market Launch';
     } else if (match.status === 'ACTIVE') {
       stage = 4;
       stageName = 'Market Live on Spot Exchange';
+    } else if (match.status === 'SUSPENDED') {
+      stage = 4;
+      stageName = 'Market Temporarily Suspended';
     } else if (match.status === 'REJECTED') {
       stage = 0;
       stageName = 'Rejected by Review Committee';
+    } else if (match.status === 'CANCELLED') {
+      stage = 0;
+      stageName = 'Application Cancelled';
     }
 
-    res.json({
-      success: true,
+    const rawOwnerEmail = projectUser
+      ? projectUser.email
+      : match.createdBy.startsWith('portal:')
+      ? match.createdBy.replace('portal:', '')
+      : '-';
+    const safeOwnerEmail =
+      rawOwnerEmail !== '-' && !matchedByDirectSecret
+        ? maskEmailForPublicView(rawOwnerEmail)
+        : rawOwnerEmail;
+
+    return {
+      status: 200 as const,
       data: {
         id: match.id,
+        applicationId: resolvedAppId,
         tokenName: asset ? asset.name : 'Unknown',
         tokenSymbol: asset ? asset.symbol : 'UNKNOWN',
         network: asset ? asset.network : 'Unknown',
         status: match.status,
         stage,
         stageName,
+        scheduledAt: match.scheduledAt,
         createdAt: match.createdAt,
         updatedAt: match.updatedAt,
         pair: `${asset?.symbol || 'TOKEN'}/${quote?.symbol || 'IDR'}`,
         approvalReason: approval?.reason,
-        marketActive: market?.status === 'ACTIVE',
+        marketActive: isMarketLive,
         depositStatus: isDepositOpen ? 'OPEN' : 'CLOSED',
         withdrawalStatus: isWithdrawOpen ? 'OPEN' : 'CLOSED',
         depositOpenedAt: match.depositOpenedAt || asset?.depositOpenedAt,
@@ -161,9 +277,123 @@ listingRouter.get('/track/:id', (req, res) => {
         marketMakerAccountId: match.marketMakerAccountId || 'usr-mm-0000-0000-000000000001',
         marketMakerEmail: mmUser ? mmUser.email : 'mm@dimonex.id',
         projectOwnerAccountId: match.projectOwnerAccountId || null,
-        projectOwnerEmail: projectUser ? projectUser.email : (match.createdBy.startsWith('portal:') ? match.createdBy.replace('portal:', '') : '-')
+        projectOwnerEmail: safeOwnerEmail,
+        source: 'LISTING_REQUEST' as const
       }
-    });
+    };
+  }
+
+  // 7. Fallback to real Exchange Asset Registry (for already-listed core/seeded assets such as BTC, ETH, SOL)
+  const allAssets = Array.from(db.assets.values());
+  const matchedAsset =
+    allAssets.find(a => a.symbol.toUpperCase() === qUpper || a.id.toUpperCase() === qUpper) ||
+    (baseFromPair ? allAssets.find(a => a.symbol.toUpperCase() === baseFromPair) : undefined) ||
+    (qUpper.length >= 3 ? allAssets.find(a => a.name.toUpperCase().includes(qUpper)) : undefined);
+
+  if (matchedAsset) {
+    const assetMarkets = Array.from(db.markets.values()).filter(m => m.baseAssetId === matchedAsset.id);
+    const assetPairs = Array.from(db.tradingPairs.values()).filter(
+      p => p.baseCurrency.toUpperCase() === matchedAsset.symbol.toUpperCase() && !p.isDelisted
+    );
+    const preferredPair =
+      (quoteFromPair
+        ? assetPairs.find(p => p.quoteCurrency.toUpperCase() === quoteFromPair)
+        : undefined) ||
+      assetPairs.find(p => p.isActive && !p.isHalted) ||
+      assetPairs[0];
+    const preferredMarket =
+      (quoteFromPair
+        ? assetMarkets.find(m => m.symbol.toUpperCase() === `${matchedAsset.symbol}-${quoteFromPair}`.toUpperCase())
+        : undefined) ||
+      assetMarkets.find(m => m.status === 'ACTIVE') ||
+      assetMarkets[0];
+
+    const isMarketLive =
+      preferredMarket?.status === 'ACTIVE' ||
+      Boolean(preferredPair && preferredPair.isActive && !preferredPair.isDelisted && !preferredPair.isHalted);
+
+    let stage = 1;
+    let stageName = 'Compliance Pre-Screening';
+    if (matchedAsset.status === 'ACTIVE' || isMarketLive) {
+      stage = 4;
+      stageName = isMarketLive ? 'Market Live on Spot Exchange' : 'Active Exchange Settlement Asset';
+    } else if (matchedAsset.status === 'SUSPENDED') {
+      stage = 4;
+      stageName = 'Asset Temporarily Suspended';
+    } else if (matchedAsset.status === 'RETIRED') {
+      stage = 0;
+      stageName = 'Asset Retired / Delisted';
+    }
+
+    const pairLabel = preferredPair
+      ? `${preferredPair.baseCurrency}/${preferredPair.quoteCurrency}`
+      : preferredMarket
+      ? preferredMarket.symbol.replace('-', '/')
+      : `${matchedAsset.symbol}/IDR`;
+
+    const mmUser = db.users.get('usr-mm-0000-0000-000000000001');
+
+    return {
+      status: 200 as const,
+      data: {
+        id: matchedAsset.id,
+        applicationId: `LISTED-${matchedAsset.symbol}`,
+        tokenName: matchedAsset.name,
+        tokenSymbol: matchedAsset.symbol,
+        network: matchedAsset.network,
+        status: isMarketLive ? 'ACTIVE' : matchedAsset.status,
+        stage,
+        stageName,
+        scheduledAt: preferredPair?.scheduledAt,
+        createdAt: matchedAsset.createdAt,
+        updatedAt: matchedAsset.updatedAt,
+        pair: pairLabel,
+        approvalReason: isMarketLive
+          ? 'Aset telah terverifikasi dan aktif diperdagangkan di Pasar Spot DIMONEX.'
+          : undefined,
+        marketActive: isMarketLive,
+        depositStatus: matchedAsset.depositEnabled ? 'OPEN' : 'CLOSED',
+        withdrawalStatus: matchedAsset.withdrawalEnabled ? 'OPEN' : 'CLOSED',
+        depositOpenedAt: matchedAsset.depositOpenedAt,
+        withdrawalOpenedAt: matchedAsset.withdrawalOpenedAt,
+        marketMakerAccountId: 'usr-mm-0000-0000-000000000001',
+        marketMakerEmail: mmUser ? mmUser.email : 'mm@dimonex.id',
+        projectOwnerAccountId: null,
+        projectOwnerEmail: 'DIMONEX Official Registry',
+        source: 'EXCHANGE_REGISTRY' as const
+      }
+    };
+  }
+
+  return {
+    status: 404 as const,
+    error: `Pengajuan listing tidak ditemukan untuk ID atau Simbol "${trimmed}". Pastikan Kode Permohonan (REQ-...) atau Simbol Token sudah benar.`,
+    code: 'APPLICATION_NOT_FOUND'
+  };
+}
+
+// GET /track?q=... - Track listing application status via query string (handles pairs like BTC/IDR & emails cleanly)
+listingRouter.get('/track', (req, res) => {
+  try {
+    const rawQuery = String(req.query.q || req.query.id || '');
+    const result = resolveListingTrack(rawQuery);
+    if (result.status !== 200) {
+      return res.status(result.status).json({ error: result.error, code: result.code });
+    }
+    res.json({ success: true, data: result.data });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message, code: 'INTERNAL_ERROR' });
+  }
+});
+
+// GET /track/:id - Track listing application status via path parameter
+listingRouter.get('/track/:id', (req, res) => {
+  try {
+    const result = resolveListingTrack(req.params.id || '');
+    if (result.status !== 200) {
+      return res.status(result.status).json({ error: result.error, code: result.code });
+    }
+    res.json({ success: true, data: result.data });
   } catch (err: any) {
     res.status(500).json({ error: err.message, code: 'INTERNAL_ERROR' });
   }

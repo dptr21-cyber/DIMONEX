@@ -34,6 +34,7 @@ import {
   ChevronLeft,
   ChevronRight
 } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { Button } from '../ui/Button.js';
 import { PageHeader, PanelHeader } from '../ui/PanelHeader.js';
 import { SegmentedTabs } from '../ui/Tabs.js';
@@ -41,6 +42,10 @@ import { useToast } from '../ui/Toast.js';
 import { UserProfile, UserBalance } from '../../types/index.js';
 import { safeFetchJson } from '../../lib/safeFetch.js';
 import { VipVolumeProgressPanel } from './VipVolumeProgressPanel.js';
+import {
+  RewardClaimCelebration,
+  ClaimCelebrationPayload
+} from './RewardClaimCelebration.js';
 
 interface Props {
   user: UserProfile | null;
@@ -264,6 +269,20 @@ export const RewardsVipView: React.FC<Props> = ({
   const [applyCodeInput, setApplyCodeInput] = useState('');
   const [isApplyingCode, setIsApplyingCode] = useState(false);
 
+  // Claim reward celebration overlay + inline card highlight state
+  const [claimCelebration, setClaimCelebration] = useState<ClaimCelebrationPayload | null>(null);
+  const [recentlySettledKey, setRecentlySettledKey] = useState<{
+    key: string;
+    amountDisplay: string;
+  } | null>(null);
+
+  const triggerCardSettlementFlash = (key: string, amountDisplay: string) => {
+    setRecentlySettledKey({ key, amountDisplay });
+    window.setTimeout(() => {
+      setRecentlySettledKey(prev => (prev?.key === key ? null : prev));
+    }, 2400);
+  };
+
   // Dedicated Rewards History API state
   const [historyData, setHistoryData] = useState<RewardsHistoryResponse | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -363,7 +382,7 @@ export const RewardsVipView: React.FC<Props> = ({
     try {
       const res = await safeFetchJson<{
         success: boolean;
-        claim: { amountDisplay: string; journalId: string };
+        claim: { taskId: string; taskTitle: string; amountUnits?: string; amountDisplay: string; journalId: string; claimedAt?: number };
         summary: RewardsSummaryPayload;
       }>(`/api/rewards/tasks/${encodeURIComponent(task.id)}/claim`, {
         method: 'POST',
@@ -374,6 +393,16 @@ export const RewardsVipView: React.FC<Props> = ({
         setSummary(res.data.summary);
         onRefreshBalances?.();
         fetchRewardsHistory();
+        triggerCardSettlementFlash(`task:${task.id}`, res.data.claim.amountDisplay);
+        setClaimCelebration({
+          type: 'TASK_REWARD',
+          title: res.data.claim.taskTitle || task.title,
+          code: task.id,
+          amountUsdt: task.rewardAmountUsdt,
+          amountDisplay: res.data.claim.amountDisplay,
+          journalId: res.data.claim.journalId,
+          settledAt: res.data.claim.claimedAt || Date.now()
+        });
         showToast(
           'success',
           'Reward Credited to Spot Wallet',
@@ -402,7 +431,14 @@ export const RewardsVipView: React.FC<Props> = ({
     try {
       const res = await safeFetchJson<{
         success: boolean;
-        redemption: { voucherCode: string; amountDisplay: string; journalId: string };
+        redemption: {
+          voucherCode: string;
+          voucherTitle?: string;
+          amountUnits?: string;
+          amountDisplay: string;
+          journalId: string;
+          redeemedAt?: number;
+        };
         summary: RewardsSummaryPayload;
       }>('/api/rewards/vouchers/redeem', {
         method: 'POST',
@@ -418,6 +454,19 @@ export const RewardsVipView: React.FC<Props> = ({
         setVoucherCodeInput('');
         onRefreshBalances?.();
         fetchRewardsHistory();
+        const parsedUnits = res.data.redemption.amountUnits
+          ? Number(BigInt(res.data.redemption.amountUnits)) / 1_000_000
+          : parseFloat(res.data.redemption.amountDisplay.replace(/[^0-9.]/g, '')) || 0;
+        triggerCardSettlementFlash(`voucher:${res.data.redemption.voucherCode}`, res.data.redemption.amountDisplay);
+        setClaimCelebration({
+          type: 'VOUCHER_REDEMPTION',
+          title: res.data.redemption.voucherTitle || `Voucher ${res.data.redemption.voucherCode}`,
+          code: res.data.redemption.voucherCode,
+          amountUsdt: parsedUnits,
+          amountDisplay: res.data.redemption.amountDisplay,
+          journalId: res.data.redemption.journalId,
+          settledAt: res.data.redemption.redeemedAt || Date.now()
+        });
         showToast(
           'success',
           `Voucher ${res.data.redemption.voucherCode} Redeemed`,
@@ -479,7 +528,13 @@ export const RewardsVipView: React.FC<Props> = ({
     try {
       const res = await safeFetchJson<{
         success: boolean;
-        payout: { amountDisplay: string; journalId: string };
+        payout: {
+          amountUnits?: string;
+          amountDisplay: string;
+          rebateRatePct?: number;
+          journalId: string;
+          claimedAt?: number;
+        };
         summary: RewardsSummaryPayload;
       }>('/api/rewards/referral/claim', {
         method: 'POST',
@@ -490,6 +545,19 @@ export const RewardsVipView: React.FC<Props> = ({
         setSummary(res.data.summary);
         onRefreshBalances?.();
         fetchRewardsHistory();
+        const parsedUnits = res.data.payout.amountUnits
+          ? Number(BigInt(res.data.payout.amountUnits)) / 1_000_000
+          : parseFloat(res.data.payout.amountDisplay.replace(/[^0-9.]/g, '')) || 0;
+        triggerCardSettlementFlash('referral:commission', res.data.payout.amountDisplay);
+        setClaimCelebration({
+          type: 'REFERRAL_COMMISSION',
+          title: `Referral Fee Rebate (${res.data.payout.rebateRatePct ?? summary?.referral.rebateRatePct ?? 20}%)`,
+          code: summary?.referral.referralCode || null,
+          amountUsdt: parsedUnits,
+          amountDisplay: res.data.payout.amountDisplay,
+          journalId: res.data.payout.journalId,
+          settledAt: res.data.payout.claimedAt || Date.now()
+        });
         showToast(
           'success',
           'Commission Settled',
@@ -909,13 +977,38 @@ export const RewardsVipView: React.FC<Props> = ({
 
               {user && userVouchers.length > 0 && (
                 <div className="pt-3 border-t border-[#202B34] grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {userVouchers.map(v => (
-                    <div
+                  {userVouchers.map(v => {
+                    const isJustRedeemed = recentlySettledKey?.key === `voucher:${v.code}`;
+                    return (
+                    <motion.div
                       key={v.id}
-                      className={`p-3.5 rounded-[8px] bg-[#111820] border ${
-                        v.canRedeem ? 'border-[#16A879]/40' : 'border-[#202B34]'
+                      animate={
+                        isJustRedeemed
+                          ? { scale: [1, 1.02, 1], borderColor: ['#202B34', '#16A879', '#202B34'] }
+                          : { scale: 1 }
+                      }
+                      transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
+                      className={`relative p-3.5 rounded-[8px] bg-[#111820] border ${
+                        isJustRedeemed
+                          ? 'border-[#16A879]'
+                          : v.canRedeem
+                          ? 'border-[#16A879]/40'
+                          : 'border-[#202B34]'
                       } flex flex-col justify-between gap-3`}
                     >
+                      <AnimatePresence>
+                        {isJustRedeemed && (
+                          <motion.span
+                            initial={{ opacity: 0, y: 6, scale: 0.9 }}
+                            animate={{ opacity: [0, 1, 1, 0], y: -22, scale: 1 }}
+                            exit={{ opacity: 0 }}
+                            transition={{ duration: 1.5, ease: [0.16, 1, 0.3, 1] }}
+                            className="pointer-events-none absolute right-3 top-2 font-mono tabular-nums text-xs font-semibold text-[#16A879]"
+                          >
+                            {recentlySettledKey.amountDisplay}
+                          </motion.span>
+                        )}
+                      </AnimatePresence>
                       <div className="space-y-1">
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-mono text-xs font-semibold text-[#E4EBEF] tracking-wide">
@@ -943,19 +1036,26 @@ export const RewardsVipView: React.FC<Props> = ({
                           {v.expiresAt ? `Exp ${formatDateTime(v.expiresAt)}` : 'No expiry'}
                         </span>
                         {v.redeemed ? (
-                          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#16A879]">
+                          <motion.span
+                            initial={isJustRedeemed ? { scale: 0.75, opacity: 0 } : false}
+                            animate={{ scale: 1, opacity: 1 }}
+                            transition={{ type: 'spring', stiffness: 420, damping: 20 }}
+                            className="inline-flex items-center gap-1 text-[11px] font-medium text-[#16A879]"
+                          >
                             <CheckCircle2 className="w-3.5 h-3.5" />
                             Redeemed
-                          </span>
+                          </motion.span>
                         ) : v.canRedeem ? (
-                          <Button
-                            variant="primary"
-                            size="sm"
-                            isLoading={redeemingCode === v.code}
-                            onClick={() => handleRedeemVoucher(v.code)}
-                          >
-                            Redeem
-                          </Button>
+                          <motion.div whileTap={{ scale: 0.96 }}>
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              isLoading={redeemingCode === v.code}
+                              onClick={() => handleRedeemVoucher(v.code)}
+                            >
+                              Redeem
+                            </Button>
+                          </motion.div>
                         ) : (
                           <span className="text-[11px] text-[#71818B]">
                             {!v.eligibleByVip
@@ -966,8 +1066,9 @@ export const RewardsVipView: React.FC<Props> = ({
                           </span>
                         )}
                       </div>
-                    </div>
-                  ))}
+                    </motion.div>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -981,16 +1082,40 @@ export const RewardsVipView: React.FC<Props> = ({
                 const progressPct = isAuthedTask ? task.progressPct : 0;
                 const progressLabel = isAuthedTask ? task.progressLabel : 'Sign in to check live progress';
                 const isClaiming = claimingTaskId === task.id;
+                const isJustClaimed = recentlySettledKey?.key === `task:${task.id}`;
 
                 return (
-                  <div
+                  <motion.div
                     key={task.id}
-                    className={`rounded-[10px] bg-[#141C24] border ${
-                      status === 'READY'
+                    animate={
+                      isJustClaimed
+                        ? { scale: [1, 1.018, 1], borderColor: ['#202B34', '#16A879', '#202B34'] }
+                        : { scale: 1 }
+                    }
+                    transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
+                    className={`relative rounded-[10px] bg-[#141C24] border ${
+                      isJustClaimed
+                        ? 'border-[#16A879]'
+                        : status === 'READY'
                         ? 'border-[#16A879]/50'
                         : 'border-[#202B34] hover:border-[#40515D]'
                     } p-5 flex flex-col justify-between space-y-4 transition-colors`}
                   >
+                    {/* Floating +USDT settlement rise animation */}
+                    <AnimatePresence>
+                      {isJustClaimed && (
+                        <motion.span
+                          initial={{ opacity: 0, y: 8, scale: 0.9 }}
+                          animate={{ opacity: [0, 1, 1, 0], y: -26, scale: 1.04 }}
+                          exit={{ opacity: 0 }}
+                          transition={{ duration: 1.6, ease: [0.16, 1, 0.3, 1] }}
+                          className="pointer-events-none absolute right-5 top-3 font-mono tabular-nums text-sm font-semibold text-[#16A879]"
+                        >
+                          {recentlySettledKey.amountDisplay}
+                        </motion.span>
+                      )}
+                    </AnimatePresence>
+
                     <div className="space-y-3">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
@@ -1053,20 +1178,26 @@ export const RewardsVipView: React.FC<Props> = ({
                       </span>
 
                       {status === 'CLAIMED' ? (
-                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#16A879] whitespace-nowrap shrink-0">
+                        <motion.span
+                          initial={isJustClaimed ? { scale: 0.7, opacity: 0 } : false}
+                          animate={{ scale: 1, opacity: 1 }}
+                          transition={{ type: 'spring', stiffness: 420, damping: 20 }}
+                          className="inline-flex items-center gap-1.5 text-xs font-medium text-[#16A879] whitespace-nowrap shrink-0"
+                        >
                           <CheckCircle2 className="w-3.5 h-3.5" />
                           Credited
-                        </span>
+                        </motion.span>
                       ) : status === 'READY' ? (
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          isLoading={isClaiming}
-                          onClick={() => handleClaimTask(task)}
-                          className="shrink-0"
-                        >
-                          Claim {task.rewardDisplay}
-                        </Button>
+                        <motion.div whileTap={{ scale: 0.96 }} className="shrink-0">
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            isLoading={isClaiming}
+                            onClick={() => handleClaimTask(task)}
+                          >
+                            Claim {task.rewardDisplay}
+                          </Button>
+                        </motion.div>
                       ) : (
                         <Button
                           variant="outline"
@@ -1085,7 +1216,7 @@ export const RewardsVipView: React.FC<Props> = ({
                         </Button>
                       )}
                     </div>
-                  </div>
+                  </motion.div>
                 );
               })}
             </div>
@@ -1129,7 +1260,28 @@ export const RewardsVipView: React.FC<Props> = ({
                 </span>
               </div>
 
-              <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] flex flex-col justify-between gap-2">
+              <motion.div
+                animate={
+                  recentlySettledKey?.key === 'referral:commission'
+                    ? { scale: [1, 1.02, 1], borderColor: ['#202B34', '#16A879', '#202B34'] }
+                    : { scale: 1 }
+                }
+                transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
+                className="relative p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] flex flex-col justify-between gap-2"
+              >
+                <AnimatePresence>
+                  {recentlySettledKey?.key === 'referral:commission' && (
+                    <motion.span
+                      initial={{ opacity: 0, y: 6, scale: 0.9 }}
+                      animate={{ opacity: [0, 1, 1, 0], y: -22, scale: 1.04 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 1.5, ease: [0.16, 1, 0.3, 1] }}
+                      className="pointer-events-none absolute right-4 top-2.5 font-mono tabular-nums text-xs font-semibold text-[#16A879]"
+                    >
+                      {recentlySettledKey.amountDisplay}
+                    </motion.span>
+                  )}
+                </AnimatePresence>
                 <div>
                   <span className="text-xs font-sans text-[#71818B] block">Claimable Balance</span>
                   <span className="text-xl font-semibold text-[#16A879] mt-1 block">
@@ -1137,20 +1289,23 @@ export const RewardsVipView: React.FC<Props> = ({
                   </span>
                 </div>
                 {user && summary && (
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    isLoading={isClaimingCommission}
-                    disabled={
-                      summary.referral.claimableCommissionUsdt <
-                      summary.referral.minClaimThresholdUsdt
-                    }
-                    onClick={handleClaimReferralCommission}
-                  >
-                    Claim to Spot Wallet
-                  </Button>
+                  <motion.div whileTap={{ scale: 0.97 }}>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      isLoading={isClaimingCommission}
+                      disabled={
+                        summary.referral.claimableCommissionUsdt <
+                        summary.referral.minClaimThresholdUsdt
+                      }
+                      onClick={handleClaimReferralCommission}
+                      className="w-full"
+                    >
+                      Claim to Spot Wallet
+                    </Button>
+                  </motion.div>
                 )}
-              </div>
+              </motion.div>
             </div>
 
             {/* Share Referral Code + Link & Bind Referrer Code */}
@@ -1524,6 +1679,17 @@ export const RewardsVipView: React.FC<Props> = ({
           </div>
         )}
       </div>
+
+      {/* Reward Claim Celebration Overlay (Tasks, Vouchers & Referral Commissions) */}
+      <RewardClaimCelebration
+        celebration={claimCelebration}
+        onClose={() => setClaimCelebration(null)}
+        onViewHistory={() => {
+          setClaimCelebration(null);
+          setActiveTab('HISTORY');
+        }}
+        onCopyJournalId={jid => copyToClipboard(jid, 'Ledger Journal ID')}
+      />
     </div>
   );
 };

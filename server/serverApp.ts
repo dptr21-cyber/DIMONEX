@@ -24,6 +24,8 @@ import { listingRouter } from './routes/listing.js';
 import { marketsRouter } from './routes/markets.js';
 import { riskRouter } from './routes/risk.js';
 import { botRouter } from './routes/bot.js';
+import { volumeExecutionV2Router } from './routes/volumeExecutionV2.js';
+import { volumeExecutionV2Service } from './services/bots/VolumeExecutionV2Service.js';
 import { mmConsoleRouter } from './routes/mmConsole.js';
 import { futuresRouter } from './routes/futures.js';
 import { observabilityRouter } from './routes/observability.js';
@@ -82,6 +84,7 @@ export async function startServer() {
   app.use('/api/notifications', notificationsRouter);
   app.use('/api/rewards', rewardsRouter);
   app.use('/api/risk', riskRouter);
+  app.use('/api/bot/volume-v2', volumeExecutionV2Router);
   app.use('/api/bot', botRouter);
   app.use('/api/mm', mmConsoleRouter);
   app.use('/api/bot/mm', mmConsoleRouter);
@@ -185,6 +188,7 @@ export async function startServer() {
     marketLifecycleScheduler.start();
     newsCmsService.startScheduler();
     notificationBroadcastService.start();
+    volumeExecutionV2Service.startRecoveryScheduler();
 
     // Background periodic live rate sync every 60 seconds
     setInterval(() => {

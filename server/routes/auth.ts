@@ -104,6 +104,7 @@ function getNormalizedPreferences(userId: string) {
   return {
     spotLayout,
     hideRecentTradesInChartFocus: prefs?.hideRecentTradesInChartFocus ?? true,
+    chartSettings: prefs?.chartSettings,
     updatedAt: prefs?.updatedAt || dbUser?.updatedAt || Date.now()
   };
 }
@@ -127,7 +128,7 @@ authRouter.put('/preferences', requireAuth, (req, res) => {
     return res.status(404).json({ error: 'Pengguna tidak ditemukan' });
   }
 
-  const { spotLayout, hideRecentTradesInChartFocus } = req.body || {};
+  const { spotLayout, hideRecentTradesInChartFocus, chartSettings } = req.body || {};
   if (spotLayout !== undefined && !VALID_SPOT_LAYOUTS.has(spotLayout)) {
     return res.status(400).json({
       error: 'Preset layout tidak valid. Pilihan: CLASSIC, PRO_TERMINAL, CHART_FOCUS'
@@ -141,6 +142,10 @@ authRouter.put('/preferences', requireAuth, (req, res) => {
       typeof hideRecentTradesInChartFocus === 'boolean'
         ? hideRecentTradesInChartFocus
         : current.hideRecentTradesInChartFocus,
+    chartSettings:
+      chartSettings && typeof chartSettings === 'object'
+        ? { ...(current.chartSettings || {}), ...chartSettings }
+        : current.chartSettings,
     updatedAt: Date.now()
   };
 

@@ -42,6 +42,7 @@ import { Button } from '../ui/Button.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
 import { PanelHeader } from '../ui/PanelHeader.js';
 import { SegmentedTabs } from '../ui/Tabs.js';
+import { VolumeExecutionV2Panel } from './VolumeExecutionV2Panel.js';
 
 interface Props {
   user: UserProfile | null;
@@ -63,7 +64,7 @@ export const BotConsoleView: React.FC<Props> = ({
   onOpenSecurityView,
 }) => {
   const [selectedPairId, setSelectedPairId] = useState('BTC-IDR');
-  const [activeStrategy, setActiveStrategy] = useState<'GRID' | 'LAYERS' | 'SMART' | 'VOLUME'>('GRID');
+  const [activeStrategy, setActiveStrategy] = useState<'GRID' | 'LAYERS' | 'SMART' | 'VOLUME' | 'VOLUME_V2'>('GRID');
 
   // API Key integration state
   const [apiKeys, setApiKeys] = useState<any[]>([]);
@@ -816,6 +817,7 @@ export const BotConsoleView: React.FC<Props> = ({
       </div>
 
       {activeConsoleTab === 'CONFIG' ? (
+        <>
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
           {/* Left Column: Strategy Configurator Forms */}
           <div className="lg:col-span-6 bg-[#141C24] border border-[#202B34] rounded-[10px] p-5 space-y-4">
@@ -854,6 +856,7 @@ export const BotConsoleView: React.FC<Props> = ({
                     { id: 'LAYERS', label: 'Order Layers' },
                     { id: 'SMART', label: 'Smart Trade' },
                     { id: 'VOLUME', label: 'Bot Volume' },
+                    { id: 'VOLUME_V2', label: 'Execution V2' },
                   ] as const
                 ).map(item => {
                   const isActive = activeStrategy === item.id;
@@ -866,17 +869,27 @@ export const BotConsoleView: React.FC<Props> = ({
                         isActive
                           ? item.id === 'VOLUME'
                             ? 'bg-[#401F27] border-[#EA5B65]/40 text-[#EA5B65] font-semibold'
+                            : item.id === 'VOLUME_V2'
+                            ? 'bg-[#12392F] border-[#16A879]/40 text-[#35B887] font-semibold'
                             : 'bg-[#1D2832] border-[#2B3944] text-[#E4EBEF] font-semibold'
                           : 'border-transparent text-[#71818B] hover:text-[#E4EBEF] hover:bg-[#17212B]'
                       }`}
                     >
                       {item.id === 'VOLUME' && <Flame className="w-3 h-3 text-[#EA5B65]" />}
+                      {item.id === 'VOLUME_V2' && <Shield className="w-3 h-3 text-[#35B887]" />}
                       <span>{item.label}</span>
                     </button>
                   );
                 })}
               </div>
             </div>
+
+            {activeStrategy === 'VOLUME_V2' && (
+              <div className="p-3 bg-[#111820] rounded-[7px] border border-[#16A879]/30 text-xs text-[#A1AFB8]">
+                Volume Execution Engine V2 aktif pada workspace penuh di bawah. Klik tab lain kapan saja untuk kembali
+                ke form standar.
+              </div>
+            )}
 
             {/* Live Ledger Balance Card */}
             <div className="bg-[#111820] border border-[#202B34] rounded-[7px] p-3 flex items-center justify-between text-xs font-mono tabular-nums">
@@ -1776,6 +1789,19 @@ export const BotConsoleView: React.FC<Props> = ({
             </div>
           </div>
         </div>
+        {activeStrategy === 'VOLUME_V2' && (
+          <VolumeExecutionV2Panel
+            user={user}
+            pairs={tradingPairs}
+            balances={balances}
+            selectedPairId={selectedPairId}
+            onSelectPairId={setSelectedPairId}
+            onRefreshBalances={onRefreshBalances}
+            onRefreshOrders={onRefreshOrders}
+            onOpenAuthModal={onOpenAuthModal}
+          />
+        )}
+        </>
       ) : (
         /* TAB 2: BOT ACTIVE OPEN ORDERS TABLE */
         <div className="bg-[#141C24] border border-[#202B34] rounded-[10px] overflow-hidden">

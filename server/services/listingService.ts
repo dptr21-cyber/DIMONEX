@@ -381,6 +381,7 @@ export class ListingService {
 
     const listing: ListingRequest = {
       id: listingId,
+      applicationId,
       assetId: asset.id,
       quoteAssetId: quoteAsset.id,
       status: 'PENDING_REVIEW', // Automatically queued for Maker review
@@ -404,7 +405,7 @@ export class ListingService {
     };
 
     db.listingRequests.set(listingId, listing);
-    db.scheduleSave();
+    db.saveToDisk();
 
     ListingAuditService.recordEvent({
       aggregateId: listingId,

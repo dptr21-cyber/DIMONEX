@@ -119,3 +119,87 @@ export interface ChartHoverInfo {
   changePercent: number;
   volume: number;
 }
+
+export type ChartSeriesType =
+  | 'CANDLESTICK'
+  | 'HOLLOW_CANDLES'
+  | 'OHLC_BARS'
+  | 'LINE'
+  | 'AREA'
+  | 'BASELINE'
+  | 'HEIKIN_ASHI';
+
+export type IndicatorId =
+  | 'SMA'
+  | 'EMA'
+  | 'VWAP'
+  | 'BB'
+  | 'RSI'
+  | 'MACD'
+  | 'STOCH_RSI'
+  | 'ATR'
+  | 'BBW'
+  | 'VOL_MA'
+  | 'OBV'
+  | 'MFI';
+
+export type IndicatorCategory = 'TREND' | 'MOMENTUM' | 'VOLATILITY' | 'VOLUME';
+
+export interface IndicatorConfig {
+  id: IndicatorId;
+  label: string;
+  category: IndicatorCategory;
+  overlay: boolean; // true = Main price pane, false = Separate indicator pane
+  enabled: boolean;
+  params: Record<string, number>;
+  color: string;
+}
+
+export type DrawingToolType =
+  | 'NONE'
+  | 'TREND_LINE'
+  | 'HORIZONTAL_LINE'
+  | 'VERTICAL_LINE'
+  | 'RAY'
+  | 'RECTANGLE'
+  | 'BRUSH'
+  | 'TEXT'
+  | 'FIB_RETRACEMENT'
+  | 'FIB_EXTENSION'
+  | 'PRICE_RANGE';
+
+export interface ChartDrawingPoint {
+  time: number;
+  price: number;
+}
+
+export interface ChartDrawing {
+  id: string;
+  tool: Exclude<DrawingToolType, 'NONE'>;
+  points: ChartDrawingPoint[];
+  color: string;
+  lineWidth: number;
+  text?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ChartOverlaySettings {
+  showOpenOrders: boolean;
+  showUserTrades: boolean;
+  showAvgEntry: boolean;
+  showPositionPrice: boolean;
+  showRefBenchmark: boolean;
+  showSupportResistance: boolean;
+  showPriceAlerts: boolean;
+}
+
+export type MultiChartLayoutCount = 1 | 2 | 4;
+
+export interface MultiChartPaneConfig {
+  id: string;
+  pairId: string;
+  timeframe: Timeframe;
+  chartType: ChartSeriesType;
+}
+

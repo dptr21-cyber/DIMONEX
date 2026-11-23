@@ -39,6 +39,7 @@ import {
   reportWebSocketSuccess,
   reportWebSocketFailure,
 } from '../../utils/wsHelper.js';
+import { VolumeExecutionV2Panel } from './VolumeExecutionV2Panel.js';
 
 interface Props {
   user: UserProfile | null;
@@ -50,7 +51,7 @@ interface Props {
   onRefreshOrders?: () => void;
 }
 
-type BotStrategy = 'SPOT_GRID' | 'DCA_LAYERS' | 'SMART_TWAP' | 'VOLUME_MAKER';
+type BotStrategy = 'SPOT_GRID' | 'DCA_LAYERS' | 'SMART_TWAP' | 'VOLUME_MAKER' | 'VOLUME_EXECUTION_V2';
 
 const STRATEGY_CARDS: { id: BotStrategy; title: string; desc: string }[] = [
   {
@@ -70,8 +71,13 @@ const STRATEGY_CARDS: { id: BotStrategy; title: string; desc: string }[] = [
   },
   {
     id: 'VOLUME_MAKER',
-    title: 'Volume Maker Bot',
-    desc: 'Generate continuous 24h market liquidity and turnover across price spreads.',
+    title: 'Volume Maker Bot (V1)',
+    desc: 'Legacy 24h market liquidity & turnover bot across price spreads.',
+  },
+  {
+    id: 'VOLUME_EXECUTION_V2',
+    title: 'Volume Execution V2',
+    desc: 'Institutional TWAP/VWAP/Iceberg/Passive/Aggressive engine with Zero-Float & Risk Limits.',
   },
 ];
 
@@ -572,7 +578,7 @@ export const TradingBotsView: React.FC<Props> = ({
       </div>
 
       {/* Strategy Selector Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
         {STRATEGY_CARDS.map(strat => {
           const isSelected = selectedStrategy === strat.id;
           return (
@@ -597,6 +603,18 @@ export const TradingBotsView: React.FC<Props> = ({
       </div>
 
       {/* Main Workspace */}
+      {selectedStrategy === 'VOLUME_EXECUTION_V2' ? (
+        <VolumeExecutionV2Panel
+          user={user}
+          pairs={pairs}
+          balances={balances}
+          selectedPairId={selectedPairId}
+          onSelectPairId={setSelectedPairId}
+          onRefreshBalances={onRefreshBalances}
+          onRefreshOrders={onRefreshOrders}
+          onOpenAuthModal={onOpenAuthModal}
+        />
+      ) : (
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left: Configuration Form (5 cols) */}
         <div className="lg:col-span-5 bg-[#141C24] border border-[#202B34] rounded-[10px] overflow-hidden self-start">
@@ -1112,6 +1130,7 @@ export const TradingBotsView: React.FC<Props> = ({
           )}
         </div>
       </div>
+      )}
 
       <BalanceDiagnosticModal
         isOpen={isDiagnosticOpen}

@@ -31,6 +31,16 @@ import { useToast } from '../ui/Toast.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
 import { AssetIcon } from '../ui/AssetIcon.js';
 import { SearchInput } from '../ui/Controls.js';
+import { safeFetchJson } from '../../lib/safeFetch.js';
+
+const RECENT_LISTING_APPS_KEY = 'dimonex_recent_listing_apps';
+
+interface RecentListingApp {
+  applicationId: string;
+  tokenSymbol: string;
+  tokenName: string;
+  createdAt: number;
+}
 
 interface Props {
   user: UserProfile | null;
@@ -89,6 +99,16 @@ export const ListingPortalPage: React.FC<Props> = ({
   const [isTracking, setIsTracking] = useState(false);
   const [trackingError, setTrackingError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState(false);
+  const [recentApplications, setRecentApplications] = useState<RecentListingApp[]>(() => {
+    try {
+      const raw = localStorage.getItem(RECENT_LISTING_APPS_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.slice(0, 6) : [];
+    } catch {
+      return [];
+    }
+  });
 
   useEffect(() => {
     loadPublicAssets();
@@ -191,18 +211,40 @@ export const ListingPortalPage: React.FC<Props> = ({
         withdrawalEnabled: true,
       };
 
-      const res = await fetch('/api/listing/apply', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      const result = await safeFetchJson<{ success?: boolean; data?: any; error?: string }>(
+        '/api/listing/apply',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }
+      );
 
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json.error || 'Gagal mengajukan listing');
+      if (!result.ok || !result.data?.data) {
+        throw new Error(result.error || result.data?.error || 'Gagal mengajukan listing');
       }
 
-      setSubmittedResult(json.data);
+      const created = result.data.data;
+      setSubmittedResult(created);
+      if (created.applicationId) {
+        setRecentApplications(prev => {
+          const next: RecentListingApp[] = [
+            {
+              applicationId: created.applicationId,
+              tokenSymbol: created.tokenSymbol || formData.tokenSymbol.toUpperCase(),
+              tokenName: formData.tokenName.trim() || created.tokenSymbol,
+              createdAt: created.createdAt || Date.now(),
+            },
+            ...prev.filter(item => item.applicationId !== created.applicationId),
+          ].slice(0, 6);
+          try {
+            localStorage.setItem(RECENT_LISTING_APPS_KEY, JSON.stringify(next));
+          } catch {
+            // ignore storage quota errors
+          }
+          return next;
+        });
+      }
       showToast(
         'success',
         'Pengajuan Terkirim',
@@ -217,9 +259,12 @@ export const ListingPortalPage: React.FC<Props> = ({
   };
 
   const handleTrackApplication = async (queryToTrack?: string) => {
-    const q = (queryToTrack || trackingQuery).trim();
+    const q = (queryToTrack !== undefined ? queryToTrack : trackingQuery).trim();
+    if (queryToTrack !== undefined) {
+      setTrackingQuery(q);
+    }
     if (!q) {
-      setTrackingError('Masukkan Application ID atau Simbol Token untuk melacak.');
+      setTrackingError('Masukkan Application ID, Simbol Token, atau Pair untuk melacak.');
       return;
     }
 
@@ -228,14 +273,17 @@ export const ListingPortalPage: React.FC<Props> = ({
     setTrackingResult(null);
 
     try {
-      const res = await fetch(`/api/listing/track/${encodeURIComponent(q)}`);
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json.error || 'Pengajuan listing tidak ditemukan.');
+      const result = await safeFetchJson<{ success?: boolean; data?: any; error?: string }>(
+        `/api/listing/track?q=${encodeURIComponent(q)}`
+      );
+      if (!result.ok || !result.data?.data) {
+        throw new Error(
+          result.error || result.data?.error || 'Pengajuan listing tidak ditemukan.'
+        );
       }
-      setTrackingResult(json.data);
+      setTrackingResult(result.data.data);
     } catch (err: any) {
-      setTrackingError(err.message);
+      setTrackingError(err.message || 'Gagal memuat status pengajuan listing.');
     } finally {
       setIsTracking(false);
     }
@@ -935,7 +983,7 @@ export const ListingPortalPage: React.FC<Props> = ({
                   value={trackingQuery}
                   onChange={setTrackingQuery}
                   onKeyDown={e => e.key === 'Enter' && handleTrackApplication()}
-                  placeholder="e.g. REQ-..., SOL, ETH..."
+                  placeholder="Contoh: REQ-..., SOL, ETH, BTC-IDR, atau email kontak"
                   className="flex-1"
                 />
                 <Button
@@ -947,6 +995,22 @@ export const ListingPortalPage: React.FC<Props> = ({
                 </Button>
               </div>
 
+              {recentApplications.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-[#202B34] flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] text-[#71818B]">Pengajuan Terakhir Anda:</span>
+                  {recentApplications.map(app => (
+                    <button
+                      key={app.applicationId}
+                      type="button"
+                      onClick={() => handleTrackApplication(app.applicationId)}
+                      className="px-2.5 py-1 rounded-[6px] bg-[#111820] hover:bg-[#17212B] border border-[#2B3944] text-[11px] font-mono text-[#C1D0D6] hover:text-[#E4EBEF] transition-colors cursor-pointer"
+                    >
+                      {app.tokenSymbol} · {app.applicationId}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {trackingError && (
                 <div className="mt-3 p-3 rounded-[7px] bg-[#401F27]/50 border border-[#EA5B65]/40 text-xs text-[#EA5B65] flex items-center gap-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
@@ -957,23 +1021,76 @@ export const ListingPortalPage: React.FC<Props> = ({
 
             {trackingResult && (
               <div className="p-6 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-6">
-                <div className="flex items-center justify-between border-b border-[#202B34] pb-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#202B34] pb-4">
                   <div>
                     <span className="text-[10px] font-mono text-[#71818B] uppercase tracking-wider block">
-                      Token Proposal
+                      {trackingResult.source === 'EXCHANGE_REGISTRY'
+                        ? 'Aset Terdaftar di DIMONEX'
+                        : 'Token Proposal'}
                     </span>
                     <h2 className="text-lg font-semibold text-[#E4EBEF] flex items-center gap-2 mt-0.5">
                       <span>{trackingResult.tokenName}</span>
                       <StatusBadge tone="brand">{trackingResult.tokenSymbol}</StatusBadge>
                     </h2>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <span className="text-[11px] font-mono text-[#A1AFB8]">
+                        ID: {trackingResult.applicationId || trackingResult.id}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          copyToClipboard(trackingResult.applicationId || trackingResult.id)
+                        }
+                        className="p-1 rounded-[5px] bg-[#17212B] hover:bg-[#222F3A] text-[#A1AFB8] hover:text-[#E4EBEF] border border-[#2B3944] transition-colors cursor-pointer"
+                        title="Salin Application ID"
+                      >
+                        {copiedId ? (
+                          <Check className="w-3 h-3 text-[#16A879]" />
+                        ) : (
+                          <Copy className="w-3 h-3" />
+                        )}
+                      </button>
+                    </div>
                   </div>
-                  <div className="text-right">
+                  <div className="sm:text-right">
                     <span className="text-[10px] text-[#71818B] block">Target Pasar</span>
                     <span className="font-mono text-xs font-semibold text-[#E4EBEF]">
                       {trackingResult.pair}
                     </span>
                   </div>
                 </div>
+
+                {(trackingResult.status === 'REJECTED' ||
+                  trackingResult.status === 'CANCELLED' ||
+                  trackingResult.status === 'RETIRED') && (
+                  <div className="p-3.5 rounded-[7px] bg-[#401F27]/50 border border-[#EA5B65]/40 text-xs text-[#EA5B65] flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold">
+                        {trackingResult.status === 'REJECTED'
+                          ? 'Pengajuan Ditolak oleh Komite Review'
+                          : trackingResult.status === 'CANCELLED'
+                          ? 'Pengajuan Dibatalkan'
+                          : 'Aset Telah Dinonaktifkan / Delisted'}
+                      </p>
+                      {trackingResult.approvalReason && (
+                        <p className="text-[#E4EBEF]/90 mt-0.5">{trackingResult.approvalReason}</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {trackingResult.status === 'SUSPENDED' && (
+                  <div className="p-3.5 rounded-[7px] bg-[#3A2D14]/60 border border-[#E6B34B]/40 text-xs text-[#E6B34B] flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold">Pasar Sedang Disuspend Sementara</p>
+                      <p className="text-[#E4EBEF]/90 mt-0.5">
+                        Perdagangan untuk aset ini sementara dihentikan oleh tim operasional DIMONEX.
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 {/* 4-Stage Progress */}
                 <div>
@@ -1003,8 +1120,10 @@ export const ListingPortalPage: React.FC<Props> = ({
                         desc: 'Pasar live & order book',
                       },
                     ].map(step => {
-                      const done = trackingResult.stage >= step.stage;
-                      const current = trackingResult.stage === step.stage - 1;
+                      const isRejectedOrCancelled = trackingResult.stage === 0;
+                      const done = !isRejectedOrCancelled && trackingResult.stage >= step.stage;
+                      const current =
+                        !isRejectedOrCancelled && trackingResult.stage === step.stage - 1;
                       return (
                         <div
                           key={step.stage}
@@ -1032,9 +1151,22 @@ export const ListingPortalPage: React.FC<Props> = ({
 
                 {/* Details */}
                 <div className="p-4 rounded-[7px] bg-[#111820] border border-[#202B34] space-y-2.5 text-xs">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between gap-2">
                     <span className="text-[#A1AFB8]">Status Terkini:</span>
-                    <StatusBadge tone="brand">
+                    <StatusBadge
+                      tone={
+                        trackingResult.status === 'ACTIVE'
+                          ? 'buy'
+                          : trackingResult.status === 'REJECTED' ||
+                            trackingResult.status === 'CANCELLED' ||
+                            trackingResult.status === 'RETIRED'
+                          ? 'sell'
+                          : trackingResult.status === 'SUSPENDED' ||
+                            trackingResult.status === 'SCHEDULED'
+                          ? 'warning'
+                          : 'brand'
+                      }
+                    >
                       {trackingResult.stageName} ({trackingResult.status})
                     </StatusBadge>
                   </div>
@@ -1042,6 +1174,30 @@ export const ListingPortalPage: React.FC<Props> = ({
                     <span className="text-[#A1AFB8]">Jaringan Token:</span>
                     <span className="font-mono text-[#E4EBEF]">{trackingResult.network}</span>
                   </div>
+                  {trackingResult.scheduledAt && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-[#A1AFB8]">Jadwal Peluncuran Spot:</span>
+                      <span className="font-mono text-[#E6B34B]">
+                        {new Date(trackingResult.scheduledAt).toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                  )}
+                  {trackingResult.createdAt && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-[#A1AFB8]">Waktu Pengajuan / Terdaftar:</span>
+                      <span className="font-mono text-[#C1D0D6]">
+                        {new Date(trackingResult.createdAt).toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                  )}
+                  {trackingResult.updatedAt && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-[#A1AFB8]">Pembaruan Terakhir:</span>
+                      <span className="font-mono text-[#C1D0D6]">
+                        {new Date(trackingResult.updatedAt).toLocaleString('id-ID')}
+                      </span>
+                    </div>
+                  )}
 
                   <div className="flex items-center justify-between pt-2 border-t border-[#202B34]">
                     <span className="text-[#A1AFB8]">Saluran Deposit:</span>
@@ -1093,7 +1249,11 @@ export const ListingPortalPage: React.FC<Props> = ({
                   {trackingResult.approvalReason && (
                     <div className="flex items-start justify-between gap-4 pt-2 border-t border-[#202B34]">
                       <span className="text-[#A1AFB8]">Catatan Review:</span>
-                      <span className="text-[#35B887] text-right font-medium">
+                      <span
+                        className={`text-right font-medium ${
+                          trackingResult.status === 'REJECTED' ? 'text-[#EA5B65]' : 'text-[#35B887]'
+                        }`}
+                      >
                         {trackingResult.approvalReason}
                       </span>
                     </div>

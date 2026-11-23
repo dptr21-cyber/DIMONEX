@@ -1216,5 +1216,110 @@ export interface UserNotificationPreferencesItem {
   updatedAt: number;
 }
 
+export type VolumeExecutionV2Strategy =
+  | 'TWAP'
+  | 'VWAP'
+  | 'ICEBERG'
+  | 'PASSIVE_LIMIT'
+  | 'AGGRESSIVE_LIMIT';
+
+export type VolumeExecutionV2Mode = 'LIVE' | 'SIMULATION';
+
+export type VolumeExecutionV2Status =
+  | 'DRAFT'
+  | 'READY'
+  | 'RUNNING'
+  | 'PAUSED'
+  | 'COMPLETED'
+  | 'STOPPED'
+  | 'RISK_HALTED'
+  | 'FAILED';
+
+export interface VolumeExecutionV2Config {
+  pairId: string;
+  side: 'BUY' | 'SELL';
+  strategy: VolumeExecutionV2Strategy;
+  mode: VolumeExecutionV2Mode;
+  targetQuantity: string;
+  sliceMinQuantity: string;
+  sliceMaxQuantity: string;
+  icebergDisplayQuantity?: string;
+  tickSize: string;
+  lotSize: string;
+  durationSeconds: number;
+  intervalSeconds: number;
+  maxOrderNotionalQuote: string;
+  maxCumulativeExposureQuote: string;
+  maxSlippageBps: number;
+  maxParticipationRateBps: number;
+  priceCollarMin: string;
+  priceCollarMax: string;
+  maxOrdersPerMinute: number;
+  dailyExecutionLimitBase: string;
+  maxPartialFillRetries: number;
+  orderTimeoutSeconds: number;
+  passiveOffsetTicks?: number;
+}
+
+export interface VolumeExecutionV2BotItem {
+  id: string;
+  userId: string;
+  userEmail: string;
+  name: string;
+  pairId: string;
+  strategy: VolumeExecutionV2Strategy;
+  mode: VolumeExecutionV2Mode;
+  status: VolumeExecutionV2Status;
+  config: VolumeExecutionV2Config;
+  checkpoint: {
+    sliceIndex: number;
+    lastSliceIdempotencyKey: string;
+    lastActiveOrderId?: string;
+    lastActiveOrderPlacedAt?: number;
+    lastSliceRetryCount: number;
+    lastTickAt: number;
+    rateWindowStart: number;
+    ordersInRateWindow: number;
+    arrivalBenchmarkPriceUnits: string;
+  };
+  stats: {
+    targetQuantityUnits: string;
+    executedQuantityUnits: string;
+    remainingQuantityUnits: string;
+    fillPercentageBps: number;
+    averageExecutionPriceUnits: string;
+    totalQuoteNotionalUnits: string;
+    totalFeesQuoteUnits: string;
+    totalFeesBaseUnits: string;
+    slippageBps: number;
+    executionDurationMs: number;
+    rejectedOrderCount: number;
+    orderBreakdown: {
+      submitted: number;
+      accepted: number;
+      partiallyFilled: number;
+      filled: number;
+      cancelled: number;
+      rejected: number;
+      expired: number;
+    };
+  };
+  processedTradeIds: string[];
+  deployedOrderIds: string[];
+  submittedClientOrderIds: string[];
+  lastRiskReason?: string;
+  startedAt?: number;
+  completedAt?: number;
+  stoppedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+  logs: Array<{
+    timestamp: number;
+    type: 'INFO' | 'ORDER' | 'FILL' | 'RISK' | 'ERROR' | 'SIMULATION';
+    message: string;
+  }>;
+}
+
+
 
 

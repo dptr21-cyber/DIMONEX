@@ -16,9 +16,68 @@ export type OrderStatus = 'NEW' | 'PARTIALLY_FILLED' | 'FILLED' | 'CANCELLED' | 
 export type Environment = 'DEMO' | 'STAGING' | 'PRODUCTION';
 export type SpotLayoutPreset = 'CLASSIC' | 'PRO_TERMINAL' | 'CHART_FOCUS';
 
+export interface ChartDrawingPoint {
+  time: number;
+  price: number;
+}
+
+export interface ChartDrawingRecord {
+  id: string;
+  userId: string;
+  pairId: string;
+  tool:
+    | 'TREND_LINE'
+    | 'HORIZONTAL_LINE'
+    | 'VERTICAL_LINE'
+    | 'RAY'
+    | 'RECTANGLE'
+    | 'BRUSH'
+    | 'TEXT'
+    | 'FIB_RETRACEMENT'
+    | 'FIB_EXTENSION'
+    | 'PRICE_RANGE';
+  points: ChartDrawingPoint[];
+  color?: string;
+  lineWidth?: number;
+  text?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UserChartPreferences {
+  chartType?: 'CANDLESTICK' | 'HOLLOW_CANDLES' | 'OHLC_BARS' | 'LINE' | 'AREA' | 'BASELINE' | 'HEIKIN_ASHI';
+  timeframe?: string;
+  multiChartLayout?: 1 | 2 | 4;
+  multiChartPanels?: Array<{
+    id: string;
+    pairId: string;
+    timeframe: string;
+    chartType: string;
+  }>;
+  indicators?: Array<{
+    id: string;
+    enabled: boolean;
+    params: Record<string, number>;
+    color?: string;
+  }>;
+  overlays?: {
+    showOpenOrders: boolean;
+    showUserTrades: boolean;
+    showAvgEntry: boolean;
+    showPositionPrice: boolean;
+    showRefBenchmark: boolean;
+    showSupportResistance: boolean;
+    showPriceAlerts: boolean;
+  };
+  autoScale?: boolean;
+  scaleMode?: 'NORMAL' | 'LOG' | 'PERCENT';
+  crosshairMode?: 'NORMAL' | 'MAGNET';
+}
+
 export interface UserTradingPreferences {
   spotLayout: SpotLayoutPreset;
   hideRecentTradesInChartFocus?: boolean;
+  chartSettings?: UserChartPreferences;
   updatedAt: number;
 }
 export type BotStatus = 'DRAFT' | 'VALIDATING' | 'READY' | 'RUNNING' | 'PAUSED' | 'STOPPING' | 'STOPPED' | 'ERROR' | 'RISK_HALTED';
@@ -677,6 +736,7 @@ export interface Asset {
 
 export interface ListingRequest {
   id: string;
+  applicationId?: string;   // Public portal tracking code (e.g. REQ-...)
   assetId: string;
   quoteAssetId: string;     // Default quote asset is IDR
   status: ListingStatus;
@@ -1372,6 +1432,125 @@ export interface ReferralPayoutRecord {
   idempotencyKey: string;
   claimedAt: number;
 }
+
+// ============================================================================
+// VOLUME EXECUTION & LIQUIDITY MANAGEMENT ENGINE V2 ENTITIES
+// Strictly additive alongside legacy VOLUME_BOT (V1). Zero float math.
+// ============================================================================
+
+export type VolumeExecutionV2Strategy =
+  | 'TWAP'
+  | 'VWAP'
+  | 'ICEBERG'
+  | 'PASSIVE_LIMIT'
+  | 'AGGRESSIVE_LIMIT';
+
+export type VolumeExecutionV2Mode = 'LIVE' | 'SIMULATION';
+
+export type VolumeExecutionV2Status =
+  | 'DRAFT'
+  | 'READY'
+  | 'RUNNING'
+  | 'PAUSED'
+  | 'COMPLETED'
+  | 'STOPPED'
+  | 'RISK_HALTED'
+  | 'FAILED';
+
+export interface VolumeExecutionV2Config {
+  pairId: string;
+  side: OrderSide;
+  strategy: VolumeExecutionV2Strategy;
+  mode: VolumeExecutionV2Mode;
+  targetQuantity: string;
+  sliceMinQuantity: string;
+  sliceMaxQuantity: string;
+  icebergDisplayQuantity?: string;
+  tickSize: string;
+  lotSize: string;
+  durationSeconds: number;
+  intervalSeconds: number;
+  maxOrderNotionalQuote: string;
+  maxCumulativeExposureQuote: string;
+  maxSlippageBps: number;
+  maxParticipationRateBps: number;
+  priceCollarMin: string;
+  priceCollarMax: string;
+  maxOrdersPerMinute: number;
+  dailyExecutionLimitBase: string;
+  maxPartialFillRetries: number;
+  orderTimeoutSeconds: number;
+  passiveOffsetTicks?: number;
+}
+
+export interface VolumeExecutionV2OrderBreakdown {
+  submitted: number;
+  accepted: number;
+  partiallyFilled: number;
+  filled: number;
+  cancelled: number;
+  rejected: number;
+  expired: number;
+}
+
+export interface VolumeExecutionV2Checkpoint {
+  sliceIndex: number;
+  lastSliceIdempotencyKey: string;
+  lastActiveOrderId?: string;
+  lastActiveOrderPlacedAt?: number;
+  lastSliceRetryCount: number;
+  lastTickAt: number;
+  rateWindowStart: number;
+  ordersInRateWindow: number;
+  arrivalBenchmarkPriceUnits: string;
+}
+
+export interface VolumeExecutionV2Stats {
+  targetQuantityUnits: string;
+  executedQuantityUnits: string;
+  remainingQuantityUnits: string;
+  fillPercentageBps: number; // 0 .. 10000
+  averageExecutionPriceUnits: string;
+  totalQuoteNotionalUnits: string;
+  totalFeesQuoteUnits: string;
+  totalFeesBaseUnits: string;
+  slippageBps: number;
+  executionDurationMs: number;
+  rejectedOrderCount: number;
+  orderBreakdown: VolumeExecutionV2OrderBreakdown;
+}
+
+export interface VolumeExecutionV2LogEntry {
+  timestamp: number;
+  type: 'INFO' | 'ORDER' | 'FILL' | 'RISK' | 'ERROR' | 'SIMULATION';
+  message: string;
+}
+
+export interface VolumeExecutionV2Bot {
+  id: string;
+  userId: string;
+  userEmail: string;
+  name: string;
+  pairId: string;
+  strategy: VolumeExecutionV2Strategy;
+  mode: VolumeExecutionV2Mode;
+  status: VolumeExecutionV2Status;
+  config: VolumeExecutionV2Config;
+  checkpoint: VolumeExecutionV2Checkpoint;
+  stats: VolumeExecutionV2Stats;
+  processedTradeIds: string[];
+  deployedOrderIds: string[];
+  submittedClientOrderIds: string[];
+  idempotencyKey?: string;
+  lastRiskReason?: string;
+  startedAt?: number;
+  completedAt?: number;
+  stoppedAt?: number;
+  createdAt: number;
+  updatedAt: number;
+  logs: VolumeExecutionV2LogEntry[];
+}
+
 
 
 
