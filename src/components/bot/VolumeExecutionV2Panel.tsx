@@ -9,7 +9,7 @@
  * - Real Ledger Available/Locked inventory, full BigInt metrics, Risk Controls, & Execution Audit Log
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -124,20 +124,22 @@ export const VolumeExecutionV2Panel: React.FC<Props> = ({
   const [expandedLogBotId, setExpandedLogBotId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'err'; msg: string } | null>(null);
 
-  // Sync sensible pair defaults when selected pair changes
+  // Sync sensible pair defaults when selected pair changes (without wiping user edits on every ticker tick)
+  const lastSeededPairIdRef = useRef<string | null>(null);
   useEffect(() => {
-    const rawLast = safeBigInt(selectedPair.lastPrice || '0');
-    if (rawLast <= 0n) return;
-    const scale = 10n ** BigInt(quoteDec);
-    const minCollar = (rawLast * 85n) / 100n;
-    const maxCollar = (rawLast * 115n) / 100n;
-    const wholeLast = rawLast / scale;
+    if (lastSeededPairIdRef.current === selectedPair.id) return;
+    lastSeededPairIdRef.current = selectedPair.id;
 
-    setPriceCollarMin(formatUnitsDecimal(minCollar.toString(), quoteDec, quoteDec));
-    setPriceCollarMax(formatUnitsDecimal(maxCollar.toString(), quoteDec, quoteDec));
+    const rawLast = safeBigInt(selectedPair.lastPrice || '0');
+    if (rawLast > 0n) {
+      const minCollar = (rawLast * 85n) / 100n;
+      const maxCollar = (rawLast * 115n) / 100n;
+      setPriceCollarMin(formatUnitsDecimal(minCollar.toString(), quoteDec, quoteDec));
+      setPriceCollarMax(formatUnitsDecimal(maxCollar.toString(), quoteDec, quoteDec));
+    }
 
     if (selectedPair.quoteCurrency === 'USDT') {
-      const refNotional = wholeLast > 0n ? '5000' : '1000';
+      const refNotional = rawLast > 0n ? '5000' : '1000';
       setMaxOrderNotionalQuote(refNotional);
       setMaxCumulativeExposureQuote(String(Number(refNotional) * 5));
     } else {
@@ -167,12 +169,12 @@ export const VolumeExecutionV2Panel: React.FC<Props> = ({
   }, [selectedPair.id, selectedPair.lastPrice, selectedPair.baseCurrency, selectedPair.quoteCurrency, quoteDec]);
 
   const loadBots = useCallback(async () => {
-    if (!user) return;
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!user || !token) return;
     setIsLoading(true);
     try {
-      const token = localStorage.getItem('dimonex_session_token');
       const res = await fetch('/api/bot/volume-v2/list', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
         const data = await res.json();
@@ -198,19 +200,20 @@ export const VolumeExecutionV2Panel: React.FC<Props> = ({
 
   const handleDeploy = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) {
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!user || !token) {
       onOpenAuthModal?.();
+      setFeedback({ type: 'err', msg: 'Silakan login terlebih dahulu untuk menjalankan Volume Execution V2.' });
       return;
     }
     setFeedback(null);
     setIsDeploying(true);
     try {
-      const token = localStorage.getItem('dimonex_session_token');
       const res = await fetch('/api/bot/volume-v2/deploy', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           name: botName || undefined,
@@ -256,7 +259,11 @@ export const VolumeExecutionV2Panel: React.FC<Props> = ({
   };
 
   const handleBotAction = async (botId: string, action: 'pause' | 'resume' | 'stop' | 'reconcile') => {
-    const token = localStorage.getItem('dimonex_session_token');
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!token) {
+      onOpenAuthModal?.();
+      return;
+    }
     try {
       const url =
         action === 'reconcile'
@@ -266,7 +273,7 @@ export const VolumeExecutionV2Panel: React.FC<Props> = ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          Authorization: `Bearer ${token}`,
         },
         body: action === 'reconcile' ? undefined : JSON.stringify({ botId }),
       });
@@ -282,11 +289,15 @@ export const VolumeExecutionV2Panel: React.FC<Props> = ({
   };
 
   const handleEmergencyStopAll = async () => {
-    const token = localStorage.getItem('dimonex_session_token');
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!token) {
+      onOpenAuthModal?.();
+      return;
+    }
     try {
       const res = await fetch('/api/bot/volume-v2/emergency-stop-all', {
         method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Emergency stop gagal');

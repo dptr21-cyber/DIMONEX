@@ -64,6 +64,8 @@ import {
 } from './chartTypes.js';
 import {
   DEFAULT_INDICATORS,
+  mergeIndicators,
+  formatIndicatorDisplayLabel,
   computeHeikinAshi,
   computeSMA,
   computeEMA,
@@ -97,6 +99,10 @@ interface DimonexChartProps {
   user?: UserProfile | null;
   compact?: boolean;
   onHoverInfoChange?: (info: ChartHoverInfo | null) => void;
+  indicators?: IndicatorConfig[];
+  onIndicatorsChange?: React.Dispatch<React.SetStateAction<IndicatorConfig[]>>;
+  onIndicatorValuesChange?: (values: Record<string, string>) => void;
+  hideInlineIndicatorLegend?: boolean;
 }
 
 export const TF_SECONDS: Record<string, number> = {
@@ -165,23 +171,6 @@ interface SavedChartSettings {
   drawingColor: string;
 }
 
-function mergeIndicators(saved?: Partial<IndicatorConfig>[]): IndicatorConfig[] {
-  if (!Array.isArray(saved) || saved.length === 0) {
-    return DEFAULT_INDICATORS.map(d => ({ ...d, params: { ...d.params } }));
-  }
-  const map = new Map(saved.map(s => [s.id, s]));
-  return DEFAULT_INDICATORS.map(def => {
-    const match = map.get(def.id);
-    if (!match) return { ...def, params: { ...def.params } };
-    return {
-      ...def,
-      enabled: typeof match.enabled === 'boolean' ? match.enabled : def.enabled,
-      color: typeof match.color === 'string' ? match.color : def.color,
-      params: match.params ? { ...def.params, ...match.params } : { ...def.params },
-    };
-  });
-}
-
 function loadSavedSettings(user?: UserProfile | null): SavedChartSettings {
   const userCfg = (user?.preferences as any)?.chartSettings;
   let localCfg: any = null;
@@ -201,33 +190,6 @@ function loadSavedSettings(user?: UserProfile | null): SavedChartSettings {
   };
 }
 
-function formatIndicatorDisplayLabel(cfg: IndicatorConfig): string {
-  switch (cfg.id) {
-    case 'SMA':
-      return `SMA(${cfg.params.period ?? 7})`;
-    case 'EMA':
-      return `EMA(${cfg.params.period ?? 25})`;
-    case 'BB':
-      return `BB(${cfg.params.period ?? 20},${cfg.params.stdDev ?? 2})`;
-    case 'VOL_MA':
-      return `VolMA(${cfg.params.period ?? 20})`;
-    case 'RSI':
-      return `RSI(${cfg.params.period ?? 14})`;
-    case 'MACD':
-      return `MACD(${cfg.params.fast ?? 12},${cfg.params.slow ?? 26},${cfg.params.signal ?? 9})`;
-    case 'STOCH_RSI':
-      return `StochRSI(${cfg.params.rsiPeriod ?? 14},${cfg.params.stochPeriod ?? 14},${cfg.params.kPeriod ?? 3},${cfg.params.dPeriod ?? 3})`;
-    case 'ATR':
-      return `ATR(${cfg.params.period ?? 14})`;
-    case 'BBW':
-      return `BBW(${cfg.params.period ?? 20},${cfg.params.stdDev ?? 2})`;
-    case 'MFI':
-      return `MFI(${cfg.params.period ?? 14})`;
-    default:
-      return cfg.id;
-  }
-}
-
 export const DimonexChart: React.FC<DimonexChartProps> = ({
   pair,
   recentTrades,
@@ -241,6 +203,10 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
   user,
   compact = false,
   onHoverInfoChange,
+  indicators: controlledIndicators,
+  onIndicatorsChange,
+  onIndicatorValuesChange,
+  hideInlineIndicatorLegend = false,
 }) => {
   const initialSettings = useMemo(() => loadSavedSettings(user), []);
 
@@ -251,7 +217,18 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     onChartTypeChange?.(next);
   };
 
-  const [indicators, setIndicators] = useState<IndicatorConfig[]>(initialSettings.indicators);
+  const [internalIndicators, setInternalIndicators] = useState<IndicatorConfig[]>(initialSettings.indicators);
+  const indicators = controlledIndicators ?? internalIndicators;
+  const setIndicators: React.Dispatch<React.SetStateAction<IndicatorConfig[]>> = useCallback(
+    updater => {
+      if (onIndicatorsChange) {
+        onIndicatorsChange(updater);
+      } else {
+        setInternalIndicators(updater);
+      }
+    },
+    [onIndicatorsChange]
+  );
   const [overlays, setOverlays] = useState<ChartOverlaySettings>(() => ({
     ...initialSettings.overlays,
     showRefBenchmark: externalShowRef !== undefined ? externalShowRef : initialSettings.overlays.showRefBenchmark,
@@ -354,14 +331,14 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     const saved = (user.preferences as any)?.chartSettings;
     if (saved && typeof saved === 'object') {
       if (!controlledChartType && saved.chartType) setInternalChartType(saved.chartType);
-      if (Array.isArray(saved.indicators)) setIndicators(mergeIndicators(saved.indicators));
+      if (!controlledIndicators && Array.isArray(saved.indicators)) setIndicators(mergeIndicators(saved.indicators));
       if (saved.overlays) setOverlays(prev => ({ ...prev, ...saved.overlays }));
       if (typeof saved.autoScale === 'boolean') setAutoScale(saved.autoScale);
       if (typeof saved.logScale === 'boolean') setLogScale(saved.logScale);
       if (saved.crosshairMode === 'NORMAL' || saved.crosshairMode === 'MAGNET') setCrosshairMode(saved.crosshairMode);
       if (typeof saved.drawingColor === 'string') setDrawingColor(saved.drawingColor);
     }
-  }, [user, controlledChartType]);
+  }, [user, controlledChartType, controlledIndicators, setIndicators]);
 
   // Persist chart settings locally + backend debounced
   const prefSaveTimerRef = useRef<any>(null);
@@ -382,7 +359,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     if (user) {
       if (prefSaveTimerRef.current) clearTimeout(prefSaveTimerRef.current);
       prefSaveTimerRef.current = setTimeout(() => {
-        const token = localStorage.getItem('dimonex_session_token');
+        const token = localStorage.getItem('dimonex_auth_token');
         if (!token) return;
         fetch('/api/auth/preferences', {
           method: 'PUT',
@@ -416,7 +393,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     } catch {}
     setDrawings(localList);
 
-    const token = localStorage.getItem('dimonex_session_token');
+    const token = localStorage.getItem('dimonex_auth_token');
     if (user && token) {
       fetch(`/api/trading/chart-drawings/${pair.id}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -450,7 +427,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
         localStorage.setItem(`dimonex_drawings_${pair.id}`, JSON.stringify(next));
       } catch {}
 
-      const token = localStorage.getItem('dimonex_session_token');
+      const token = localStorage.getItem('dimonex_auth_token');
       if (user && token) {
         if (drawingsSaveTimerRef.current) clearTimeout(drawingsSaveTimerRef.current);
         drawingsSaveTimerRef.current = setTimeout(() => {
@@ -476,7 +453,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       try {
         localStorage.setItem(`dimonex_drawings_${pair.id}`, JSON.stringify(previous));
       } catch {}
-      const token = localStorage.getItem('dimonex_session_token');
+      const token = localStorage.getItem('dimonex_auth_token');
       if (user && token) {
         fetch(`/api/trading/chart-drawings/${pair.id}`, {
           method: 'PUT',
@@ -581,7 +558,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       const dynFormat = { type: 'price' as const, precision: dynPrec, minMove: dynMinMove };
 
       for (const cfg of indicators) {
-        if (!cfg.enabled) continue;
+        if (!cfg.enabled || cfg.visible === false) continue;
         const seriesList = indicatorSeriesRef.current.get(cfg.id);
         if (!seriesList || seriesList.length === 0) continue;
 
@@ -696,8 +673,9 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
         }
       }
       setIndicatorValues(nextReadouts);
+      onIndicatorValuesChange?.(nextReadouts);
     },
-    [indicators, getPrecisionForPrice, refFloatPrice]
+    [indicators, getPrecisionForPrice, refFloatPrice, onIndicatorValuesChange]
   );
 
   // Build / rebuild main series when activeChartType changes without losing bars
@@ -822,7 +800,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
 
       let nextPaneIdx = 1;
       for (const cfg of indicators) {
-        if (!cfg.enabled) continue;
+        if (!cfg.enabled || cfg.visible === false) continue;
         const created: ISeriesApi<any>[] = [];
 
         if (cfg.overlay) {
@@ -1320,7 +1298,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       setUserTradesData(null);
       return;
     }
-    const token = localStorage.getItem('dimonex_session_token');
+    const token = localStorage.getItem('dimonex_auth_token');
     if (!token) return;
     let active = true;
     fetch(`/api/trading/my-trades/${pair.id}`, {
@@ -1340,7 +1318,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
 
   // Fetch user's real Price Alerts
   const fetchPriceAlerts = useCallback(() => {
-    const token = localStorage.getItem('dimonex_session_token');
+    const token = localStorage.getItem('dimonex_auth_token');
     if (!user || !token) {
       setPriceAlerts([]);
       return;
@@ -1609,7 +1587,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
   };
 
   const handleCreatePriceAlert = async () => {
-    const token = localStorage.getItem('dimonex_session_token');
+    const token = localStorage.getItem('dimonex_auth_token');
     if (!user || !token) {
       setAlertFeedback('Sign in to set server-monitored price alerts.');
       return;
@@ -1647,7 +1625,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
   };
 
   const handleDeletePriceAlert = async (alertId: string) => {
-    const token = localStorage.getItem('dimonex_session_token');
+    const token = localStorage.getItem('dimonex_auth_token');
     if (!token) return;
     try {
       const res = await fetch(`/api/trading/price-alerts/${alertId}`, {
@@ -1659,7 +1637,13 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
   };
 
   const toggleIndicator = (id: IndicatorId) => {
-    setIndicators(prev => prev.map(i => (i.id === id ? { ...i, enabled: !i.enabled } : i)));
+    setIndicators(prev =>
+      prev.map(i => (i.id === id ? { ...i, enabled: !i.enabled, visible: !i.enabled ? true : i.visible } : i))
+    );
+  };
+
+  const toggleIndicatorVisibility = (id: IndicatorId) => {
+    setIndicators(prev => prev.map(i => (i.id === id ? { ...i, visible: i.visible === false } : i)));
   };
 
   const updateIndicatorParam = (id: IndicatorId, paramKey: string, val: number) => {
@@ -2079,41 +2063,54 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
             </span>
           )}
 
-          {/* Modular Indicator Legend Chips */}
-          {activeIndicators.length > 0 && (
+          {/* Modular Indicator Legend Chips (shown when DimonexChart is mounted standalone) */}
+          {!hideInlineIndicatorLegend && activeIndicators.length > 0 && (
             <div className="flex items-center gap-1.5 flex-wrap">
-              {activeIndicators.map(ind => (
-                <div
-                  key={ind.id}
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] bg-[#090D12] border border-[#202B34] text-[10px]"
-                >
-                  <span className="font-semibold" style={{ color: ind.color }}>
-                    {formatIndicatorDisplayLabel(ind)}
-                  </span>
-                  {indicatorValues[ind.id] && (
-                    <span className="text-[#A1AFB8]">{indicatorValues[ind.id]}</span>
-                  )}
-                  <button
-                    type="button"
-                    title="Configure Indicator"
-                    onClick={() => {
-                      setEditingIndicatorId(ind.id);
-                      setShowIndicatorsModal(true);
-                    }}
-                    className="text-[#71818B] hover:text-[#E4EBEF] cursor-pointer"
+              {activeIndicators.map(ind => {
+                const isVisible = ind.visible !== false;
+                return (
+                  <div
+                    key={ind.id}
+                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] bg-[#090D12] border border-[#202B34] text-[10px] ${
+                      isVisible ? '' : 'opacity-55'
+                    }`}
                   >
-                    <Settings2 className="w-2.5 h-2.5" />
-                  </button>
-                  <button
-                    type="button"
-                    title="Hide Indicator"
-                    onClick={() => toggleIndicator(ind.id)}
-                    className="text-[#71818B] hover:text-[#EA5B65] cursor-pointer"
-                  >
-                    <X className="w-2.5 h-2.5" />
-                  </button>
-                </div>
-              ))}
+                    <span className="font-semibold" style={{ color: ind.color }}>
+                      {formatIndicatorDisplayLabel(ind)}
+                    </span>
+                    {isVisible && indicatorValues[ind.id] && (
+                      <span className="text-[#A1AFB8]">{indicatorValues[ind.id]}</span>
+                    )}
+                    <button
+                      type="button"
+                      title={isVisible ? 'Hide Indicator' : 'Show Indicator'}
+                      onClick={() => toggleIndicatorVisibility(ind.id)}
+                      className="text-[#71818B] hover:text-[#E4EBEF] cursor-pointer"
+                    >
+                      {isVisible ? <Eye className="w-2.5 h-2.5" /> : <EyeOff className="w-2.5 h-2.5" />}
+                    </button>
+                    <button
+                      type="button"
+                      title="Configure Indicator"
+                      onClick={() => {
+                        setEditingIndicatorId(ind.id);
+                        setShowIndicatorsModal(true);
+                      }}
+                      className="text-[#71818B] hover:text-[#E4EBEF] cursor-pointer"
+                    >
+                      <Settings2 className="w-2.5 h-2.5" />
+                    </button>
+                    <button
+                      type="button"
+                      title="Remove Indicator"
+                      onClick={() => toggleIndicator(ind.id)}
+                      className="text-[#71818B] hover:text-[#EA5B65] cursor-pointer"
+                    >
+                      <X className="w-2.5 h-2.5" />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

@@ -6,17 +6,26 @@
  * Professional Dual-Engine & Multi-Chart Trading Terminal for DIMONEX Obsidian Iridium.
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { LayoutGrid } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { LayoutGrid, Eye, EyeOff, SlidersHorizontal, RotateCcw, X } from 'lucide-react';
 import { TradingPairItem, TradeItem, OrderItem, UserProfile } from '../../types/index.js';
 import { formatQuotePrice, formatPairVolume } from '../../lib/formatters.js';
 import {
   ChartMode,
   ChartSeriesType,
+  IndicatorConfig,
+  IndicatorId,
   MultiChartLayoutCount,
   MultiChartPaneConfig,
   Timeframe,
 } from './chartTypes.js';
+import {
+  DEFAULT_INDICATORS,
+  INDICATOR_PARAM_LABELS,
+  mergeIndicators,
+  formatIndicatorShortName,
+  formatIndicatorParamsSummary,
+} from './chartIndicators.js';
 import { DimonexChart, CHART_TYPE_LABELS } from './DimonexChart.js';
 import { TradingViewChart } from './TradingViewChart.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
@@ -170,6 +179,79 @@ export const TradingChart: React.FC<TradingChartProps> = ({
       clearInterval(interval);
     };
   }, [pair.id]);
+
+  // Technical Indicator State synchronized with DimonexChart & Dynamic Legend
+  const [indicators, setIndicators] = useState<IndicatorConfig[]>(() => {
+    const userSaved = (user?.preferences as any)?.chartSettings?.indicators;
+    if (Array.isArray(userSaved) && userSaved.length > 0) {
+      return mergeIndicators(userSaved);
+    }
+    try {
+      const raw = localStorage.getItem('dimonex_pro_chart_settings_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed?.indicators)) {
+          return mergeIndicators(parsed.indicators);
+        }
+      }
+    } catch {}
+    return DEFAULT_INDICATORS.map(d => ({ ...d, params: { ...d.params } }));
+  });
+
+  const hydratedIndUserRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!user) {
+      hydratedIndUserRef.current = null;
+      return;
+    }
+    if (hydratedIndUserRef.current === user.id) return;
+    hydratedIndUserRef.current = user.id;
+    const saved = (user.preferences as any)?.chartSettings?.indicators;
+    if (Array.isArray(saved) && saved.length > 0) {
+      setIndicators(mergeIndicators(saved));
+    }
+  }, [user]);
+
+  const [indicatorValues, setIndicatorValues] = useState<Record<string, string>>({});
+  const [editingLegendIndId, setEditingLegendIndId] = useState<IndicatorId | null>(null);
+
+  const activeIndicators = useMemo(() => indicators.filter(i => i.enabled), [indicators]);
+  const visibleIndicatorsCount = useMemo(
+    () => activeIndicators.filter(i => i.visible !== false).length,
+    [activeIndicators]
+  );
+
+  const toggleIndicatorVisibility = (id: IndicatorId) => {
+    setIndicators(prev =>
+      prev.map(ind => (ind.id === id ? { ...ind, visible: ind.visible === false } : ind))
+    );
+  };
+
+  const toggleAllIndicatorsVisibility = () => {
+    const nextVisible = visibleIndicatorsCount === 0;
+    setIndicators(prev =>
+      prev.map(ind => (ind.enabled ? { ...ind, visible: nextVisible } : ind))
+    );
+  };
+
+  const updateLegendIndicatorParam = (id: IndicatorId, paramKey: string, value: number) => {
+    if (!Number.isFinite(value) || value < 1) return;
+    setIndicators(prev =>
+      prev.map(ind =>
+        ind.id === id ? { ...ind, params: { ...ind.params, [paramKey]: Math.round(value) } } : ind
+      )
+    );
+  };
+
+  const removeIndicatorFromLegend = (id: IndicatorId) => {
+    setIndicators(prev => prev.map(ind => (ind.id === id ? { ...ind, enabled: false } : ind)));
+    if (editingLegendIndId === id) setEditingLegendIndId(null);
+  };
+
+  const resetLegendIndicators = () => {
+    setIndicators(DEFAULT_INDICATORS.map(d => ({ ...d, params: { ...d.params } })));
+    setEditingLegendIndId(null);
+  };
 
   const isUp = parseFloat(pair.priceChangePercent24h || pair.priceChange24h?.replace('+', '') || '0') >= 0;
 
@@ -415,6 +497,185 @@ export const TradingChart: React.FC<TradingChartProps> = ({
         onCountdownComplete={onRefreshMarkets}
       />
 
+      {/* Dynamic Technical Indicator Legend */}
+      {chartMode === 'DIMONEX' && (
+        <div
+          data-testid="indicator-dynamic-legend"
+          className="flex flex-wrap items-center justify-between gap-2 px-4 py-1.5 bg-[#0E141B] border-b border-[#202B34] text-[11px]"
+        >
+          <div className="flex items-center gap-2 flex-wrap min-w-0">
+            <div className="flex items-center gap-1.5 text-[#71818B] font-medium shrink-0">
+              <SlidersHorizontal className="w-3.5 h-3.5 text-[#8DA5B1]" />
+              <span className="text-[#A1AFB8]">Legend</span>
+              <span className="px-1.5 py-0.5 rounded-[4px] bg-[#141C24] border border-[#202B34] text-[10px] font-mono tabular-nums text-[#8DA5B1]">
+                {visibleIndicatorsCount}/{activeIndicators.length}
+              </span>
+            </div>
+
+            {activeIndicators.length === 0 ? (
+              <div className="flex items-center gap-2 text-[#71818B]">
+                <span>No active technical indicators</span>
+                <button
+                  type="button"
+                  onClick={resetLegendIndicators}
+                  className="px-2 py-0.5 rounded-[4px] bg-[#141C24] border border-[#2B3944] text-[#8DA5B1] hover:text-[#E4EBEF] text-[10px] font-medium cursor-pointer transition-colors"
+                >
+                  Restore Defaults
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {activeIndicators.map(ind => {
+                  const isVisible = ind.visible !== false;
+                  const paramEntries = Object.entries(ind.params || {});
+                  const isEditingParams = editingLegendIndId === ind.id;
+                  const paramSummary = formatIndicatorParamsSummary(ind);
+
+                  return (
+                    <div key={ind.id} className="relative">
+                      <div
+                        className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-[5px] border font-mono tabular-nums transition-opacity ${
+                          isVisible
+                            ? 'bg-[#141C24] border-[#2B3944] text-[#E4EBEF]'
+                            : 'bg-[#090D12] border-[#202B34] text-[#71818B] opacity-60'
+                        }`}
+                      >
+                        <span
+                          className="w-2 h-2 rounded-[2px] shrink-0"
+                          style={{ backgroundColor: isVisible ? ind.color : '#40515D' }}
+                        />
+                        <span className="font-semibold text-[11px]" style={{ color: isVisible ? ind.color : '#71818B' }}>
+                          {formatIndicatorShortName(ind)}
+                        </span>
+
+                        {paramEntries.length > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => setEditingLegendIndId(isEditingParams ? null : ind.id)}
+                            title={`Edit parameters (${paramSummary})`}
+                            className={`text-[10px] px-1 py-0.2 rounded-[3px] border transition-colors cursor-pointer ${
+                              isEditingParams
+                                ? 'bg-[#1D2832] border-[#8DA5B1] text-[#E4EBEF]'
+                                : 'bg-[#090D12] border-[#202B34] text-[#A1AFB8] hover:text-[#E4EBEF] hover:border-[#2B3944]'
+                            }`}
+                          >
+                            ({paramEntries.map(([, v]) => v).join(', ')})
+                          </button>
+                        ) : (
+                          <span className="text-[10px] text-[#71818B]">({paramSummary})</span>
+                        )}
+
+                        {isVisible ? (
+                          indicatorValues[ind.id] && (
+                            <span className="text-[10px] text-[#E4EBEF] pl-0.5">
+                              {indicatorValues[ind.id]}
+                            </span>
+                          )
+                        ) : (
+                          <span className="text-[10px] text-[#71818B] italic">Hidden</span>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => toggleIndicatorVisibility(ind.id)}
+                          title={isVisible ? `Hide ${formatIndicatorShortName(ind)}` : `Show ${formatIndicatorShortName(ind)}`}
+                          aria-label={isVisible ? `Hide ${formatIndicatorShortName(ind)}` : `Show ${formatIndicatorShortName(ind)}`}
+                          aria-pressed={isVisible}
+                          className={`p-0.5 rounded-[3px] transition-colors cursor-pointer ${
+                            isVisible
+                              ? 'text-[#A1AFB8] hover:text-[#E4EBEF]'
+                              : 'text-[#D6A85C] hover:text-[#E4EBEF]'
+                          }`}
+                        >
+                          {isVisible ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => removeIndicatorFromLegend(ind.id)}
+                          title={`Remove ${formatIndicatorShortName(ind)}`}
+                          aria-label={`Remove ${formatIndicatorShortName(ind)}`}
+                          className="p-0.5 rounded-[3px] text-[#71818B] hover:text-[#EA5B65] transition-colors cursor-pointer"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+
+                      {isEditingParams && paramEntries.length > 0 && (
+                        <div className="absolute left-0 top-full mt-1 z-50 min-w-[210px] bg-[#141C24] border border-[#2B3944] rounded-[7px] shadow-2xl p-2.5 space-y-2 text-xs">
+                          <div className="flex items-center justify-between border-b border-[#202B34] pb-1">
+                            <span className="font-semibold text-[#E4EBEF] text-[11px]">
+                              {formatIndicatorShortName(ind)} Parameters
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setEditingLegendIndId(null)}
+                              className="text-[#71818B] hover:text-[#E4EBEF] cursor-pointer"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <div className="space-y-1.5">
+                            {paramEntries.map(([key, val]) => (
+                              <label
+                                key={key}
+                                className="flex items-center justify-between gap-2 text-[11px] text-[#A1AFB8] font-sans"
+                              >
+                                <span>{INDICATOR_PARAM_LABELS[key] || key}</span>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={500}
+                                  value={val}
+                                  onChange={e => updateLegendIndicatorParam(ind.id, key, Number(e.target.value))}
+                                  className="w-16 bg-[#090D12] border border-[#2B3944] focus:border-[#8DA5B1] rounded-[4px] px-1.5 py-0.5 text-right font-mono text-[#E4EBEF] outline-none"
+                                />
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {activeIndicators.length > 0 && (
+            <div className="flex items-center gap-1.5 shrink-0 font-mono">
+              <button
+                type="button"
+                onClick={toggleAllIndicatorsVisibility}
+                title={visibleIndicatorsCount > 0 ? 'Hide All Active Indicators' : 'Show All Active Indicators'}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[5px] bg-[#141C24] border border-[#202B34] hover:border-[#2B3944] text-[10px] text-[#A1AFB8] hover:text-[#E4EBEF] cursor-pointer transition-colors"
+              >
+                {visibleIndicatorsCount > 0 ? (
+                  <>
+                    <EyeOff className="w-3 h-3" />
+                    <span>Hide All</span>
+                  </>
+                ) : (
+                  <>
+                    <Eye className="w-3 h-3 text-[#16A879]" />
+                    <span>Show All</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={resetLegendIndicators}
+                title="Reset Indicators to Defaults"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[5px] bg-[#141C24] border border-[#202B34] hover:border-[#2B3944] text-[10px] text-[#71818B] hover:text-[#E4EBEF] cursor-pointer transition-colors"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Reset</span>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Main Active Engine Canvas */}
       <div className={`relative flex-1 w-full transition-[min-height] duration-150 ${canvasMinHeightClass}`}>
         {chartMode === 'TRADINGVIEW' ? (
@@ -436,6 +697,10 @@ export const TradingChart: React.FC<TradingChartProps> = ({
             refPriceData={refPriceData}
             openOrders={openOrders}
             user={user}
+            indicators={indicators}
+            onIndicatorsChange={setIndicators}
+            onIndicatorValuesChange={setIndicatorValues}
+            hideInlineIndicatorLegend
           />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5 p-1.5 bg-[#090D12] w-full h-full">
@@ -498,6 +763,10 @@ export const TradingChart: React.FC<TradingChartProps> = ({
                       openOrders={openOrders}
                       user={user}
                       compact
+                      indicators={indicators}
+                      onIndicatorsChange={setIndicators}
+                      onIndicatorValuesChange={idx === 0 ? setIndicatorValues : undefined}
+                      hideInlineIndicatorLegend
                     />
                   </div>
                 </div>

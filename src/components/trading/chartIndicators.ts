@@ -42,19 +42,95 @@ export interface SupportResistanceLevel {
 }
 
 export const DEFAULT_INDICATORS: IndicatorConfig[] = [
-  { id: 'SMA', label: 'SMA (7)', category: 'TREND', overlay: true, enabled: true, params: { period: 7 }, color: '#D6A85C' },
-  { id: 'EMA', label: 'EMA (25)', category: 'TREND', overlay: true, enabled: true, params: { period: 25 }, color: '#6D9FE8' },
-  { id: 'VWAP', label: 'VWAP', category: 'TREND', overlay: true, enabled: false, params: {}, color: '#A78BFA' },
-  { id: 'BB', label: 'Bollinger Bands', category: 'TREND', overlay: true, enabled: false, params: { period: 20, stdDev: 2 }, color: '#38BDF8' },
-  { id: 'VOL_MA', label: 'Volume MA (20)', category: 'VOLUME', overlay: true, enabled: false, params: { period: 20 }, color: '#F59E0B' },
-  { id: 'RSI', label: 'RSI (14)', category: 'MOMENTUM', overlay: false, enabled: false, params: { period: 14 }, color: '#F472B6' },
-  { id: 'MACD', label: 'MACD (12,26,9)', category: 'MOMENTUM', overlay: false, enabled: false, params: { fast: 12, slow: 26, signal: 9 }, color: '#34D399' },
-  { id: 'STOCH_RSI', label: 'Stoch RSI (14,14,3,3)', category: 'MOMENTUM', overlay: false, enabled: false, params: { rsiPeriod: 14, stochPeriod: 14, kPeriod: 3, dPeriod: 3 }, color: '#60A5FA' },
-  { id: 'ATR', label: 'ATR (14)', category: 'VOLATILITY', overlay: false, enabled: false, params: { period: 14 }, color: '#FB923C' },
-  { id: 'BBW', label: 'BB Width (20,2)', category: 'VOLATILITY', overlay: false, enabled: false, params: { period: 20, stdDev: 2 }, color: '#2DD4BF' },
-  { id: 'OBV', label: 'OBV', category: 'VOLUME', overlay: false, enabled: false, params: {}, color: '#818CF8' },
-  { id: 'MFI', label: 'MFI (14)', category: 'VOLUME', overlay: false, enabled: false, params: { period: 14 }, color: '#E879F9' },
+  { id: 'SMA', label: 'SMA (7)', category: 'TREND', overlay: true, enabled: true, visible: true, params: { period: 7 }, color: '#D6A85C' },
+  { id: 'EMA', label: 'EMA (25)', category: 'TREND', overlay: true, enabled: true, visible: true, params: { period: 25 }, color: '#6D9FE8' },
+  { id: 'VWAP', label: 'VWAP', category: 'TREND', overlay: true, enabled: false, visible: true, params: {}, color: '#A78BFA' },
+  { id: 'BB', label: 'Bollinger Bands', category: 'TREND', overlay: true, enabled: false, visible: true, params: { period: 20, stdDev: 2 }, color: '#38BDF8' },
+  { id: 'VOL_MA', label: 'Volume MA (20)', category: 'VOLUME', overlay: true, enabled: false, visible: true, params: { period: 20 }, color: '#F59E0B' },
+  { id: 'RSI', label: 'RSI (14)', category: 'MOMENTUM', overlay: false, enabled: false, visible: true, params: { period: 14 }, color: '#F472B6' },
+  { id: 'MACD', label: 'MACD (12,26,9)', category: 'MOMENTUM', overlay: false, enabled: false, visible: true, params: { fast: 12, slow: 26, signal: 9 }, color: '#34D399' },
+  { id: 'STOCH_RSI', label: 'Stoch RSI (14,14,3,3)', category: 'MOMENTUM', overlay: false, enabled: false, visible: true, params: { rsiPeriod: 14, stochPeriod: 14, kPeriod: 3, dPeriod: 3 }, color: '#60A5FA' },
+  { id: 'ATR', label: 'ATR (14)', category: 'VOLATILITY', overlay: false, enabled: false, visible: true, params: { period: 14 }, color: '#FB923C' },
+  { id: 'BBW', label: 'BB Width (20,2)', category: 'VOLATILITY', overlay: false, enabled: false, visible: true, params: { period: 20, stdDev: 2 }, color: '#2DD4BF' },
+  { id: 'OBV', label: 'OBV', category: 'VOLUME', overlay: false, enabled: false, visible: true, params: {}, color: '#818CF8' },
+  { id: 'MFI', label: 'MFI (14)', category: 'VOLUME', overlay: false, enabled: false, visible: true, params: { period: 14 }, color: '#E879F9' },
 ];
+
+export const INDICATOR_PARAM_LABELS: Record<string, string> = {
+  period: 'Period',
+  stdDev: 'Std Dev',
+  fast: 'Fast EMA',
+  slow: 'Slow EMA',
+  signal: 'Signal',
+  rsiPeriod: 'RSI Period',
+  stochPeriod: 'Stoch Period',
+  kPeriod: '%K Smooth',
+  dPeriod: '%D Smooth',
+};
+
+export function mergeIndicators(saved?: Partial<IndicatorConfig>[]): IndicatorConfig[] {
+  if (!Array.isArray(saved) || saved.length === 0) {
+    return DEFAULT_INDICATORS.map(d => ({ ...d, params: { ...d.params } }));
+  }
+  const map = new Map(saved.map(s => [s.id, s]));
+  return DEFAULT_INDICATORS.map(def => {
+    const match = map.get(def.id);
+    if (!match) return { ...def, params: { ...def.params } };
+    return {
+      ...def,
+      enabled: typeof match.enabled === 'boolean' ? match.enabled : def.enabled,
+      visible: typeof match.visible === 'boolean' ? match.visible : true,
+      color: typeof match.color === 'string' ? match.color : def.color,
+      params: match.params ? { ...def.params, ...match.params } : { ...def.params },
+    };
+  });
+}
+
+export function formatIndicatorDisplayLabel(cfg: IndicatorConfig): string {
+  switch (cfg.id) {
+    case 'SMA':
+      return `SMA(${cfg.params.period ?? 7})`;
+    case 'EMA':
+      return `EMA(${cfg.params.period ?? 25})`;
+    case 'BB':
+      return `BB(${cfg.params.period ?? 20},${cfg.params.stdDev ?? 2})`;
+    case 'VOL_MA':
+      return `VolMA(${cfg.params.period ?? 20})`;
+    case 'RSI':
+      return `RSI(${cfg.params.period ?? 14})`;
+    case 'MACD':
+      return `MACD(${cfg.params.fast ?? 12},${cfg.params.slow ?? 26},${cfg.params.signal ?? 9})`;
+    case 'STOCH_RSI':
+      return `StochRSI(${cfg.params.rsiPeriod ?? 14},${cfg.params.stochPeriod ?? 14},${cfg.params.kPeriod ?? 3},${cfg.params.dPeriod ?? 3})`;
+    case 'ATR':
+      return `ATR(${cfg.params.period ?? 14})`;
+    case 'BBW':
+      return `BBW(${cfg.params.period ?? 20},${cfg.params.stdDev ?? 2})`;
+    case 'MFI':
+      return `MFI(${cfg.params.period ?? 14})`;
+    default:
+      return cfg.id;
+  }
+}
+
+export function formatIndicatorShortName(cfg: IndicatorConfig): string {
+  switch (cfg.id) {
+    case 'BB':
+      return 'BB';
+    case 'VOL_MA':
+      return 'Vol MA';
+    case 'STOCH_RSI':
+      return 'Stoch RSI';
+    default:
+      return cfg.id;
+  }
+}
+
+export function formatIndicatorParamsSummary(cfg: IndicatorConfig): string {
+  const entries = Object.entries(cfg.params || {});
+  if (entries.length === 0) return 'Session';
+  return entries.map(([k, v]) => `${INDICATOR_PARAM_LABELS[k] || k}: ${v}`).join(' · ');
+}
 
 export function computeHeikinAshi(bars: CandleItem[]): CandleItem[] {
   if (!bars || bars.length === 0) return [];

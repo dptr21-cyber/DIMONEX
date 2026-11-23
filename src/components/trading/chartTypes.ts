@@ -151,6 +151,7 @@ export interface IndicatorConfig {
   category: IndicatorCategory;
   overlay: boolean; // true = Main price pane, false = Separate indicator pane
   enabled: boolean;
+  visible?: boolean;
   params: Record<string, number>;
   color: string;
 }
