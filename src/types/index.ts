@@ -14,6 +14,7 @@ export type BotStatus = 'DRAFT' | 'VALIDATING' | 'READY' | 'RUNNING' | 'PAUSED' 
 export type BotType = 
   | 'ORDER_BOT' 
   | 'VOLUME_BOT' 
+  | 'VOLUME_SPREAD_BOT'
   | 'PRICE_FOLLOWER' 
   | 'DEPTH_LIQUIDITY' 
   | 'SPOT_GRID' 
@@ -85,6 +86,32 @@ export interface VolumeBotConfig {
   vol_idr_stop_target: string;
   vol_idr_start_threshold: string;
   volume_sell_account_id?: string;
+}
+
+export interface VolumeSpreadBotConfig {
+  account_id: string;
+  counterparty_account_id?: string;
+  spread_mode: 'INSIDE_SPREAD' | 'MIDPOINT_JITTER' | 'PING_PONG_EDGE';
+  side_pattern: 'ALTERNATE' | 'RANDOM' | 'BUY_EATS_SELL' | 'SELL_EATS_BUY';
+  random_min_quantity: string;
+  random_max_quantity: string;
+  min_delay: number;
+  max_delay: number;
+  spread_band_min_pct: number;
+  spread_band_max_pct: number;
+  min_spread_bps: number;
+  fallback_half_spread_bps: number;
+  require_two_sided_book: boolean;
+  cross_delay_ms: number;
+  tick_size?: string;
+  min_limit_price: string;
+  max_limit_price: string;
+  vol_quote_stop_target: string;
+  lastSideExecuted?: 'BUY' | 'SELL';
+  lastSpreadBps?: number;
+  lastExecPriceUnits?: string;
+  spreadSelfTradesCount?: number;
+  executedQuoteVolumeUnits?: string;
 }
 
 export interface PriceFollowerConfig {
@@ -479,6 +506,7 @@ export interface BotInstance {
   errorInfo?: string;
   orderBotConfig?: OrderBotConfig;
   volumeBotConfig?: VolumeBotConfig;
+  volumeSpreadConfig?: VolumeSpreadBotConfig;
   priceFollowerConfig?: PriceFollowerConfig;
   depthLiquidityConfig?: DepthLiquidityConfig;
   movementDepthConfig?: MovementDepthLiquidityConfig;
@@ -1320,6 +1348,140 @@ export interface VolumeExecutionV2BotItem {
   }>;
 }
 
+export type EarnVaultType = 'FLEXIBLE' | 'FIXED' | 'STAKING' | 'LAUNCHPOOL';
+export type EarnVaultStatus = 'ACTIVE' | 'PAUSED' | 'CLOSED';
+export type EarnPositionStatus = 'ACTIVE' | 'MATURED' | 'REDEEMED';
+export type EarnPayoutType = 'DAILY_SETTLEMENT' | 'MANUAL_CLAIM' | 'AUTO_COMPOUND' | 'REDEMPTION_SETTLEMENT';
 
+export interface EarnVaultItem {
+  id: string;
+  asset: string;
+  name: string;
+  assetName: string;
+  assetLogoUrl?: string;
+  decimals: number;
+  type: EarnVaultType;
+  durationDays: number;
+  apyBps: number;
+  apyPct: number;
+  minStakeUnits: string;
+  maxStakeUnits: string;
+  totalCapUnits: string;
+  earlyRedeemAllowed: boolean;
+  earlyRedeemPenaltyBps: number;
+  autoCompoundSupported: boolean;
+  status: EarnVaultStatus;
+  isFeatured: boolean;
+  custodyNote: string;
+  totalStakedUnits: string;
+  totalStakedDisplay: string;
+  totalStakedUsd: number;
+  totalStakedIdr: number;
+  remainingCapUnits: string;
+  utilizationBps: number;
+  activeStakersCount: number;
+  activePositionsCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
 
+export interface EarnPositionItem {
+  id: string;
+  userId: string;
+  userEmail?: string;
+  vaultId: string;
+  vaultName: string;
+  vaultType: EarnVaultType;
+  vaultStatus: EarnVaultStatus;
+  asset: string;
+  decimals: number;
+  principalUnits: string;
+  principalDisplay: string;
+  principalUsd: number;
+  principalIdr: number;
+  initialPrincipalUnits: string;
+  apyBps: number;
+  apyPct: number;
+  durationDays: number;
+  autoCompound: boolean;
+  autoCompoundSupported: boolean;
+  earlyRedeemAllowed: boolean;
+  earlyRedeemPenaltyBps: number;
+  status: EarnPositionStatus;
+  accruedYieldUnits: string;
+  accruedYieldDisplay: string;
+  claimedYieldUnits: string;
+  claimedYieldDisplay: string;
+  totalYieldEarnedUnits: string;
+  totalYieldEarnedDisplay: string;
+  liveAccruingYieldUnits: string;
+  liveAccruingYieldDisplay: string;
+  dailyEstimatedYieldUnits: string;
+  dailyEstimatedYieldDisplay: string;
+  isMatured: boolean;
+  canClaim: boolean;
+  canRedeem: boolean;
+  startedAt: number;
+  maturesAt: number | null;
+  redeemedAt?: number;
+  stakeJournalId: string;
+  redeemJournalId?: string;
+  updatedAt: number;
+}
 
+export interface EarnPayoutItem {
+  id: string;
+  userId: string;
+  positionId: string;
+  vaultId: string;
+  asset: string;
+  decimals: number;
+  payoutType: EarnPayoutType;
+  amountUnits: string;
+  amountDisplay: string;
+  apyBps: number;
+  apyPct: number;
+  settlementDayIndex?: number;
+  journalId: string;
+  createdAt: number;
+}
+
+export interface EarnSummaryResponse {
+  vaults: EarnVaultItem[];
+  platformStats: {
+    totalVaults: number;
+    activeVaults: number;
+    totalStakersCount: number;
+    totalValueLockedUsd: number;
+    totalValueLockedIdr: number;
+    totalYieldDistributedUsd: number;
+  };
+  walletBalances: Record<string, { availableUnits: string; availableDisplay: string; decimals: number }>;
+  portfolio: {
+    activePositionsCount: number;
+    totalStakedUsd: number;
+    totalStakedIdr: number;
+    totalClaimableUsd: number;
+    totalYieldEarnedUsd: number;
+    weightedAvgApyPct: number;
+  };
+  positions: EarnPositionItem[];
+  payouts: EarnPayoutItem[];
+}
+
+export interface EarnCustodySolvencyReport {
+  isFullySolvent: boolean;
+  checkedAt: number;
+  assets: Array<{
+    asset: string;
+    decimals: number;
+    custodyLedgerUnits: string;
+    custodyLedgerDisplay: string;
+    activePrincipalUnits: string;
+    activePrincipalDisplay: string;
+    deltaUnits: string;
+    accruedLiabilityUnits: string;
+    accruedLiabilityDisplay: string;
+    isBalanced: boolean;
+  }>;
+}

@@ -62,9 +62,17 @@ import {
   Bell,
   Gift,
   Ticket,
-  History
+  History,
+  Layers
 } from 'lucide-react';
-import { UserProfile, TradingPairItem, ExternalWsWhitelistEntry } from '../../types/index.js';
+import {
+  UserProfile,
+  TradingPairItem,
+  ExternalWsWhitelistEntry,
+  EarnVaultItem,
+  EarnPositionItem,
+  EarnCustodySolvencyReport,
+} from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
 import { formatCountdownCompact } from '../trading/MarketCountdownOverlay.js';
 import { Button } from '../ui/Button.js';
@@ -77,6 +85,7 @@ import { NewsManagementSection } from './content/NewsManagementSection.js';
 import { NotificationCenterSection } from './content/NotificationCenterSection.js';
 import { MediaLibrarySection } from './content/MediaLibrarySection.js';
 import { VipRewardsAdminSection } from './rewards/VipRewardsAdminSection.js';
+import { StakingAdminConsole } from './staking/StakingAdminConsole.js';
 
 interface Props {
   user: UserProfile | null;
@@ -95,6 +104,7 @@ type AdminTab =
   | 'LEDGER'
   | 'BOTS'
   | 'FX'
+  | 'STAKING'
   | 'PRODUCTS'
   | 'RISK'
   | 'AUDIT'
@@ -127,7 +137,25 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
   const [riskAlerts, setRiskAlerts] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [botsList, setBotsList] = useState<any[]>([]);
-  const [earnpools, setEarnPools] = useState<any[]>([]);
+  const [earnpools, setEarnPools] = useState<EarnVaultItem[]>([]);
+  const [earnPositions, setEarnPositions] = useState<EarnPositionItem[]>([]);
+  const [earnSolvency, setEarnSolvency] = useState<EarnCustodySolvencyReport | null>(null);
+  const [showCreateEarnModal, setShowCreateEarnModal] = useState(false);
+  const [isSettlingYield, setIsSettlingYield] = useState(false);
+  const [newEarnVaultForm, setNewEarnVaultForm] = useState({
+    asset: 'USDT',
+    name: '',
+    type: 'FLEXIBLE' as 'FLEXIBLE' | 'FIXED' | 'STAKING' | 'LAUNCHPOOL',
+    durationDays: '0',
+    apyPct: '8.5',
+    minStakeTokens: '10',
+    maxStakeTokens: '100000',
+    totalCapTokens: '1000000',
+    earlyRedeemAllowed: true,
+    earlyRedeemPenaltyPct: '1.5',
+    autoCompoundSupported: true,
+    isFeatured: false,
+  });
   const [copyMasters, setCopyMasters] = useState<any[]>([]);
   const [vipTiers, setVipTiers] = useState<any[]>([]);
   const [fxStatus, setFxStatus] = useState<any>(null);
@@ -440,6 +468,8 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         auditRes,
         botsRes,
         earnRes,
+        earnPosRes,
+        earnSolvRes,
         copyRes,
         vipRes,
         fxRes,
@@ -452,6 +482,8 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         fetch('/api/admin/audit-logs', { headers }),
         fetch('/api/admin/bots/all', { headers }),
         fetch('/api/admin/earn/pools', { headers }),
+        fetch('/api/admin/earn/positions?limit=50', { headers }),
+        fetch('/api/admin/earn/solvency', { headers }),
         fetch('/api/admin/copy-trading/masters', { headers }),
         fetch('/api/admin/vip-tiers', { headers }),
         fetch('/api/mm/fx-status', { headers }),
@@ -465,6 +497,11 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
       if (auditRes.ok) setAuditLogs(await auditRes.json());
       if (botsRes.ok) setBotsList(await botsRes.json());
       if (earnRes.ok) setEarnPools(await earnRes.json());
+      if (earnPosRes.ok) {
+        const epData = await earnPosRes.json();
+        setEarnPositions(epData.positions || []);
+      }
+      if (earnSolvRes.ok) setEarnSolvency(await earnSolvRes.json());
       if (copyRes.ok) setCopyMasters(await copyRes.json());
       if (vipRes.ok) setVipTiers(await vipRes.json());
       if (fxRes.ok) setFxStatus(await fxRes.json());
@@ -979,22 +1016,27 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
     }
   };
 
-  const handleUpdateStakingPool = (poolId: string, currentApy: number) => {
+  const handleUpdateStakingPool = (pool: EarnVaultItem) => {
     setConfirmConfig({
       isOpen: true,
-      title: `Ubah APY Staking Pool: ${poolId}`,
-      description: 'Masukkan nilai Annual Percentage Yield (APY) tahunan baru dalam persen (%).',
-      confirmLabel: 'Perbarui APY',
+      title: `Konfigurasi Vault Earn: ${pool.name}`,
+      description: 'Perbarui parameter Annual Percentage Yield (APY), status vault (ACTIVE / PAUSED / CLOSED), atau total batas kapasitas.',
+      confirmLabel: 'Simpan Perubahan Vault',
       tone: 'brand',
       fields: [
-        { key: 'apy', label: 'APY Tahunan (%)', type: 'number', defaultValue: String(currentApy), required: true }
+        { key: 'apyPct', label: 'APY Tahunan (%)', type: 'number', defaultValue: String(pool.apyPct), required: true },
+        { key: 'status', label: 'Status (ACTIVE / PAUSED / CLOSED)', type: 'text', defaultValue: pool.status, required: true }
       ],
       onSubmit: async (values) => {
         const token = localStorage.getItem('dimonex_auth_token');
         const res = await fetch('/api/admin/earn/pools/update', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ poolId, apy: parseFloat(values.apy) })
+          body: JSON.stringify({
+            poolId: pool.id,
+            apyPct: parseFloat(values.apyPct),
+            status: String(values.status || 'ACTIVE').trim().toUpperCase(),
+          })
         });
         const data = await res.json();
         if (res.ok) {
@@ -1005,6 +1047,72 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         }
       }
     });
+  };
+
+  const handleCreateEarnVault = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const token = localStorage.getItem('dimonex_auth_token');
+      const res = await fetch('/api/admin/earn/pools', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          asset: newEarnVaultForm.asset.trim().toUpperCase(),
+          name: newEarnVaultForm.name.trim(),
+          type: newEarnVaultForm.type,
+          durationDays: Number(newEarnVaultForm.durationDays) || 0,
+          apyPct: Number(newEarnVaultForm.apyPct) || 0,
+          minStakeTokens: newEarnVaultForm.minStakeTokens.trim(),
+          maxStakeTokens: newEarnVaultForm.maxStakeTokens.trim(),
+          totalCapTokens: newEarnVaultForm.totalCapTokens.trim(),
+          earlyRedeemAllowed: newEarnVaultForm.earlyRedeemAllowed,
+          earlyRedeemPenaltyPct: Number(newEarnVaultForm.earlyRedeemPenaltyPct) || 0,
+          autoCompoundSupported: newEarnVaultForm.autoCompoundSupported,
+          isFeatured: newEarnVaultForm.isFeatured,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gagal membuat Earn Vault');
+      showToast('success', data.message || 'Vault Earn baru berhasil dibuat');
+      setShowCreateEarnModal(false);
+      setNewEarnVaultForm({
+        asset: 'USDT',
+        name: '',
+        type: 'FLEXIBLE',
+        durationDays: '0',
+        apyPct: '8.5',
+        minStakeTokens: '10',
+        maxStakeTokens: '100000',
+        totalCapTokens: '1000000',
+        earlyRedeemAllowed: true,
+        earlyRedeemPenaltyPct: '1.5',
+        autoCompoundSupported: true,
+        isFeatured: false,
+      });
+      loadAllData();
+    } catch (err: any) {
+      showToast('error', err?.message || 'Gagal membuat Earn Vault');
+    }
+  };
+
+  const handleRunYieldSettlement = async (forceCycle: boolean) => {
+    setIsSettlingYield(true);
+    try {
+      const token = localStorage.getItem('dimonex_auth_token');
+      const res = await fetch('/api/admin/earn/settle-yield', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ forceCycle }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gagal mendistribusikan imbal hasil');
+      showToast('success', data.message);
+      loadAllData();
+    } catch (err: any) {
+      showToast('error', err?.message || 'Gagal menjalankan settlement');
+    } finally {
+      setIsSettlingYield(false);
+    }
   };
 
   const handleUpdateMasterTrader = async (masterId: string, currentStatus: string) => {
@@ -1268,6 +1376,7 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                 { id: 'USERS' as AdminTab, label: `Pengguna & KYC (${usersList.length})`, icon: Users, badge: pendingKycCount > 0 ? pendingKycCount : undefined },
                 { id: 'WITHDRAWALS' as AdminTab, label: 'Antrean Penarikan', icon: ArrowUpRight, badge: pendingWithdrawalCount > 0 ? pendingWithdrawalCount : undefined },
                 { id: 'LEDGER' as AdminTab, label: 'Buku Besar & Solvensi', icon: Wallet },
+                { id: 'STAKING' as AdminTab, label: 'Staking Admin Console', icon: Layers },
                 { id: 'PRODUCTS' as AdminTab, label: 'Earn, Copy & VIP', icon: PiggyBank },
               ],
             },
@@ -2562,30 +2671,145 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
           ========================================================================= */}
       {activeTab === 'PRODUCTS' && (
         <div className="space-y-6">
-          {/* Section 1: Staking / Earn Pools */}
-          <div className="space-y-3">
-            <h4 className="text-sm font-semibold text-[#E4EBEF]">Manajemen Pool Staking & Earn</h4>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-              {earnpools.map(pool => (
-                <div key={pool.id} className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-[#E4EBEF] font-mono">{pool.asset} Pool</span>
-                    <span className="text-[#35B887] font-mono tabular-nums font-bold text-sm">{pool.apy}% APY</span>
+          {/* Section 1: Institutional Staking / Earn Vaults */}
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-semibold text-[#E4EBEF]">Manajemen Vault Earn & Staking (Real Custody Ledger)</h4>
+                <p className="text-xs text-[#71818B]">Seluruh TVL dan posisi diverifikasi langsung terhadap akun Custody Earn di Double-Entry Ledger.</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={isSettlingYield}
+                  onClick={() => handleRunYieldSettlement(true)}
+                  icon={<RefreshCw className={`w-3.5 h-3.5 ${isSettlingYield ? 'animate-spin' : ''}`} />}
+                >
+                  Run Daily Yield Cycle
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => setShowCreateEarnModal(true)}
+                  icon={<Plus className="w-3.5 h-3.5" />}
+                >
+                  Buat Vault Baru
+                </Button>
+              </div>
+            </div>
+
+            {earnSolvency && (
+              <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className={`w-4 h-4 ${earnSolvency.isFullySolvent ? 'text-[#35B887]' : 'text-[#EA5B65]'}`} />
+                    <span className="text-xs font-semibold text-[#E4EBEF]">
+                      Verifikasi Solvensi Custody Earn ({earnSolvency.isFullySolvent ? '100% SEIMBANG' : 'ADA SELISIH'})
+                    </span>
                   </div>
-                  <div className="text-[11px] text-[#A1AFB8] font-mono">
-                    Durasi: {pool.durationDays === 0 ? 'Fleksibel' : `${pool.durationDays} Hari`}
+                  <span className="text-[11px] font-mono text-[#71818B]">
+                    Diperiksa: {new Date(earnSolvency.checkedAt).toLocaleTimeString('id-ID')}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                  {earnSolvency.assets.map(row => (
+                    <div key={row.asset} className="p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34] text-[11px] font-mono tabular-nums">
+                      <div className="flex items-center justify-between font-semibold text-[#E4EBEF]">
+                        <span>{row.asset}</span>
+                        <span className={row.isBalanced ? 'text-[#35B887]' : 'text-[#EA5B65]'}>
+                          {row.isBalanced ? 'OK' : 'DIFF'}
+                        </span>
+                      </div>
+                      <div className="text-[#A1AFB8] mt-1 truncate" title={`Custody: ${row.custodyLedgerDisplay}`}>
+                        Cust: {row.custodyLedgerDisplay}
+                      </div>
+                      <div className="text-[#71818B] truncate" title={`Liab Yield: ${row.accruedLiabilityDisplay}`}>
+                        Yield Liab: {row.accruedLiabilityDisplay}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              {earnpools.map(pool => (
+                <div key={pool.id} className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <span className="font-semibold text-xs text-[#E4EBEF] block truncate">{pool.name}</span>
+                      <span className="text-[11px] text-[#71818B] font-mono">
+                        {pool.asset} · {pool.type} · {pool.durationDays === 0 ? 'Fleksibel' : `${pool.durationDays} Hari`}
+                      </span>
+                    </div>
+                    <StatusBadge tone={pool.status === 'ACTIVE' ? 'success' : pool.status === 'PAUSED' ? 'warning' : 'danger'}>
+                      {pool.status}
+                    </StatusBadge>
+                  </div>
+                  <div className="flex items-baseline justify-between p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34] font-mono tabular-nums">
+                    <span className="text-lg font-bold text-[#35B887]">{(pool.apyPct ?? (pool.apyBps / 100)).toFixed(2)}% APY</span>
+                    <span className="text-[11px] text-[#A1AFB8]">{pool.activeStakersCount ?? 0} stakers</span>
+                  </div>
+                  <div className="space-y-1 text-[11px] font-mono tabular-nums">
+                    <div className="flex justify-between">
+                      <span className="text-[#71818B]">Live TVL</span>
+                      <span className="text-[#E4EBEF]">{pool.totalStakedDisplay || '0'} {pool.asset}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-[#71818B]">TVL USD</span>
+                      <span className="text-[#A1AFB8]">${(pool.totalStakedUsd || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
                   </div>
                   <Button
                     variant="secondary"
                     size="sm"
-                    onClick={() => handleUpdateStakingPool(pool.id, pool.apy)}
-                    className="w-full mt-2"
+                    onClick={() => handleUpdateStakingPool(pool)}
+                    className="w-full"
                   >
-                    Ubah APY
+                    Ubah APY & Status
                   </Button>
                 </div>
               ))}
             </div>
+
+            {earnPositions.length > 0 && (
+              <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
+                <div className="px-4 py-2.5 bg-[#17212B] border-b border-[#202B34] flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[#E4EBEF]">Posisi Staking Pengguna Terkini ({earnPositions.length})</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs font-mono tabular-nums">
+                    <thead className="bg-[#111820] text-[11px] text-[#A1AFB8] border-b border-[#202B34] font-sans">
+                      <tr>
+                        <th className="px-4 py-2 font-semibold">Pengguna</th>
+                        <th className="px-4 py-2 font-semibold">Vault</th>
+                        <th className="px-4 py-2 font-semibold">Pokok</th>
+                        <th className="px-4 py-2 font-semibold">Yield Tertunda</th>
+                        <th className="px-4 py-2 font-semibold">Compound</th>
+                        <th className="px-4 py-2 font-semibold">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#202B34]">
+                      {earnPositions.slice(0, 20).map(pos => (
+                        <tr key={pos.id} className="hover:bg-[#17212B]/60">
+                          <td className="px-4 py-2.5 text-[#E4EBEF]">{pos.userEmail || pos.userId}</td>
+                          <td className="px-4 py-2.5 text-[#A1AFB8]">{pos.vaultName}</td>
+                          <td className="px-4 py-2.5 text-[#E4EBEF] font-semibold">{pos.principalDisplay} {pos.asset}</td>
+                          <td className="px-4 py-2.5 text-[#35B887]">{pos.accruedYieldDisplay} {pos.asset}</td>
+                          <td className="px-4 py-2.5">{pos.autoCompound ? 'ON' : 'OFF'}</td>
+                          <td className="px-4 py-2.5 font-sans">
+                            <StatusBadge tone={pos.status === 'ACTIVE' ? 'success' : pos.status === 'MATURED' ? 'info' : 'neutral'}>
+                              {pos.status}
+                            </StatusBadge>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Section 2: Copy Trading Master Traders */}
@@ -2766,6 +2990,13 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
       {activeTab === 'CMS_NEWS' && <NewsManagementSection user={user} />}
       {activeTab === 'CMS_NOTIFICATIONS' && <NotificationCenterSection />}
       {activeTab === 'CMS_MEDIA' && <MediaLibrarySection />}
+
+      {/* =========================================================================
+          INSTITUTIONAL STAKING & EARN VAULTS ADMIN CONSOLE
+          ========================================================================= */}
+      {activeTab === 'STAKING' && (
+        <StakingAdminConsole onNotify={showToast} onAuditRefresh={loadAllData} />
+      )}
 
       {/* =========================================================================
           INSTITUTIONAL VIP & TRADER REWARDS MANAGEMENT
@@ -3567,6 +3798,145 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
             </div>
           </form>
         )}
+      </Modal>
+
+      {/* MODAL CREATE EARN VAULT */}
+      <Modal
+        isOpen={showCreateEarnModal}
+        onClose={() => setShowCreateEarnModal(false)}
+        title="Buat Vault Earn & Staking Baru"
+        subtitle="Konfigurasikan produk Earn dengan aset aktif di registry DIMONEX dan akun Custody tersegregasi."
+        maxWidth="max-w-lg"
+      >
+        <form onSubmit={handleCreateEarnVault} className="space-y-3 text-xs">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[#A1AFB8] block mb-1">Aset (ACTIVE di Registry)</label>
+              <input
+                type="text"
+                required
+                value={newEarnVaultForm.asset}
+                onChange={e => setNewEarnVaultForm(p => ({ ...p, asset: e.target.value.toUpperCase() }))}
+                placeholder="USDT / BTC / ETH / IDR / SOL / TON"
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono outline-none focus:border-[#8DA5B1]"
+              />
+            </div>
+            <div>
+              <label className="text-[#A1AFB8] block mb-1">Tipe Produk</label>
+              <select
+                value={newEarnVaultForm.type}
+                onChange={e => setNewEarnVaultForm(p => ({ ...p, type: e.target.value as any }))}
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] outline-none focus:border-[#8DA5B1]"
+              >
+                <option value="FLEXIBLE">FLEXIBLE</option>
+                <option value="FIXED">FIXED</option>
+                <option value="STAKING">STAKING</option>
+                <option value="LAUNCHPOOL">LAUNCHPOOL</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-[#A1AFB8] block mb-1">Nama Vault</label>
+            <input
+              type="text"
+              required
+              value={newEarnVaultForm.name}
+              onChange={e => setNewEarnVaultForm(p => ({ ...p, name: e.target.value }))}
+              placeholder="Contoh: Tether USD 30-Day Prime Vault"
+              className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] outline-none focus:border-[#8DA5B1]"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[#A1AFB8] block mb-1">Durasi (Hari, 0 = Fleksibel)</label>
+              <input
+                type="number"
+                min="0"
+                required
+                value={newEarnVaultForm.durationDays}
+                onChange={e => setNewEarnVaultForm(p => ({ ...p, durationDays: e.target.value }))}
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono outline-none focus:border-[#8DA5B1]"
+              />
+            </div>
+            <div>
+              <label className="text-[#A1AFB8] block mb-1">Estimasi APY (%)</label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                max="500"
+                required
+                value={newEarnVaultForm.apyPct}
+                onChange={e => setNewEarnVaultForm(p => ({ ...p, apyPct: e.target.value }))}
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono outline-none focus:border-[#8DA5B1]"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="text-[#A1AFB8] block mb-1">Min Stake</label>
+              <input
+                type="text"
+                required
+                value={newEarnVaultForm.minStakeTokens}
+                onChange={e => setNewEarnVaultForm(p => ({ ...p, minStakeTokens: e.target.value }))}
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-[#A1AFB8] block mb-1">Max / Tx</label>
+              <input
+                type="text"
+                value={newEarnVaultForm.maxStakeTokens}
+                onChange={e => setNewEarnVaultForm(p => ({ ...p, maxStakeTokens: e.target.value }))}
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono outline-none"
+              />
+            </div>
+            <div>
+              <label className="text-[#A1AFB8] block mb-1">Total Pool Cap</label>
+              <input
+                type="text"
+                required
+                value={newEarnVaultForm.totalCapTokens}
+                onChange={e => setNewEarnVaultForm(p => ({ ...p, totalCapTokens: e.target.value }))}
+                className="w-full bg-[#111820] border border-[#2B3944] rounded-[7px] p-2 text-[#E4EBEF] font-mono outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <label className="flex items-center gap-2 text-[#E4EBEF] cursor-pointer">
+              <input
+                type="checkbox"
+                checked={newEarnVaultForm.autoCompoundSupported}
+                onChange={e => setNewEarnVaultForm(p => ({ ...p, autoCompoundSupported: e.target.checked }))}
+                className="w-4 h-4 accent-[#16A879]"
+              />
+              <span>Dukung Auto-Compound</span>
+            </label>
+            <label className="flex items-center gap-2 text-[#E4EBEF] cursor-pointer">
+              <input
+                type="checkbox"
+                checked={newEarnVaultForm.earlyRedeemAllowed}
+                onChange={e => setNewEarnVaultForm(p => ({ ...p, earlyRedeemAllowed: e.target.checked }))}
+                className="w-4 h-4 accent-[#16A879]"
+              />
+              <span>Izinkan Early Redeem</span>
+            </label>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#202B34]">
+            <Button type="button" variant="secondary" size="sm" onClick={() => setShowCreateEarnModal(false)}>
+              Batal
+            </Button>
+            <Button type="submit" variant="primary" size="sm">
+              Buat Vault Earn
+            </Button>
+          </div>
+        </form>
       </Modal>
 
       {/* UNIFIED CONFIRMATION / PROMPT DIALOG */}

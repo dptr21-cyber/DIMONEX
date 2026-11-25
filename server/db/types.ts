@@ -84,6 +84,7 @@ export type BotStatus = 'DRAFT' | 'VALIDATING' | 'READY' | 'RUNNING' | 'PAUSED' 
 export type BotType = 
   | 'ORDER_BOT' 
   | 'VOLUME_BOT' 
+  | 'VOLUME_SPREAD_BOT'
   | 'PRICE_FOLLOWER' 
   | 'DEPTH_LIQUIDITY' 
   | 'SPOT_GRID' 
@@ -106,7 +107,10 @@ export type JournalTxType =
   | 'FUTURES_PNL'
   | 'REWARD_PAYOUT'
   | 'REFERRAL_REBATE'
-  | 'VOUCHER_REDEMPTION';
+  | 'VOUCHER_REDEMPTION'
+  | 'EARN_STAKE'
+  | 'EARN_REDEEM'
+  | 'EARN_YIELD';
 
 export type LedgerEntryType = 'DEBIT' | 'CREDIT';
 
@@ -150,6 +154,32 @@ export interface VolumeBotConfig {
   vol_idr_stop_target: string; // Target volume in IDR
   vol_idr_start_threshold: string;
   volume_sell_account_id?: string;
+}
+
+export interface VolumeSpreadBotConfig {
+  account_id: string;
+  counterparty_account_id?: string;
+  spread_mode: 'INSIDE_SPREAD' | 'MIDPOINT_JITTER' | 'PING_PONG_EDGE';
+  side_pattern: 'ALTERNATE' | 'RANDOM' | 'BUY_EATS_SELL' | 'SELL_EATS_BUY';
+  random_min_quantity: string;
+  random_max_quantity: string;
+  min_delay: number;
+  max_delay: number;
+  spread_band_min_pct: number;
+  spread_band_max_pct: number;
+  min_spread_bps: number;
+  fallback_half_spread_bps: number;
+  require_two_sided_book: boolean;
+  cross_delay_ms: number;
+  tick_size?: string;
+  min_limit_price: string;
+  max_limit_price: string;
+  vol_quote_stop_target: string;
+  lastSideExecuted?: 'BUY' | 'SELL';
+  lastSpreadBps?: number;
+  lastExecPriceUnits?: string;
+  spreadSelfTradesCount?: number;
+  executedQuoteVolumeUnits?: string;
 }
 
 export interface PriceFollowerConfig {
@@ -475,6 +505,7 @@ export interface BotInstance {
   errorInfo?: string;
   orderBotConfig?: OrderBotConfig;
   volumeBotConfig?: VolumeBotConfig;
+  volumeSpreadConfig?: VolumeSpreadBotConfig;
   priceFollowerConfig?: PriceFollowerConfig;
   depthLiquidityConfig?: DepthLiquidityConfig;
   movementDepthConfig?: MovementDepthLiquidityConfig;
@@ -1551,6 +1582,68 @@ export interface VolumeExecutionV2Bot {
   logs: VolumeExecutionV2LogEntry[];
 }
 
+export type EarnVaultType = 'FLEXIBLE' | 'FIXED' | 'STAKING' | 'LAUNCHPOOL';
+export type EarnVaultStatus = 'ACTIVE' | 'PAUSED' | 'CLOSED';
+export type EarnPositionStatus = 'ACTIVE' | 'MATURED' | 'REDEEMED';
+export type EarnPayoutType = 'DAILY_SETTLEMENT' | 'MANUAL_CLAIM' | 'AUTO_COMPOUND' | 'REDEMPTION_SETTLEMENT';
 
+export interface EarnVault {
+  id: string;
+  asset: string;
+  name: string;
+  type: EarnVaultType;
+  durationDays: number; // 0 = Flexible
+  apyBps: number; // e.g., 850 = 8.50% APY
+  minStakeUnits: string;
+  maxStakeUnits: string; // '0' = unlimited per subscription
+  totalCapUnits: string;
+  earlyRedeemAllowed: boolean;
+  earlyRedeemPenaltyBps: number;
+  autoCompoundSupported: boolean;
+  status: EarnVaultStatus;
+  isFeatured: boolean;
+  custodyNote: string;
+  createdAt: number;
+  updatedAt: number;
+}
 
+export interface EarnPosition {
+  id: string;
+  userId: string;
+  vaultId: string;
+  asset: string;
+  decimals: number;
+  principalUnits: string;
+  initialPrincipalUnits: string;
+  apyBps: number;
+  durationDays: number;
+  autoCompound: boolean;
+  status: EarnPositionStatus;
+  accruedYieldUnits: string;
+  claimedYieldUnits: string;
+  totalYieldEarnedUnits: string;
+  lastSettlementDayIndex: number;
+  lastAccruedAt: number;
+  startedAt: number;
+  maturesAt: number | null;
+  redeemedAt?: number;
+  stakeJournalId: string;
+  redeemJournalId?: string;
+  idempotencyKey?: string;
+  updatedAt: number;
+}
 
+export interface EarnPayoutRecord {
+  id: string;
+  userId: string;
+  positionId: string;
+  vaultId: string;
+  asset: string;
+  decimals: number;
+  payoutType: EarnPayoutType;
+  amountUnits: string;
+  apyBps: number;
+  settlementDayIndex?: number;
+  journalId: string;
+  createdAt: number;
+}

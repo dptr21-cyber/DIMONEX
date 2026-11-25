@@ -3,11 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * src/components/earn/EarnView.tsx
- * DIMONEX Institutional Earn & Staking Vaults — Obsidian Iridium Matte Design
+ * DIMONEX Institutional Earn & Staking Vaults — Live Ledger-Backed Implementation
  */
 
-import React, { useState } from 'react';
-import { ShieldCheck } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ArrowDownLeft,
+  CalendarClock,
+  CheckCircle2,
+  Coins,
+  History,
+  Lock,
+  PiggyBank,
+  RefreshCw,
+  ShieldCheck,
+  TrendingUp,
+} from 'lucide-react';
 import { Button } from '../ui/Button.js';
 import { Input } from '../ui/Input.js';
 import { Modal } from '../ui/Modal.js';
@@ -16,189 +27,1107 @@ import { SegmentedTabs } from '../ui/Tabs.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
 import { AssetIcon } from '../ui/AssetIcon.js';
 import { useToast } from '../ui/Toast.js';
+import {
+  EarnPayoutItem,
+  EarnPositionItem,
+  EarnSummaryResponse,
+  EarnVaultItem,
+  UserBalance,
+  UserProfile,
+} from '../../types/index.js';
+import { StakingDashboard } from './StakingDashboard.js';
 
-interface EarnVault {
-  id: string;
-  asset: string;
-  name: string;
-  type: 'FLEXIBLE' | 'FIXED' | 'STAKING' | 'LAUNCHPOOL';
-  duration: string;
-  apy: number;
-  minAmount: string;
-  totalLocked: string;
-  isHot?: boolean;
+interface Props {
+  user?: UserProfile | null;
+  balances?: UserBalance[];
+  onOpenAuthModal?: () => void;
+  onRefreshBalances?: () => void;
+  displayCurrency?: 'IDR' | 'USD' | 'USDT';
 }
 
-export const EarnView: React.FC = () => {
+function formatUnitsClient(unitsStr: string, decimals: number): string {
+  try {
+    const raw = BigInt(unitsStr || '0');
+    if (raw === 0n) return '0';
+    const str = raw.toString().padStart(decimals + 1, '0');
+    if (decimals === 0) return str;
+    const intPart = str.slice(0, -decimals) || '0';
+    const fracPart = str.slice(-decimals).replace(/0+$/, '');
+    const intFormatted = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return fracPart ? `${intFormatted}.${fracPart}` : intFormatted;
+  } catch {
+    return '0';
+  }
+}
+
+function formatUnitsInput(unitsStr: string, decimals: number): string {
+  try {
+    const raw = BigInt(unitsStr || '0');
+    if (raw === 0n) return '0';
+    const str = raw.toString().padStart(decimals + 1, '0');
+    if (decimals === 0) return str;
+    const intPart = str.slice(0, -decimals) || '0';
+    const fracPart = str.slice(-decimals).replace(/0+$/, '');
+    return fracPart ? `${intPart}.${fracPart}` : intPart;
+  } catch {
+    return '0';
+  }
+}
+
+function formatUsdOrIdr(usd: number, idr: number, currency: 'IDR' | 'USD' | 'USDT'): string {
+  if (currency === 'IDR') {
+    return `Rp ${Math.round(idr || 0).toLocaleString('id-ID')}`;
+  }
+  return `$${(usd || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+export const EarnView: React.FC<Props> = ({
+  user = null,
+  balances = [],
+  onOpenAuthModal,
+  onRefreshBalances,
+  displayCurrency = 'USD',
+}) => {
   const { showToast } = useToast();
-  const [activeFilter, setActiveFilter] = useState<'ALL' | 'FLEXIBLE' | 'FIXED' | 'STAKING' | 'LAUNCHPOOL'>('ALL');
-  const [selectedVault, setSelectedVault] = useState<EarnVault | null>(null);
-  const [stakeAmount, setStakeAmount] = useState('500');
+
+  const [mainTab, setMainTab] = useState<'DASHBOARD' | 'VAULTS' | 'POSITIONS' | 'HISTORY'>('DASHBOARD');
+  const [vaultFilter, setVaultFilter] = useState<'ALL' | 'FLEXIBLE' | 'FIXED' | 'STAKING' | 'LAUNCHPOOL'>('ALL');
+  const [positionFilter, setPositionFilter] = useState<'ACTIVE' | 'REDEEMED' | 'ALL'>('ACTIVE');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const [vaults, setVaults] = useState<EarnVaultItem[]>([]);
+  const [platformStats, setPlatformStats] = useState<EarnSummaryResponse['platformStats'] | null>(null);
+  const [summary, setSummary] = useState<EarnSummaryResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Subscribe Modal State
+  const [selectedVault, setSelectedVault] = useState<EarnVaultItem | null>(null);
+  const [stakeAmount, setStakeAmount] = useState('');
+  const [autoCompound, setAutoCompound] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const vaults: EarnVault[] = [
-    { id: 'v-dmx', asset: 'DMX', name: 'DIMONEX Launchpool Staking', type: 'LAUNCHPOOL', duration: '90 Days', apy: 24.50, minAmount: '100 DMX', totalLocked: '12,500,000 DMX', isHot: true },
-    { id: 'v-usdt', asset: 'USDT', name: 'Tether USD Flexible Vault', type: 'FLEXIBLE', duration: 'Flexible', apy: 8.50, minAmount: '10 USDT', totalLocked: '$18,420,500 USDT' },
-    { id: 'v-usdt-fixed', asset: 'USDT', name: 'Tether USD Term Deposit', type: 'FIXED', duration: '120 Days', apy: 12.80, minAmount: '100 USDT', totalLocked: '$8,100,000 USDT', isHot: true },
-    { id: 'v-btc', asset: 'BTC', name: 'Bitcoin Prime Yield', type: 'FIXED', duration: '60 Days', apy: 4.25, minAmount: '0.001 BTC', totalLocked: '580 BTC' },
-    { id: 'v-eth', asset: 'ETH', name: 'Ethereum Liquid Staking', type: 'STAKING', duration: 'Flexible', apy: 5.60, minAmount: '0.01 ETH', totalLocked: '12,450 ETH' },
-    { id: 'v-sol', asset: 'SOL', name: 'Solana High-Yield Validator', type: 'STAKING', duration: '30 Days', apy: 7.80, minAmount: '0.5 SOL', totalLocked: '142,000 SOL' },
-    { id: 'v-bnb', asset: 'BNB', name: 'BNB Vault Launchpool', type: 'LAUNCHPOOL', duration: 'Flexible', apy: 14.20, minAmount: '0.1 BNB', totalLocked: '45,000 BNB', isHot: true },
-  ];
+  // Redeem Modal State
+  const [redeemTarget, setRedeemTarget] = useState<EarnPositionItem | null>(null);
+  const [redeemAmount, setRedeemAmount] = useState('');
+  const [confirmEarlyRedeem, setConfirmEarlyRedeem] = useState(false);
+  const [isRedeeming, setIsRedeeming] = useState(false);
 
-  const filteredVaults = vaults.filter(v => activeFilter === 'ALL' || v.type === activeFilter);
+  // Per-row Action Busy State
+  const [busyPositionId, setBusyPositionId] = useState<string | null>(null);
 
-  const handleSubscribe = () => {
-    if (!stakeAmount || parseFloat(stakeAmount) <= 0) {
-      showToast('error', 'Invalid Amount', 'Please specify staking allocation amount.');
+  const fetchEarnData = useCallback(async (silent = false) => {
+    if (!silent) setIsLoading(true);
+    setLoadError(null);
+    try {
+      const token = localStorage.getItem('dimonex_auth_token');
+      if (user && token) {
+        const res = await fetch('/api/earn/summary', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data: EarnSummaryResponse = await res.json();
+          setSummary(data);
+          setVaults(data.vaults || []);
+          setPlatformStats(data.platformStats || null);
+          return;
+        }
+      }
+
+      const pubRes = await fetch('/api/earn/vaults');
+      if (!pubRes.ok) {
+        const errData = await pubRes.json().catch(() => ({}));
+        throw new Error(errData.error || 'Gagal memuat katalog Vault Earn');
+      }
+      const pubData = await pubRes.json();
+      setVaults(pubData.vaults || []);
+      setPlatformStats(pubData.platformStats || null);
+      if (!user) setSummary(null);
+    } catch (err: any) {
+      setLoadError(err?.message || 'Gagal memuat data Earn & Staking');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    fetchEarnData();
+    const timer = setInterval(() => {
+      fetchEarnData(true);
+    }, 20_000);
+    return () => clearInterval(timer);
+  }, [fetchEarnData]);
+
+  const getAvailableSpotDisplay = useCallback(
+    (asset: string, decimals: number): { units: string; display: string } => {
+      const fromSummary = summary?.walletBalances?.[asset];
+      if (fromSummary) {
+        return { units: fromSummary.availableUnits, display: fromSummary.availableDisplay };
+      }
+      const fromProp = balances.find(b => b.currency.toUpperCase() === asset.toUpperCase());
+      if (fromProp) {
+        return {
+          units: fromProp.balanceAvailable || '0',
+          display: formatUnitsClient(fromProp.balanceAvailable || '0', decimals),
+        };
+      }
+      return { units: '0', display: '0' };
+    },
+    [summary, balances]
+  );
+
+  const filteredVaults = useMemo(() => {
+    const q = searchQuery.trim().toUpperCase();
+    return vaults.filter(v => {
+      const matchType = vaultFilter === 'ALL' || v.type === vaultFilter;
+      const matchSearch =
+        !q ||
+        v.asset.toUpperCase().includes(q) ||
+        v.name.toUpperCase().includes(q) ||
+        v.type.includes(q);
+      return matchType && matchSearch;
+    });
+  }, [vaults, vaultFilter, searchQuery]);
+
+  const filteredPositions = useMemo(() => {
+    const all = summary?.positions || [];
+    if (positionFilter === 'ACTIVE') return all.filter(p => p.status !== 'REDEEMED');
+    if (positionFilter === 'REDEEMED') return all.filter(p => p.status === 'REDEEMED');
+    return all;
+  }, [summary, positionFilter]);
+
+  const openSubscribeModal = (vault: EarnVaultItem) => {
+    if (!user) {
+      onOpenAuthModal?.();
+      showToast('info', 'Masuk Diperlukan', 'Silakan masuk ke akun Anda untuk melakukan stake pada Vault.');
       return;
     }
+    setSelectedVault(vault);
+    setStakeAmount(formatUnitsInput(vault.minStakeUnits, vault.decimals));
+    setAutoCompound(vault.autoCompoundSupported);
+  };
+
+  const handleSetMaxStake = () => {
+    if (!selectedVault) return;
+    const avail = getAvailableSpotDisplay(selectedVault.asset, selectedVault.decimals);
+    const availBig = BigInt(avail.units || '0');
+    const maxTxBig = BigInt(selectedVault.maxStakeUnits || '0');
+    const remCapBig = BigInt(selectedVault.remainingCapUnits || '0');
+
+    let best = availBig;
+    if (maxTxBig > 0n && maxTxBig < best) best = maxTxBig;
+    if (BigInt(selectedVault.totalCapUnits || '0') > 0n && remCapBig < best) best = remCapBig;
+    setStakeAmount(formatUnitsInput(best.toString(), selectedVault.decimals));
+  };
+
+  const estimatedReturnSummary = useMemo(() => {
+    if (!selectedVault) return { daily: '0', term: '0', annualized: '0' };
+    const clean = stakeAmount.trim();
+    if (!clean || Number(clean) <= 0 || !/^\d+(\.\d+)?$/.test(clean)) {
+      return { daily: '0', term: '0', annualized: '0' };
+    }
+    try {
+      const [intPart, frac = ''] = clean.split('.');
+      const paddedFrac = frac.slice(0, selectedVault.decimals).padEnd(selectedVault.decimals, '0');
+      const amtUnits = BigInt(intPart + paddedFrac);
+      const apyBig = BigInt(selectedVault.apyBps);
+      const dailyUnits = (amtUnits * apyBig) / 3650000n;
+      const annualUnits = (amtUnits * apyBig) / 10000n;
+      const termDays = selectedVault.durationDays > 0 ? BigInt(selectedVault.durationDays) : 30n;
+      const termUnits = (amtUnits * apyBig * termDays) / 3650000n;
+      return {
+        daily: formatUnitsClient(dailyUnits.toString(), selectedVault.decimals),
+        term: formatUnitsClient(termUnits.toString(), selectedVault.decimals),
+        annualized: formatUnitsClient(annualUnits.toString(), selectedVault.decimals),
+      };
+    } catch {
+      return { daily: '0', term: '0', annualized: '0' };
+    }
+  }, [selectedVault, stakeAmount]);
+
+  const handleSubscribeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedVault) return;
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!token) {
+      onOpenAuthModal?.();
+      return;
+    }
+    if (!stakeAmount.trim() || Number(stakeAmount) <= 0) {
+      showToast('error', 'Nominal Tidak Valid', 'Masukkan jumlah stake yang valid.');
+      return;
+    }
+
     setIsSubmitting(true);
-    setTimeout(() => {
-      setIsSubmitting(false);
+    try {
+      const idempotencyKey = `web-${selectedVault.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const res = await fetch('/api/earn/subscribe', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          vaultId: selectedVault.id,
+          amount: stakeAmount.trim(),
+          autoCompound: selectedVault.autoCompoundSupported ? autoCompound : false,
+          idempotencyKey,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Gagal melakukan stake');
+      }
+      if (data.summary) {
+        setSummary(data.summary);
+        setVaults(data.summary.vaults || []);
+        setPlatformStats(data.summary.platformStats || null);
+      } else {
+        await fetchEarnData(true);
+      }
+      onRefreshBalances?.();
       showToast(
         'success',
-        'Subscription Active',
-        `Successfully subscribed ${stakeAmount} ${selectedVault?.asset} at ${selectedVault?.apy}% APY.`
+        'Stake Berhasil Ditempatkan',
+        `${stakeAmount.trim()} ${selectedVault.asset} dikunci ke ${selectedVault.name} (${selectedVault.apyPct.toFixed(2)}% APY).`
       );
       setSelectedVault(null);
       setStakeAmount('');
-    }, 800);
+      setMainTab('POSITIONS');
+    } catch (err: any) {
+      showToast('error', 'Gagal Stake Vault', err?.message || 'Terjadi kesalahan saat subscription.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleClaimYield = async (pos: EarnPositionItem) => {
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!token) return;
+    setBusyPositionId(pos.id);
+    try {
+      const res = await fetch(`/api/earn/positions/${encodeURIComponent(pos.id)}/claim`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gagal klaim yield');
+      if (data.summary) {
+        setSummary(data.summary);
+        setVaults(data.summary.vaults || []);
+        setPlatformStats(data.summary.platformStats || null);
+      }
+      onRefreshBalances?.();
+      showToast(
+        'success',
+        'Imbal Hasil Diklaim',
+        `+${data.payout?.amountDisplay || pos.accruedYieldDisplay} ${pos.asset} dikirim ke Dompet Spot.`
+      );
+    } catch (err: any) {
+      showToast('error', 'Klaim Yield Gagal', err?.message || 'Tidak dapat mengklaim imbal hasil.');
+    } finally {
+      setBusyPositionId(null);
+    }
+  };
+
+  const handleToggleAutoCompound = async (pos: EarnPositionItem) => {
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!token) return;
+    setBusyPositionId(pos.id);
+    try {
+      const res = await fetch(`/api/earn/positions/${encodeURIComponent(pos.id)}/auto-compound`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ autoCompound: !pos.autoCompound }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gagal mengubah auto-compound');
+      if (data.summary) {
+        setSummary(data.summary);
+      }
+      showToast(
+        'success',
+        'Auto-Compound Diperbarui',
+        `${pos.vaultName}: Auto-Compound ${!pos.autoCompound ? 'AKTIF' : 'NONAKTIF'}.`
+      );
+    } catch (err: any) {
+      showToast('error', 'Pembaruan Gagal', err?.message || 'Gagal mengubah mode auto-compound.');
+    } finally {
+      setBusyPositionId(null);
+    }
+  };
+
+  const openRedeemModal = (pos: EarnPositionItem) => {
+    setRedeemTarget(pos);
+    setRedeemAmount(formatUnitsInput(pos.principalUnits, pos.decimals));
+    setConfirmEarlyRedeem(false);
+  };
+
+  const handleRedeemSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!redeemTarget) return;
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!token) return;
+
+    const isEarly = !redeemTarget.isMatured && redeemTarget.durationDays > 0;
+    if (isEarly && !confirmEarlyRedeem) {
+      showToast('error', 'Konfirmasi Diperlukan', 'Centang persetujuan ketentuan pencairan dini terlebih dahulu.');
+      return;
+    }
+
+    setIsRedeeming(true);
+    try {
+      const bodyPayload: Record<string, any> = {
+        confirmEarlyRedeem: isEarly ? confirmEarlyRedeem : true,
+      };
+      if (redeemTarget.durationDays === 0 && redeemAmount.trim()) {
+        bodyPayload.amount = redeemAmount.trim();
+      }
+
+      const res = await fetch(`/api/earn/positions/${encodeURIComponent(redeemTarget.id)}/redeem`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(bodyPayload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gagal mencairkan posisi Earn');
+
+      if (data.summary) {
+        setSummary(data.summary);
+        setVaults(data.summary.vaults || []);
+        setPlatformStats(data.summary.platformStats || null);
+      } else {
+        await fetchEarnData(true);
+      }
+      onRefreshBalances?.();
+
+      const returnedDisplay = formatUnitsClient(data.returnedPrincipalUnits || '0', redeemTarget.decimals);
+      showToast(
+        'success',
+        data.earlyRedemption ? 'Pencairan Dini Selesai' : 'Redemption Selesai',
+        `${returnedDisplay} ${redeemTarget.asset} telah dikembalikan ke Dompet Spot.`
+      );
+      setRedeemTarget(null);
+    } catch (err: any) {
+      showToast('error', 'Redemption Gagal', err?.message || 'Tidak dapat mencairkan dana dari vault.');
+    } finally {
+      setIsRedeeming(false);
+    }
   };
 
   return (
-    <div className="flex-1 flex flex-col p-4 lg:p-6 bg-[#090D12] overflow-y-auto space-y-6">
+    <div className="flex-1 flex flex-col p-4 lg:p-6 bg-[#090D12] overflow-y-auto">
       <div className="max-w-7xl w-full mx-auto space-y-6">
         <PageHeader
           title="Institutional Earn & Staking Vaults"
-          subtitle="Flexible savings, fixed-term custody yields, and validator staking with daily UTC interest settlement."
-          badge={<StatusBadge tone="brand" dot>DIMONEX Earn</StatusBadge>}
+          subtitle="Real double-entry custody pools with UTC 00:00 daily yield settlement and verifiable ledger accounting."
+          badge={<StatusBadge tone="brand">DIMONEX Custody</StatusBadge>}
           actions={
-            <div className="flex items-center gap-2 text-xs text-[#A1AFB8] bg-[#141C24] border border-[#202B34] rounded-[7px] px-3 py-1.5">
-              <ShieldCheck className="w-3.5 h-3.5 text-[#35B887]" />
-              <span>Audited Cold-Storage Custody</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-2 text-xs text-[#A1AFB8] bg-[#141C24] border border-[#202B34] rounded-[7px] px-3 py-1.5 whitespace-nowrap">
+                <ShieldCheck className="w-3.5 h-3.5 text-[#16A879] shrink-0" />
+                <span>Segregated Custody Ledger</span>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => fetchEarnData(false)}
+                disabled={isLoading}
+                icon={<RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />}
+              >
+                Refresh
+              </Button>
             </div>
           }
         />
 
-        <div className="overflow-x-auto pb-1">
-          <SegmentedTabs
-            activeTab={activeFilter}
-            onChange={setActiveFilter}
-            tabs={[
-              { id: 'ALL', label: 'All Products' },
-              { id: 'FLEXIBLE', label: 'Flexible Savings' },
-              { id: 'FIXED', label: 'Fixed Term (30–120d)' },
-              { id: 'STAKING', label: 'PoS Staking' },
-              { id: 'LAUNCHPOOL', label: 'Launchpool' },
-            ]}
-          />
+        {/* Platform & User KPI Metrics Strip */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4">
+            <div className="flex items-center justify-between text-[11px] uppercase tracking-wider text-[#71818B] font-mono">
+              <span>Platform Live TVL</span>
+              <Coins className="w-3.5 h-3.5 text-[#8DA5B1]" />
+            </div>
+            <div className="mt-1.5 text-xl font-mono tabular-nums font-semibold text-[#E4EBEF]">
+              {platformStats
+                ? formatUsdOrIdr(platformStats.totalValueLockedUsd, platformStats.totalValueLockedIdr, displayCurrency)
+                : '—'}
+            </div>
+            <div className="mt-1 text-[11px] text-[#71818B] font-mono tabular-nums">
+              {platformStats ? `${platformStats.activeVaults} active vaults · ${platformStats.totalStakersCount} active stakers` : 'Loading live custody metrics'}
+            </div>
+          </div>
+
+          <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4">
+            <div className="flex items-center justify-between text-[11px] uppercase tracking-wider text-[#71818B] font-mono">
+              <span>My Staked Principal</span>
+              <PiggyBank className="w-3.5 h-3.5 text-[#16A879]" />
+            </div>
+            <div className="mt-1.5 text-xl font-mono tabular-nums font-semibold text-[#E4EBEF]">
+              {user && summary
+                ? formatUsdOrIdr(summary.portfolio.totalStakedUsd, summary.portfolio.totalStakedIdr, displayCurrency)
+                : user
+                  ? '—'
+                  : 'Sign In'}
+            </div>
+            <div className="mt-1 text-[11px] text-[#71818B] font-mono tabular-nums">
+              {user && summary
+                ? `${summary.portfolio.activePositionsCount} active positions`
+                : 'Authenticate to view portfolio'}
+            </div>
+          </div>
+
+          <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4">
+            <div className="flex items-center justify-between text-[11px] uppercase tracking-wider text-[#71818B] font-mono">
+              <span>Weighted Avg APY</span>
+              <TrendingUp className="w-3.5 h-3.5 text-[#16A879]" />
+            </div>
+            <div className="mt-1.5 text-xl font-mono tabular-nums font-semibold text-[#16A879]">
+              {user && summary ? `${summary.portfolio.weightedAvgApyPct.toFixed(2)}%` : '0.00%'}
+            </div>
+            <div className="mt-1 text-[11px] text-[#71818B] font-mono">
+              UTC 00:00 daily accrual cycle
+            </div>
+          </div>
+
+          <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4">
+            <div className="flex items-center justify-between text-[11px] uppercase tracking-wider text-[#71818B] font-mono">
+              <span>Claimable Settled Yield</span>
+              <CheckCircle2 className="w-3.5 h-3.5 text-[#35B887]" />
+            </div>
+            <div className="mt-1.5 text-xl font-mono tabular-nums font-semibold text-[#35B887]">
+              {user && summary
+                ? `$${summary.portfolio.totalClaimableUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`
+                : '$0.00'}
+            </div>
+            <div className="mt-1 text-[11px] text-[#71818B] font-mono tabular-nums">
+              Lifetime earned: ${user && summary ? summary.portfolio.totalYieldEarnedUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) : '0.00'}
+            </div>
+          </div>
         </div>
 
-        {/* Vaults Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {filteredVaults.map(vault => (
-            <div
-              key={vault.id}
-              className="rounded-[10px] bg-[#141C24] border border-[#202B34] hover:border-[#40515D] p-5 flex flex-col justify-between transition-colors"
-            >
-              <div>
-                <div className="flex items-start justify-between gap-2 mb-3">
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <AssetIcon symbol={vault.asset} size="md" />
-                    <div className="min-w-0">
-                      <span className="font-semibold text-xs text-[#E4EBEF] block truncate">{vault.name}</span>
-                      <span className="text-[11px] text-[#71818B] font-mono">{vault.duration}</span>
+        {/* Navigation Tabs & Search */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="overflow-x-auto pb-1">
+            <SegmentedTabs
+              activeTab={mainTab}
+              onChange={(tab) => setMainTab(tab as 'DASHBOARD' | 'VAULTS' | 'POSITIONS' | 'HISTORY')}
+              tabs={[
+                { id: 'DASHBOARD', label: 'Staking Dashboard' },
+                { id: 'VAULTS', label: `All Vaults (${vaults.length})` },
+                { id: 'POSITIONS', label: `My Positions (${summary?.positions.filter(p => p.status !== 'REDEEMED').length || 0})` },
+                { id: 'HISTORY', label: `Yield History (${summary?.payouts.length || 0})` },
+              ]}
+            />
+          </div>
+
+          {mainTab === 'VAULTS' && (
+            <div className="w-full md:w-64">
+              <Input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search asset or vault..."
+                className="h-9 text-xs"
+              />
+            </div>
+          )}
+        </div>
+
+        {loadError && (
+          <div className="rounded-[10px] bg-[#401F27]/60 border border-[#EA5B65]/40 p-4 flex items-center justify-between gap-3 text-xs text-[#E4EBEF]">
+            <span>{loadError}</span>
+            <Button variant="secondary" size="sm" onClick={() => fetchEarnData(false)}>
+              Retry
+            </Button>
+          </div>
+        )}
+
+        {/* TAB 0: REAL-TIME STAKING DASHBOARD */}
+        {mainTab === 'DASHBOARD' && (
+          <StakingDashboard
+            user={user}
+            balances={balances}
+            displayCurrency={displayCurrency}
+            externalSummary={summary}
+            externalVaults={vaults}
+            onSelectVaultToStake={openSubscribeModal}
+            onClaimPosition={handleClaimYield}
+            onNavigateTab={setMainTab}
+            onOpenAuthModal={onOpenAuthModal}
+          />
+        )}
+
+        {/* TAB 1: VAULTS CATALOG */}
+        {mainTab === 'VAULTS' && (
+          <div className="space-y-4">
+            <div className="overflow-x-auto pb-1">
+              <SegmentedTabs
+                activeTab={vaultFilter}
+                onChange={(tab) => setVaultFilter(tab as typeof vaultFilter)}
+                tabs={[
+                  { id: 'ALL', label: 'All Vaults' },
+                  { id: 'FLEXIBLE', label: 'Flexible Savings' },
+                  { id: 'FIXED', label: 'Fixed Term' },
+                  { id: 'STAKING', label: 'PoS Staking' },
+                  { id: 'LAUNCHPOOL', label: 'Launchpool' },
+                ]}
+              />
+            </div>
+
+            {isLoading && vaults.length === 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {[1, 2, 3, 4].map(idx => (
+                  <div key={idx} className="h-64 rounded-[10px] bg-[#141C24] border border-[#202B34] animate-pulse p-5" />
+                ))}
+              </div>
+            ) : filteredVaults.length === 0 ? (
+              <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-10 text-center space-y-2">
+                <p className="text-sm font-semibold text-[#E4EBEF]">No matching vaults found</p>
+                <p className="text-xs text-[#71818B]">Adjust your product category filter or asset search query.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {filteredVaults.map(vault => {
+                  const spotAvail = getAvailableSpotDisplay(vault.asset, vault.decimals);
+                  const capPct = Math.min(100, Math.round(vault.utilizationBps / 100));
+                  const isPaused = vault.status !== 'ACTIVE';
+                  return (
+                    <div
+                      key={vault.id}
+                      className="rounded-[10px] bg-[#141C24] border border-[#202B34] hover:border-[#40515D] p-5 flex flex-col justify-between transition-colors"
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-2 mb-3">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <AssetIcon symbol={vault.asset} logoUrl={vault.assetLogoUrl} size="md" />
+                            <div className="min-w-0">
+                              <span className="font-semibold text-xs text-[#E4EBEF] block truncate">{vault.name}</span>
+                              <span className="text-[11px] text-[#71818B] font-mono">
+                                {vault.type} · {vault.durationDays === 0 ? 'Flexible' : `${vault.durationDays} Days`}
+                              </span>
+                            </div>
+                          </div>
+                          {isPaused ? (
+                            <StatusBadge tone="warning">PAUSED</StatusBadge>
+                          ) : vault.isFeatured ? (
+                            <StatusBadge tone="brand">FEATURED</StatusBadge>
+                          ) : null}
+                        </div>
+
+                        <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34] my-3 flex items-baseline justify-between">
+                          <div>
+                            <span className="text-[10px] uppercase tracking-wider text-[#71818B] block">Annual APY</span>
+                            <span className="text-2xl font-mono tabular-nums font-semibold text-[#16A879]">
+                              {vault.apyPct.toFixed(2)}%
+                            </span>
+                          </div>
+                          <div className="text-right font-mono tabular-nums">
+                            <span className="text-[10px] uppercase tracking-wider text-[#71818B] block">Stakers</span>
+                            <span className="text-xs font-semibold text-[#E4EBEF]">{vault.activeStakersCount}</span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1.5 text-xs mb-3">
+                          <div className="flex justify-between">
+                            <span className="text-[#71818B]">Min Stake</span>
+                            <span className="text-[#E4EBEF] font-mono tabular-nums">
+                              {formatUnitsClient(vault.minStakeUnits, vault.decimals)} {vault.asset}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#71818B]">Live Vault TVL</span>
+                            <span className="text-[#E4EBEF] font-mono tabular-nums">
+                              {vault.totalStakedDisplay} {vault.asset}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#71818B]">TVL Value</span>
+                            <span className="text-[#A1AFB8] font-mono tabular-nums">
+                              {formatUsdOrIdr(vault.totalStakedUsd, vault.totalStakedIdr, displayCurrency)}
+                            </span>
+                          </div>
+                          {user && (
+                            <div className="flex justify-between">
+                              <span className="text-[#71818B]">Spot Avail</span>
+                              <span className="text-[#35B887] font-mono tabular-nums">
+                                {spotAvail.display} {vault.asset}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Capacity bar */}
+                        <div className="mb-4 space-y-1">
+                          <div className="flex justify-between text-[10px] font-mono text-[#71818B] tabular-nums">
+                            <span>Pool Utilization</span>
+                            <span>{capPct}% / Cap {formatUnitsClient(vault.totalCapUnits, vault.decimals)} {vault.asset}</span>
+                          </div>
+                          <div className="h-1.5 rounded-full bg-[#111820] overflow-hidden border border-[#202B34]">
+                            <div
+                              className="h-full bg-[#16A879] transition-all"
+                              style={{ width: `${Math.max(capPct, vault.totalStakedUnits !== '0' ? 2 : 0)}%` }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <Button
+                        variant={isPaused ? 'secondary' : 'profit'}
+                        size="md"
+                        className="w-full"
+                        disabled={isPaused}
+                        onClick={() => openSubscribeModal(vault)}
+                      >
+                        {isPaused ? 'Pool Paused' : user ? `Stake ${vault.asset}` : `Sign In to Stake`}
+                      </Button>
                     </div>
-                  </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
-                  {vault.isHot && <StatusBadge tone="warning">FEATURED</StatusBadge>}
-                </div>
-
-                <div className="p-3 rounded-[7px] bg-[#111820] border border-[#202B34] my-3">
-                  <span className="text-[10px] uppercase tracking-wider text-[#71818B] block">Estimated APY</span>
-                  <span className="text-2xl font-mono tabular-nums font-semibold text-[#16A879]">
-                    {vault.apy.toFixed(2)}%
+        {/* TAB 2: MY POSITIONS */}
+        {mainTab === 'POSITIONS' && (
+          <div className="space-y-4">
+            {!user ? (
+              <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-10 text-center space-y-3">
+                <Lock className="w-6 h-6 text-[#8DA5B1] mx-auto" />
+                <p className="text-sm font-semibold text-[#E4EBEF]">Authentication Required</p>
+                <p className="text-xs text-[#A1AFB8] max-w-md mx-auto">
+                  Sign in to view your staked principal positions, manage Auto-Compound, claim settled daily yield, or redeem funds.
+                </p>
+                <Button variant="primary" size="md" onClick={() => onOpenAuthModal?.()}>
+                  Sign In
+                </Button>
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <SegmentedTabs
+                    activeTab={positionFilter}
+                    onChange={(tab) => setPositionFilter(tab as typeof positionFilter)}
+                    tabs={[
+                      { id: 'ACTIVE', label: 'Active & Matured' },
+                      { id: 'REDEEMED', label: 'Redeemed' },
+                      { id: 'ALL', label: 'All Positions' },
+                    ]}
+                  />
+                  <span className="text-xs text-[#71818B] font-mono">
+                    Daily yield settles at 00:00 UTC directly from Treasury Reserve
                   </span>
                 </div>
 
-                <div className="space-y-1.5 text-xs text-[#A1AFB8] font-mono tabular-nums pb-4 border-b border-[#202B34]">
-                  <div className="flex justify-between">
-                    <span className="font-sans text-[#71818B]">Min Subscription</span>
-                    <span className="text-[#E4EBEF]">{vault.minAmount}</span>
+                {filteredPositions.length === 0 ? (
+                  <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-10 text-center space-y-3">
+                    <PiggyBank className="w-6 h-6 text-[#71818B] mx-auto" />
+                    <p className="text-sm font-semibold text-[#E4EBEF]">No staking positions in this view</p>
+                    <p className="text-xs text-[#A1AFB8]">Allocate idle Spot balances into any active Vault to begin earning UTC daily yield.</p>
+                    <Button variant="secondary" size="sm" onClick={() => setMainTab('VAULTS')}>
+                      Explore Earn Vaults
+                    </Button>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="font-sans text-[#71818B]">Total Capacity</span>
-                    <span className="text-[#E4EBEF]">{vault.totalLocked}</span>
+                ) : (
+                  <div className="space-y-3">
+                    {filteredPositions.map(pos => {
+                      const isBusy = busyPositionId === pos.id;
+                      const isRedeemed = pos.status === 'REDEEMED';
+                      return (
+                        <div
+                          key={pos.id}
+                          className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                        >
+                          <div className="flex items-start gap-3 min-w-0">
+                            <AssetIcon symbol={pos.asset} size="md" />
+                            <div className="space-y-1 min-w-0">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-sm font-semibold text-[#E4EBEF]">{pos.vaultName}</span>
+                                <StatusBadge
+                                  tone={
+                                    pos.status === 'ACTIVE'
+                                      ? 'success'
+                                      : pos.status === 'MATURED'
+                                        ? 'info'
+                                        : 'neutral'
+                                  }
+                                >
+                                  {pos.status}
+                                </StatusBadge>
+                                <span className="text-xs font-mono text-[#16A879] font-semibold">
+                                  {pos.apyPct.toFixed(2)}% APY
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono text-[#71818B]">
+                                <span>ID: {pos.id}</span>
+                                <span>·</span>
+                                <span className="inline-flex items-center gap-1">
+                                  <CalendarClock className="w-3 h-3" />
+                                  {pos.durationDays === 0
+                                    ? 'Flexible Term'
+                                    : pos.maturesAt
+                                      ? `Matures ${new Date(pos.maturesAt).toLocaleDateString('id-ID')}`
+                                      : `${pos.durationDays} Days`}
+                                </span>
+                                <span>·</span>
+                                <span>Started {new Date(pos.startedAt).toLocaleDateString('id-ID')}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 lg:gap-6 font-mono tabular-nums text-xs">
+                            <div>
+                              <span className="text-[10px] uppercase text-[#71818B] block">Staked Principal</span>
+                              <span className="font-semibold text-[#E4EBEF]">
+                                {pos.principalDisplay} {pos.asset}
+                              </span>
+                              <span className="text-[10px] text-[#71818B] block">
+                                {formatUsdOrIdr(pos.principalUsd, pos.principalIdr, displayCurrency)}
+                              </span>
+                            </div>
+
+                            <div>
+                              <span className="text-[10px] uppercase text-[#71818B] block">Est. Daily Yield</span>
+                              <span className="text-[#A1AFB8]">
+                                +{pos.dailyEstimatedYieldDisplay} {pos.asset}
+                              </span>
+                              {!isRedeemed && BigInt(pos.liveAccruingYieldUnits || '0') > 0n && (
+                                <span className="text-[10px] text-[#71818B] block">
+                                  Accruing: +{pos.liveAccruingYieldDisplay}
+                                </span>
+                              )}
+                            </div>
+
+                            <div>
+                              <span className="text-[10px] uppercase text-[#71818B] block">Claimable Yield</span>
+                              <span className="font-semibold text-[#16A879]">
+                                {pos.accruedYieldDisplay} {pos.asset}
+                              </span>
+                              <span className="text-[10px] text-[#71818B] block">
+                                Claimed: {pos.claimedYieldDisplay}
+                              </span>
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-end gap-2 col-span-2 sm:col-span-1">
+                              {!isRedeemed && pos.autoCompoundSupported && (
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  disabled={isBusy}
+                                  onClick={() => handleToggleAutoCompound(pos)}
+                                  title="Toggle daily auto-compounding into principal"
+                                >
+                                  Compound: {pos.autoCompound ? 'ON' : 'OFF'}
+                                </Button>
+                              )}
+                              {!isRedeemed && (
+                                <Button
+                                  variant="profit"
+                                  size="sm"
+                                  disabled={isBusy || !pos.canClaim}
+                                  onClick={() => handleClaimYield(pos)}
+                                >
+                                  Claim
+                                </Button>
+                              )}
+                              {!isRedeemed && pos.canRedeem && (
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  disabled={isBusy}
+                                  onClick={() => openRedeemModal(pos)}
+                                >
+                                  Redeem
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                  <div className="flex justify-between">
-                    <span className="font-sans text-[#71818B]">Payout Schedule</span>
-                    <span className="text-[#16A879] font-medium">Daily 00:00 UTC</span>
-                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* TAB 3: YIELD HISTORY */}
+        {mainTab === 'HISTORY' && (
+          <div className="space-y-4">
+            {!user ? (
+              <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-10 text-center space-y-3">
+                <History className="w-6 h-6 text-[#8DA5B1] mx-auto" />
+                <p className="text-sm font-semibold text-[#E4EBEF]">Sign In to View Yield Payout Ledger</p>
+                <Button variant="primary" size="md" onClick={() => onOpenAuthModal?.()}>
+                  Sign In
+                </Button>
+              </div>
+            ) : !summary || summary.payouts.length === 0 ? (
+              <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-10 text-center space-y-2">
+                <History className="w-6 h-6 text-[#71818B] mx-auto" />
+                <p className="text-sm font-semibold text-[#E4EBEF]">No yield payouts recorded yet</p>
+                <p className="text-xs text-[#71818B]">
+                  Daily UTC settlements, auto-compounds, and manual yield claims appear here with verifiable ledger journal IDs.
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs font-mono tabular-nums">
+                    <thead className="bg-[#17212B] text-[11px] text-[#A1AFB8] border-b border-[#202B34] font-sans">
+                      <tr>
+                        <th className="px-4 py-3 font-semibold">Timestamp (UTC/Local)</th>
+                        <th className="px-4 py-3 font-semibold">Asset</th>
+                        <th className="px-4 py-3 font-semibold">Event Type</th>
+                        <th className="px-4 py-3 font-semibold">Yield Amount</th>
+                        <th className="px-4 py-3 font-semibold">APY</th>
+                        <th className="px-4 py-3 font-semibold">Ledger Journal</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#202B34]">
+                      {summary.payouts.map((row: EarnPayoutItem) => (
+                        <tr key={row.id} className="hover:bg-[#17212B]/60 transition-colors">
+                          <td className="px-4 py-3 text-[#A1AFB8]">
+                            {new Date(row.createdAt).toLocaleString('id-ID')}
+                          </td>
+                          <td className="px-4 py-3 font-semibold text-[#E4EBEF]">{row.asset}</td>
+                          <td className="px-4 py-3 font-sans">
+                            <StatusBadge
+                              tone={
+                                row.payoutType === 'AUTO_COMPOUND'
+                                  ? 'info'
+                                  : row.payoutType === 'MANUAL_CLAIM' || row.payoutType === 'REDEMPTION_SETTLEMENT'
+                                    ? 'success'
+                                    : 'brand'
+                              }
+                            >
+                              {row.payoutType}
+                            </StatusBadge>
+                          </td>
+                          <td className="px-4 py-3 text-[#16A879] font-semibold">
+                            +{row.amountDisplay} {row.asset}
+                          </td>
+                          <td className="px-4 py-3 text-[#E4EBEF]">{row.apyPct.toFixed(2)}%</td>
+                          <td className="px-4 py-3 text-[#71818B] truncate max-w-[180px]" title={row.journalId}>
+                            {row.journalId}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               </div>
-
-              <Button
-                variant="primary"
-                size="sm"
-                className="w-full mt-4"
-                onClick={() => {
-                  setSelectedVault(vault);
-                  setStakeAmount('500');
-                }}
-              >
-                Subscribe Vault
-              </Button>
-            </div>
-          ))}
-        </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Subscribe Modal */}
+      {/* Subscribe Vault Modal */}
       <Modal
         isOpen={Boolean(selectedVault)}
         onClose={() => setSelectedVault(null)}
-        title={selectedVault ? `Subscribe to ${selectedVault.name}` : 'Subscribe'}
-        subtitle={selectedVault ? `Duration: ${selectedVault.duration} · Payout: Daily` : undefined}
-        maxWidth="max-w-md"
+        title={selectedVault ? `Subscribe: ${selectedVault.name}` : 'Subscribe Vault'}
+        subtitle={
+          selectedVault
+            ? `${selectedVault.apyPct.toFixed(2)}% APY · ${selectedVault.durationDays === 0 ? 'Flexible Term' : `${selectedVault.durationDays}-Day Lockup`}`
+            : ''
+        }
       >
         {selectedVault && (
-          <div className="space-y-4">
-            <div className="p-3.5 rounded-[10px] bg-[#111820] border border-[#202B34] flex items-center justify-between font-mono tabular-nums text-xs">
-              <span className="text-[#A1AFB8] font-sans">Annual Yield (APY)</span>
-              <span className="text-lg font-semibold text-[#16A879]">+{selectedVault.apy.toFixed(2)}%</span>
+          <form onSubmit={handleSubscribeSubmit} className="space-y-4">
+            <div className="flex items-center justify-between text-xs p-3 rounded-[8px] bg-[#111820] border border-[#202B34]">
+              <span className="text-[#A1AFB8]">Available Spot Balance</span>
+              <span className="font-mono tabular-nums font-semibold text-[#E4EBEF]">
+                {getAvailableSpotDisplay(selectedVault.asset, selectedVault.decimals).display} {selectedVault.asset}
+              </span>
             </div>
 
-            <Input
-              label={`Stake Amount (${selectedVault.asset})`}
-              value={stakeAmount}
-              onChange={e => setStakeAmount(e.target.value)}
-              suffixText={selectedVault.asset}
-              actionText={`Min: ${selectedVault.minAmount}`}
-            />
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-[#A1AFB8]">
+                  Subscription Amount ({selectedVault.asset})
+                </label>
+                <button
+                  type="button"
+                  onClick={handleSetMaxStake}
+                  className="text-[11px] font-mono font-semibold text-[#16A879] hover:text-[#35B887] cursor-pointer"
+                >
+                  MAX AVAILABLE
+                </button>
+              </div>
+              <Input
+                type="text"
+                inputMode="decimal"
+                value={stakeAmount}
+                onChange={(e) => setStakeAmount(e.target.value)}
+                placeholder={`Min ${formatUnitsClient(selectedVault.minStakeUnits, selectedVault.decimals)}`}
+                className="font-mono"
+                required
+              />
+              <div className="flex justify-between text-[11px] text-[#71818B] font-mono tabular-nums">
+                <span>Min: {formatUnitsClient(selectedVault.minStakeUnits, selectedVault.decimals)} {selectedVault.asset}</span>
+                {BigInt(selectedVault.maxStakeUnits || '0') > 0n && (
+                  <span>Max/Tx: {formatUnitsClient(selectedVault.maxStakeUnits, selectedVault.decimals)} {selectedVault.asset}</span>
+                )}
+              </div>
+            </div>
 
-            <div className="p-3.5 rounded-[10px] bg-[#111820] border border-[#202B34] text-xs text-[#A1AFB8] space-y-1.5">
+            {selectedVault.autoCompoundSupported && (
+              <label className="flex items-center justify-between p-3 rounded-[8px] bg-[#111820] border border-[#202B34] cursor-pointer">
+                <div>
+                  <span className="text-xs font-semibold text-[#E4EBEF] block">Auto-Compound Daily Yield</span>
+                  <span className="text-[11px] text-[#71818B]">
+                    Automatically reinvest 00:00 UTC daily interest back into staked principal
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={autoCompound}
+                  onChange={(e) => setAutoCompound(e.target.checked)}
+                  className="w-4 h-4 accent-[#16A879]"
+                />
+              </label>
+            )}
+
+            <div className="rounded-[8px] bg-[#111820] border border-[#202B34] p-3 space-y-2 text-xs font-mono tabular-nums">
               <div className="flex justify-between">
-                <span>Estimated Daily Return</span>
-                <span className="text-[#16A879] font-mono tabular-nums font-semibold">
-                  ≈ {((parseFloat(stakeAmount || '0') * selectedVault.apy) / 100 / 365).toFixed(4)} {selectedVault.asset}
+                <span className="text-[#71818B]">Estimated Daily Yield</span>
+                <span className="text-[#16A879] font-semibold">
+                  +{estimatedReturnSummary.daily} {selectedVault.asset}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span>Redemption</span>
-                <span className="text-[#E4EBEF]">Instant to Spot Wallet</span>
+                <span className="text-[#71818B]">
+                  Est. {selectedVault.durationDays > 0 ? `${selectedVault.durationDays}-Day Term` : '30-Day'} Yield
+                </span>
+                <span className="text-[#E4EBEF]">
+                  +{estimatedReturnSummary.term} {selectedVault.asset}
+                </span>
+              </div>
+              <div className="flex justify-between pt-2 border-t border-[#202B34]">
+                <span className="text-[#71818B]">Early Exit Rule</span>
+                <span className="text-[#A1AFB8]">
+                  {selectedVault.durationDays === 0
+                    ? 'Instant · 0% Fee'
+                    : selectedVault.earlyRedeemAllowed
+                      ? `Allowed · ${(selectedVault.earlyRedeemPenaltyBps / 100).toFixed(2)}% penalty`
+                      : 'Locked until maturity'}
+                </span>
               </div>
             </div>
 
-            <div className="flex items-center gap-3 pt-1">
-              <Button variant="outline" size="md" className="flex-1" onClick={() => setSelectedVault(null)}>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button variant="secondary" type="button" onClick={() => setSelectedVault(null)}>
                 Cancel
               </Button>
-              <Button variant="primary" size="md" className="flex-1" isLoading={isSubmitting} onClick={handleSubscribe}>
-                Confirm Staking
+              <Button variant="profit" type="submit" disabled={isSubmitting}>
+                {isSubmitting ? 'Processing Ledger Lock...' : `Confirm Stake ${selectedVault.asset}`}
               </Button>
             </div>
-          </div>
+          </form>
+        )}
+      </Modal>
+
+      {/* Redeem Position Modal */}
+      <Modal
+        isOpen={Boolean(redeemTarget)}
+        onClose={() => setRedeemTarget(null)}
+        title={redeemTarget ? `Redeem: ${redeemTarget.vaultName}` : 'Redeem Position'}
+        subtitle={
+          redeemTarget
+            ? `Principal: ${redeemTarget.principalDisplay} ${redeemTarget.asset}`
+            : ''
+        }
+      >
+        {redeemTarget && (
+          <form onSubmit={handleRedeemSubmit} className="space-y-4">
+            <div className="rounded-[8px] bg-[#111820] border border-[#202B34] p-3 space-y-2 text-xs font-mono tabular-nums">
+              <div className="flex justify-between">
+                <span className="text-[#71818B]">Custody Principal</span>
+                <span className="font-semibold text-[#E4EBEF]">
+                  {redeemTarget.principalDisplay} {redeemTarget.asset}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[#71818B]">Settled Accrued Yield</span>
+                <span className="text-[#16A879]">
+                  +{redeemTarget.accruedYieldDisplay} {redeemTarget.asset}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-[#71818B]">Term Status</span>
+                <span className="text-[#A1AFB8]">
+                  {redeemTarget.isMatured ? 'Eligible for 0% Penalty Release' : 'Before Maturity Date'}
+                </span>
+              </div>
+            </div>
+
+            {redeemTarget.durationDays === 0 ? (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-[#A1AFB8]">
+                    Redeem Amount ({redeemTarget.asset})
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setRedeemAmount(formatUnitsInput(redeemTarget.principalUnits, redeemTarget.decimals))}
+                    className="text-[11px] font-mono font-semibold text-[#16A879] cursor-pointer"
+                  >
+                    REDEEM FULL
+                  </button>
+                </div>
+                <Input
+                  type="text"
+                  inputMode="decimal"
+                  value={redeemAmount}
+                  onChange={(e) => setRedeemAmount(e.target.value)}
+                  className="font-mono"
+                  required
+                />
+              </div>
+            ) : !redeemTarget.isMatured ? (
+              <div className="rounded-[8px] bg-[#2C2415] border border-[#D6A85C]/40 p-3 space-y-2 text-xs text-[#E4EBEF]">
+                <p className="font-semibold text-[#D6A85C]">Early Term Exit Notice</p>
+                <p className="text-[#A1AFB8] leading-relaxed">
+                  Position matures on {redeemTarget.maturesAt ? new Date(redeemTarget.maturesAt).toLocaleString('id-ID') : '-'}.
+                  Redeeming early deducts a {(redeemTarget.earlyRedeemPenaltyBps / 100).toFixed(2)}% early exit fee on principal and forfeits unclaimed accrued yield.
+                </p>
+                <label className="flex items-center gap-2 pt-1 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={confirmEarlyRedeem}
+                    onChange={(e) => setConfirmEarlyRedeem(e.target.checked)}
+                    className="w-4 h-4 accent-[#D6A85C]"
+                  />
+                  <span className="text-xs font-medium">I accept early redemption terms and fee deduction</span>
+                </label>
+              </div>
+            ) : null}
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button variant="secondary" type="button" onClick={() => setRedeemTarget(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant={!redeemTarget.isMatured && redeemTarget.durationDays > 0 ? 'danger' : 'profit'}
+                type="submit"
+                disabled={isRedeeming}
+                icon={<ArrowDownLeft className="w-3.5 h-3.5" />}
+              >
+                {isRedeeming ? 'Releasing Custody...' : 'Confirm Redemption'}
+              </Button>
+            </div>
+          </form>
         )}
       </Modal>
     </div>

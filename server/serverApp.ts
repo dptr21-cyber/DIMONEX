@@ -43,6 +43,8 @@ import { newsCmsService } from './services/cms/NewsCmsService.js';
 import { notificationBroadcastService } from './services/cms/NotificationBroadcastService.js';
 import { rewardsRouter } from './routes/rewards.js';
 import { rewardsAdminRouter } from './routes/rewardsAdmin.js';
+import { earnRouter } from './routes/earn.js';
+import { earnService } from './services/earn/EarnService.js';
 
 export async function startServer() {
   const app = express();
@@ -83,6 +85,7 @@ export async function startServer() {
   app.use('/api/public', newsPublicRouter);
   app.use('/api/notifications', notificationsRouter);
   app.use('/api/rewards', rewardsRouter);
+  app.use('/api/earn', earnRouter);
   app.use('/api/risk', riskRouter);
   app.use('/api/bot/volume-v2', volumeExecutionV2Router);
   app.use('/api/bot', botRouter);
@@ -189,6 +192,7 @@ export async function startServer() {
     newsCmsService.startScheduler();
     notificationBroadcastService.start();
     volumeExecutionV2Service.startRecoveryScheduler();
+    earnService.startScheduler();
 
     // Background periodic live rate sync every 60 seconds
     setInterval(() => {

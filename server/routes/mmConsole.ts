@@ -15,7 +15,7 @@ import { requireAuth, requireMM, requireAdmin } from './auth.js';
 import { AuthService } from '../auth/AuthService.js';
 import { db } from '../db/database.js';
 import { botWorkerManager } from '../services/BotWorkerManager.js';
-import { BotInstance, OrderBotConfig, VolumeBotConfig, PriceFollowerConfig, DepthLiquidityConfig, MovementDepthLiquidityConfig, QuantHftConfig, SmartHftLadderConfig, AdvancedMarketMakerConfig, PatternFormationType, PatternTimeframe, Environment, BacktestDataSourceMode, BacktestRequest } from '../db/types.js';
+import { BotInstance, OrderBotConfig, VolumeBotConfig, VolumeSpreadBotConfig, PriceFollowerConfig, DepthLiquidityConfig, MovementDepthLiquidityConfig, QuantHftConfig, SmartHftLadderConfig, AdvancedMarketMakerConfig, PatternFormationType, PatternTimeframe, Environment, BacktestDataSourceMode, BacktestRequest } from '../db/types.js';
 import { priceAggregatorService } from '../services/external/PriceAggregatorService.js';
 import { fxConversionService } from '../services/external/FxConversionService.js';
 import { DepthLiquidityBotExecutor } from '../services/bots/DepthLiquidityBot.js';
@@ -322,6 +322,123 @@ mmConsoleRouter.post('/volume-bot/create', requireMMOrAdmin, (req, res) => {
   }
 });
 
+// 4b. Create Volume Spread Bot (Phase 2 — Inside Spread Self-Cross)
+mmConsoleRouter.post('/volume-spread-bot/create', requireMMOrAdmin, (req, res) => {
+  try {
+    const user = (req as any).user;
+    const {
+      name,
+      pairId,
+      environment,
+      account_id,
+      counterparty_account_id,
+      spread_mode,
+      side_pattern,
+      random_min_quantity,
+      random_max_quantity,
+      min_delay,
+      max_delay,
+      spread_band_min_pct,
+      spread_band_max_pct,
+      min_spread_bps,
+      fallback_half_spread_bps,
+      require_two_sided_book,
+      cross_delay_ms,
+      tick_size,
+      min_limit_price,
+      max_limit_price,
+      vol_quote_stop_target
+    } = req.body;
+
+    if (!name || !pairId || !random_min_quantity || !random_max_quantity || !vol_quote_stop_target) {
+      return res.status(400).json({ error: 'Field konfigurasi Volume Spread Bot (Phase 2) belum lengkap.' });
+    }
+
+    const pair = db.tradingPairs.get(pairId);
+    const defaultMinPrice = pair && BigInt(pair.lastPrice || '0') > 0n
+      ? PrecisionMath.formatFromUnits((BigInt(pair.lastPrice) * 70n) / 100n, pair.quoteDecimals)
+      : '1000000000';
+    const defaultMaxPrice = pair && BigInt(pair.lastPrice || '0') > 0n
+      ? PrecisionMath.formatFromUnits((BigInt(pair.lastPrice) * 130n) / 100n, pair.quoteDecimals)
+      : '2000000000';
+
+    const parsedMinDelay = Math.max(1, parseInt(String(min_delay ?? 2), 10) || 2);
+    const parsedMaxDelay = Math.max(parsedMinDelay, parseInt(String(max_delay ?? 5), 10) || parsedMinDelay);
+    const parsedBandMin = Math.max(1, Math.min(99, parseInt(String(spread_band_min_pct ?? 15), 10) || 15));
+    const parsedBandMax = Math.max(parsedBandMin, Math.min(99, parseInt(String(spread_band_max_pct ?? 85), 10) || 85));
+
+    const volumeSpreadConfig: VolumeSpreadBotConfig = {
+      account_id: account_id || user.id,
+      counterparty_account_id: counterparty_account_id ? String(counterparty_account_id).trim() : undefined,
+      spread_mode: ['INSIDE_SPREAD', 'MIDPOINT_JITTER', 'PING_PONG_EDGE'].includes(spread_mode)
+        ? spread_mode
+        : 'INSIDE_SPREAD',
+      side_pattern: ['ALTERNATE', 'RANDOM', 'BUY_EATS_SELL', 'SELL_EATS_BUY'].includes(side_pattern)
+        ? side_pattern
+        : 'ALTERNATE',
+      random_min_quantity: String(random_min_quantity),
+      random_max_quantity: String(random_max_quantity),
+      min_delay: parsedMinDelay,
+      max_delay: parsedMaxDelay,
+      spread_band_min_pct: parsedBandMin,
+      spread_band_max_pct: parsedBandMax,
+      min_spread_bps: Math.max(1, parseInt(String(min_spread_bps ?? 2), 10) || 2),
+      fallback_half_spread_bps: Math.max(1, parseInt(String(fallback_half_spread_bps ?? 15), 10) || 15),
+      require_two_sided_book: Boolean(require_two_sided_book ?? false),
+      cross_delay_ms: Math.min(2000, Math.max(0, parseInt(String(cross_delay_ms ?? 150), 10) || 0)),
+      tick_size: tick_size ? String(tick_size).trim() : undefined,
+      min_limit_price: String(min_limit_price || defaultMinPrice),
+      max_limit_price: String(max_limit_price || defaultMaxPrice),
+      vol_quote_stop_target: String(vol_quote_stop_target),
+      executedQuoteVolumeUnits: '0',
+      spreadSelfTradesCount: 0
+    };
+
+    const botId = `bot-vsp-${crypto.randomUUID().slice(0, 8)}`;
+    const bot: BotInstance = {
+      id: botId,
+      name: String(name).trim(),
+      botType: 'VOLUME_SPREAD_BOT',
+      pairId,
+      environment: (environment as Environment) || 'DEMO',
+      ownerUserId: user.id,
+      accountId: account_id || user.id,
+      version: 1,
+      status: 'READY',
+      lastHeartbeat: Date.now(),
+      volumeSpreadConfig,
+      stats: {
+        ordersSubmitted: 0,
+        ordersAccepted: 0,
+        ordersFilled: 0,
+        executedVolume: '0',
+        totalTrades: 0
+      },
+      deployedOrderIds: [],
+      logs: [],
+      createdBy: user.email,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+
+    const validation = botWorkerManager.validateConfig(bot);
+    if (!validation.isValid) {
+      return res.status(400).json({ error: validation.errors.join('; '), details: validation.errors });
+    }
+
+    botWorkerManager.addLog(
+      bot,
+      `Volume Spread Bot (Phase 2) dibuat oleh ${user.email} (${volumeSpreadConfig.spread_mode} / ${volumeSpreadConfig.side_pattern}, Target: ${vol_quote_stop_target}).`
+    );
+    db.botInstances.set(bot.id, bot);
+    db.scheduleSave();
+
+    res.json({ success: true, bot });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // 5. Clone Bot Instance (Phase 8: Independent configuration, new bot ID, isolated state)
 mmConsoleRouter.post('/instance/clone', requireMMOrAdmin, (req, res) => {
   try {
@@ -353,6 +470,18 @@ mmConsoleRouter.post('/instance/clone', requireMMOrAdmin, (req, res) => {
       ? {
           ...JSON.parse(JSON.stringify(sourceBot.volumeBotConfig)),
           ...(overrides?.volumeBotConfig || {})
+        }
+      : undefined;
+
+    const clonedVolumeSpreadConfig: VolumeSpreadBotConfig | undefined = sourceBot.volumeSpreadConfig
+      ? {
+          ...JSON.parse(JSON.stringify(sourceBot.volumeSpreadConfig)),
+          ...(overrides?.volumeSpreadConfig || {}),
+          lastSideExecuted: undefined,
+          lastSpreadBps: undefined,
+          lastExecPriceUnits: undefined,
+          spreadSelfTradesCount: 0,
+          executedQuoteVolumeUnits: '0'
         }
       : undefined;
 
@@ -407,6 +536,7 @@ mmConsoleRouter.post('/instance/clone', requireMMOrAdmin, (req, res) => {
       lastHeartbeat: Date.now(),
       orderBotConfig: clonedOrderConfig,
       volumeBotConfig: clonedVolumeConfig,
+      volumeSpreadConfig: clonedVolumeSpreadConfig,
       priceFollowerConfig: clonedPfConfig,
       depthLiquidityConfig: clonedDlConfig,
       movementDepthConfig: clonedMdConfig,
@@ -509,6 +639,46 @@ mmConsoleRouter.post('/instance/:id/update', requireMMOrAdmin, (req, res) => {
         vol_idr_start_threshold: String(volumeBotConfig.vol_idr_start_threshold || '0'),
         volume_sell_account_id: volumeBotConfig.volume_sell_account_id || undefined
       };
+    }
+
+    if (req.body.volumeSpreadConfig) {
+      const nextVsb = req.body.volumeSpreadConfig;
+      const minD = Math.max(1, parseInt(String(nextVsb.min_delay ?? bot.volumeSpreadConfig?.min_delay ?? 2), 10) || 2);
+      const maxD = Math.max(minD, parseInt(String(nextVsb.max_delay ?? bot.volumeSpreadConfig?.max_delay ?? 5), 10) || minD);
+      const bMin = Math.max(1, Math.min(99, parseInt(String(nextVsb.spread_band_min_pct ?? bot.volumeSpreadConfig?.spread_band_min_pct ?? 15), 10) || 15));
+      const bMax = Math.max(bMin, Math.min(99, parseInt(String(nextVsb.spread_band_max_pct ?? bot.volumeSpreadConfig?.spread_band_max_pct ?? 85), 10) || 85));
+
+      bot.volumeSpreadConfig = {
+        ...bot.volumeSpreadConfig,
+        ...nextVsb,
+        account_id: nextVsb.account_id || bot.accountId,
+        counterparty_account_id: nextVsb.counterparty_account_id ? String(nextVsb.counterparty_account_id).trim() : undefined,
+        spread_mode: ['INSIDE_SPREAD', 'MIDPOINT_JITTER', 'PING_PONG_EDGE'].includes(nextVsb.spread_mode)
+          ? nextVsb.spread_mode
+          : (bot.volumeSpreadConfig?.spread_mode || 'INSIDE_SPREAD'),
+        side_pattern: ['ALTERNATE', 'RANDOM', 'BUY_EATS_SELL', 'SELL_EATS_BUY'].includes(nextVsb.side_pattern)
+          ? nextVsb.side_pattern
+          : (bot.volumeSpreadConfig?.side_pattern || 'ALTERNATE'),
+        random_min_quantity: String(nextVsb.random_min_quantity ?? bot.volumeSpreadConfig?.random_min_quantity ?? '0.01'),
+        random_max_quantity: String(nextVsb.random_max_quantity ?? bot.volumeSpreadConfig?.random_max_quantity ?? '0.05'),
+        min_delay: minD,
+        max_delay: maxD,
+        spread_band_min_pct: bMin,
+        spread_band_max_pct: bMax,
+        min_spread_bps: Math.max(1, parseInt(String(nextVsb.min_spread_bps ?? bot.volumeSpreadConfig?.min_spread_bps ?? 2), 10) || 2),
+        fallback_half_spread_bps: Math.max(1, parseInt(String(nextVsb.fallback_half_spread_bps ?? bot.volumeSpreadConfig?.fallback_half_spread_bps ?? 15), 10) || 15),
+        require_two_sided_book: Boolean(nextVsb.require_two_sided_book ?? bot.volumeSpreadConfig?.require_two_sided_book ?? false),
+        cross_delay_ms: Math.min(2000, Math.max(0, parseInt(String(nextVsb.cross_delay_ms ?? bot.volumeSpreadConfig?.cross_delay_ms ?? 150), 10) || 0)),
+        tick_size: nextVsb.tick_size ? String(nextVsb.tick_size).trim() : undefined,
+        min_limit_price: String(nextVsb.min_limit_price ?? bot.volumeSpreadConfig?.min_limit_price ?? '1000000000'),
+        max_limit_price: String(nextVsb.max_limit_price ?? bot.volumeSpreadConfig?.max_limit_price ?? '2000000000'),
+        vol_quote_stop_target: String(nextVsb.vol_quote_stop_target ?? bot.volumeSpreadConfig?.vol_quote_stop_target ?? '5000000000')
+      };
+
+      const validation = botWorkerManager.validateConfig(bot);
+      if (!validation.isValid) {
+        return res.status(400).json({ error: validation.errors.join('; '), details: validation.errors });
+      }
     }
 
     if (req.body.priceFollowerConfig) {

@@ -21,6 +21,7 @@ import {
   executeDelistMarket,
   relistMarket
 } from '../services/MarketLifecycleScheduler.js';
+import { earnService } from '../services/earn/EarnService.js';
 
 export const adminRouter = Router();
 
@@ -747,41 +748,115 @@ adminRouter.post('/ledger/adjust-balance', requireAdmin, (req, res) => {
   }
 });
 
-// 15. Staking / Earn Products Control
-const defaultEarnPools = [
-  { id: 'pool-idr-flex', asset: 'IDR', apy: 6.5, durationDays: 0, status: 'ACTIVE', minStake: '10000000', totalStaked: '25000000000' },
-  { id: 'pool-btc-30', asset: 'BTC', apy: 4.2, durationDays: 30, status: 'ACTIVE', minStake: '100000', totalStaked: '1250000000' },
-  { id: 'pool-eth-60', asset: 'ETH', apy: 5.8, durationDays: 60, status: 'ACTIVE', minStake: '1000000', totalStaked: '4800000000' },
-  { id: 'pool-usdt-90', asset: 'USDT', apy: 11.5, durationDays: 90, status: 'ACTIVE', minStake: '1000000', totalStaked: '150000000000' }
-];
+// 15. Staking / Earn Vaults Institutional Control (Real DB & Double-Entry Custody)
+adminRouter.get('/earn/pools', requireAdmin, (_req, res) => {
+  try {
+    res.json(earnService.listAdminVaults());
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Gagal memuat Earn Vaults' });
+  }
+});
 
-adminRouter.get('/earn/pools', requireAdmin, (req, res) => {
-  res.json(defaultEarnPools);
+adminRouter.post('/earn/pools', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const vault = earnService.createVault(req.body || {}, adminUser.id);
+    res.status(201).json({
+      success: true,
+      message: `Vault Earn ${vault.name} (${vault.asset}) berhasil dibuat.`,
+      pool: vault,
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Gagal membuat Earn Vault' });
+  }
 });
 
 adminRouter.post('/earn/pools/update', requireAdmin, (req, res) => {
   try {
     const adminUser = (req as any).user;
-    const { poolId, apy, status } = req.body;
+    const { poolId, vaultId, ...patch } = req.body || {};
+    const targetId = String(vaultId || poolId || '').trim();
+    if (!targetId) return res.status(400).json({ error: 'poolId / vaultId wajib diisi' });
 
-    const pool = defaultEarnPools.find(p => p.id === poolId);
-    if (!pool) return res.status(404).json({ error: 'Staking pool tidak ditemukan' });
-
-    if (apy !== undefined) pool.apy = Number(apy);
-    if (status !== undefined) pool.status = status;
-
-    db.auditLogs.push({
-      id: crypto.randomUUID(),
-      actorId: adminUser.id,
-      action: 'EARN_POOL_UPDATED',
-      resource: `pool:${poolId}`,
-      details: `Staking pool ${poolId} updated: APY ${pool.apy}%, Status ${pool.status} by admin ${adminUser.email}`,
-      createdAt: Date.now()
+    const pool = earnService.updateVault(targetId, patch, adminUser.id);
+    res.json({
+      success: true,
+      message: `Vault Earn ${targetId} berhasil diperbarui (APY ${pool.apyPct}%, Status ${pool.status}).`,
+      pool,
     });
-
-    res.json({ success: true, message: `Staking pool ${poolId} berhasil diperbarui!`, pool });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+adminRouter.get('/earn/positions', requireAdmin, (req, res) => {
+  try {
+    const limit = Math.min(250, Math.max(10, Number(req.query.limit) || 100));
+    res.json({ positions: earnService.listAllPositions(limit) });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Gagal memuat posisi Earn pengguna' });
+  }
+});
+
+adminRouter.get('/earn/solvency', requireAdmin, (_req, res) => {
+  try {
+    res.json(earnService.getCustodySolvencyReport());
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Gagal memeriksa solvensi Earn Custody' });
+  }
+});
+
+adminRouter.get('/earn/assets', requireAdmin, (_req, res) => {
+  try {
+    res.json({ assets: earnService.listActiveAssetsForEarn() });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Gagal memuat aset Earn' });
+  }
+});
+
+adminRouter.get('/earn/payouts', requireAdmin, (req, res) => {
+  try {
+    const limit = Math.min(300, Math.max(10, Number(req.query.limit) || 120));
+    res.json({ payouts: earnService.listAdminPayouts(limit) });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Gagal memuat riwayat distribusi yield' });
+  }
+});
+
+adminRouter.post('/earn/positions/:id/unlock', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const positionId = String(req.params.id || '').trim();
+    if (!/^[a-zA-Z0-9_-]{3,64}$/.test(positionId)) {
+      return res.status(400).json({ error: 'ID posisi tidak valid' });
+    }
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason : undefined;
+    const position = earnService.adminUnlockPosition(positionId, adminUser.id, reason);
+    res.json({
+      success: true,
+      message: `Posisi ${positionId} berhasil dibuka (MATURED) tanpa penalti.`,
+      position,
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Gagal membuka lockup posisi' });
+  }
+});
+
+adminRouter.post('/earn/settle-yield', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const forceCycle = Boolean(req.body?.forceCycle);
+    const result = earnService.runDailyYieldSettlement(Date.now(), {
+      forceCycle,
+      actorId: adminUser.id,
+    });
+    res.json({
+      success: true,
+      message: `Distribusi imbal hasil selesai: ${result.settledPositions} posisi diproses, ${result.payoutsCreated} pembayaran dicatat.`,
+      ...result,
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Gagal menjalankan distribusi imbal hasil' });
   }
 });
 

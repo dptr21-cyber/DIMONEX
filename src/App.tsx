@@ -1186,7 +1186,15 @@ function AppContent() {
             />
           )}
 
-          {currentView === 'EARN' && <EarnView />}
+          {currentView === 'EARN' && (
+            <EarnView
+              user={user}
+              balances={balances}
+              onOpenAuthModal={() => setIsAuthModalOpen(true)}
+              onRefreshBalances={refreshBalances}
+              displayCurrency={displayCurrency}
+            />
+          )}
 
           {currentView === 'BOT' && (
             <div className="flex-1 flex flex-col p-4 lg:p-6 bg-[#090D12] overflow-y-auto space-y-4">

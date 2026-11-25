@@ -23,13 +23,15 @@ import {
   UserNotification, UserNotificationPreferences,
   RewardTaskConfig, RewardVoucher, VoucherRedemptionRecord,
   RewardClaimRecord, ReferralRelation, ReferralPayoutRecord,
-  VolumeExecutionV2Bot, ChartDrawingRecord
+  VolumeExecutionV2Bot, ChartDrawingRecord,
+  EarnVault, EarnPosition, EarnPayoutRecord
 } from './types.js';
 import { PrecisionMath } from '../ledger/PrecisionMath.js';
 
 export const SYSTEM_TREASURY_ID = 'sys-treasury-0000-0000-000000000000';
 export const SYSTEM_FEE_ID = 'sys-fees-0000-0000-000000000000';
 export const SYSTEM_HOT_WALLET_ID = 'sys-hotwallet-0000-0000-000000000000';
+export const SYSTEM_EARN_CUSTODY_ID = 'sys-earn-custody-0000-0000-000000000000';
 
 export const DEFAULT_RISK_CONTROLS: RiskControlsConfig = {
   maxActiveBots: 50,
@@ -128,6 +130,9 @@ export interface PersistedExchangeState {
   referralPayouts?: [string, ReferralPayoutRecord][];
   volumeExecutionV2Bots?: [string, VolumeExecutionV2Bot][];
   chartDrawings?: [string, ChartDrawingRecord[]][];
+  earnVaults?: [string, EarnVault][];
+  earnPositions?: [string, EarnPosition][];
+  earnPayouts?: EarnPayoutRecord[];
 }
 
 class DatabaseStore {
@@ -178,6 +183,9 @@ class DatabaseStore {
   referralPayouts: Map<string, ReferralPayoutRecord> = new Map(); // key: payoutId
   volumeExecutionV2Bots: Map<string, VolumeExecutionV2Bot> = new Map(); // key: botId
   chartDrawings: Map<string, ChartDrawingRecord[]> = new Map(); // key: `${userId}:${pairId}`
+  earnVaults: Map<string, EarnVault> = new Map(); // key: vaultId
+  earnPositions: Map<string, EarnPosition> = new Map(); // key: positionId
+  earnPayouts: EarnPayoutRecord[] = [];
   
   private saveTimer: NodeJS.Timeout | null = null;
   private isSaving = false;
@@ -1296,7 +1304,10 @@ class DatabaseStore {
         referralRelations: Array.from(this.referralRelations.entries()),
         referralPayouts: Array.from(this.referralPayouts.entries()),
         volumeExecutionV2Bots: Array.from(this.volumeExecutionV2Bots.entries()),
-        chartDrawings: Array.from(this.chartDrawings.entries())
+        chartDrawings: Array.from(this.chartDrawings.entries()),
+        earnVaults: Array.from(this.earnVaults.entries()),
+        earnPositions: Array.from(this.earnPositions.entries()),
+        earnPayouts: this.earnPayouts.slice(-2000)
       };
 
       const jsonStr = JSON.stringify(state, (key, value) =>
@@ -1442,6 +1453,9 @@ class DatabaseStore {
             if (data.referralPayouts) this.referralPayouts = new Map(data.referralPayouts);
             if (data.volumeExecutionV2Bots) this.volumeExecutionV2Bots = new Map(data.volumeExecutionV2Bots);
             if (data.chartDrawings) this.chartDrawings = new Map(data.chartDrawings);
+            if (data.earnVaults) this.earnVaults = new Map(data.earnVaults);
+            if (data.earnPositions) this.earnPositions = new Map(data.earnPositions);
+            if (data.earnPayouts) this.earnPayouts = data.earnPayouts;
 
             this.lastLoadedMtime = fs.statSync(p).mtimeMs;
             console.log(`[DIMONEX Database] Berhasil memuat snapshot disk (${p}): ${this.users.size} pengguna, ${this.orders.size} order, ${this.trades.length} transaksi, ${this.sessions.size} sesi login aktif.`);

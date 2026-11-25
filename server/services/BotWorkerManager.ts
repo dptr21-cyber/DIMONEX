@@ -25,11 +25,13 @@ import { MovementDepthLiquidityBotExecutor } from './bots/MovementDepthLiquidity
 import { QuantHftBotExecutor } from './bots/QuantHftBot.js';
 import { SmartHftLadderBotExecutor } from './bots/SmartHftLadderBot.js';
 import { AdvancedMarketMakerBotExecutor } from './bots/AdvancedMarketMakerBot.js';
+import { VolumeSpreadBotExecutor } from './bots/VolumeSpreadBot.js';
 
 interface WorkerRuntime {
   botId: string;
   leaseId: string;
   timer: NodeJS.Timeout | null;
+  crossTimer?: NodeJS.Timeout | null;
   isRunning: boolean;
   consecutiveErrors: number;
   ordersPlacedInWindow: number;
@@ -214,6 +216,51 @@ export class BotWorkerManager {
       if (isNaN(minP) || isNaN(maxP) || minP >= maxP) {
         errors.push('min_limit_price harus lebih kecil dari max_limit_price.');
       }
+    } else if (bot.botType === 'VOLUME_SPREAD_BOT') {
+      const cfg = bot.volumeSpreadConfig;
+      if (!cfg) {
+        errors.push('Konfigurasi Volume Spread Bot (Phase 2) tidak boleh kosong.');
+        return { isValid: false, errors };
+      }
+
+      if (cfg.min_delay < 1) errors.push('min_delay harus minimal 1 detik.');
+      if (cfg.max_delay < cfg.min_delay) errors.push('max_delay harus >= min_delay.');
+
+      try {
+        const minQtyUnits = PrecisionMath.parseToUnits(cfg.random_min_quantity || '0', pair.baseDecimals);
+        const maxQtyUnits = PrecisionMath.parseToUnits(cfg.random_max_quantity || '0', pair.baseDecimals);
+        if (minQtyUnits <= 0n) errors.push('random_min_quantity harus > 0.');
+        if (maxQtyUnits < minQtyUnits) errors.push('random_max_quantity harus >= random_min_quantity.');
+      } catch {
+        errors.push('Format random_min_quantity / random_max_quantity tidak valid.');
+      }
+
+      try {
+        const minPUnits = PrecisionMath.parseToUnits(cfg.min_limit_price || '0', pair.quoteDecimals);
+        const maxPUnits = PrecisionMath.parseToUnits(cfg.max_limit_price || '0', pair.quoteDecimals);
+        if (minPUnits <= 0n || maxPUnits <= minPUnits) {
+          errors.push('min_limit_price harus positif dan lebih kecil dari max_limit_price.');
+        }
+      } catch {
+        errors.push('Format min_limit_price / max_limit_price tidak valid.');
+      }
+
+      if (cfg.spread_band_min_pct < 1 || cfg.spread_band_min_pct > 99) {
+        errors.push('spread_band_min_pct harus antara 1% dan 99%.');
+      }
+      if (cfg.spread_band_max_pct < cfg.spread_band_min_pct || cfg.spread_band_max_pct > 99) {
+        errors.push('spread_band_max_pct harus >= spread_band_min_pct dan <= 99%.');
+      }
+      if (cfg.cross_delay_ms < 0 || cfg.cross_delay_ms > 2000) {
+        errors.push('cross_delay_ms harus antara 0 sampai 2000 ms.');
+      }
+
+      try {
+        const targetUnits = PrecisionMath.parseToUnits(cfg.vol_quote_stop_target || '0', pair.quoteDecimals);
+        if (targetUnits <= 0n) errors.push('vol_quote_stop_target harus lebih besar dari 0.');
+      } catch {
+        errors.push('Format vol_quote_stop_target tidak valid.');
+      }
     } else if (bot.botType === 'PRICE_FOLLOWER') {
       const cfg = bot.priceFollowerConfig;
       if (!cfg) {
@@ -371,6 +418,7 @@ export class BotWorkerManager {
       botId,
       leaseId,
       timer: null,
+      crossTimer: null,
       isRunning: true,
       consecutiveErrors: 0,
       ordersPlacedInWindow: 0,
@@ -388,6 +436,8 @@ export class BotWorkerManager {
       this.scheduleOrderBotTick(runtime);
     } else if (bot.botType === 'VOLUME_BOT') {
       this.scheduleVolumeBotTick(runtime);
+    } else if (bot.botType === 'VOLUME_SPREAD_BOT') {
+      this.scheduleVolumeSpreadTick(runtime);
     } else if (bot.botType === 'PRICE_FOLLOWER') {
       this.schedulePriceFollowerTick(runtime);
     } else if (bot.botType === 'DEPTH_LIQUIDITY') {
@@ -416,6 +466,7 @@ export class BotWorkerManager {
     const runtime = this.workers.get(botId);
     if (runtime) {
       if (runtime.timer) clearTimeout(runtime.timer);
+      if (runtime.crossTimer) clearTimeout(runtime.crossTimer);
       runtime.isRunning = false;
       this.workers.delete(botId);
     }
@@ -437,6 +488,7 @@ export class BotWorkerManager {
     const runtime = this.workers.get(botId);
     if (runtime) {
       if (runtime.timer) clearTimeout(runtime.timer);
+      if (runtime.crossTimer) clearTimeout(runtime.crossTimer);
       runtime.isRunning = false;
       this.workers.delete(botId);
     }
@@ -460,6 +512,8 @@ export class BotWorkerManager {
         cancelledOrdersCount += SmartHftLadderBotExecutor.cancelOpenBotOrders(bot, this.addLog.bind(this));
       } else if (bot.botType === 'ADVANCED_MM') {
         cancelledOrdersCount += AdvancedMarketMakerBotExecutor.cancelOpenOrders(bot, this.addLog.bind(this));
+      } else if (bot.botType === 'VOLUME_SPREAD_BOT') {
+        cancelledOrdersCount += VolumeSpreadBotExecutor.cancelOpenBotOrders(bot, this.addLog.bind(this));
       }
       for (const orderId of bot.deployedOrderIds) {
         const order = db.orders.get(orderId);
@@ -966,6 +1020,134 @@ export class BotWorkerManager {
     }
 
     this.scheduleVolumeBotTick(runtime);
+  }
+
+  /**
+   * Volume Bot Phase 2 (Spread Self-Cross) Scheduling Loop
+   */
+  private scheduleVolumeSpreadTick(runtime: WorkerRuntime) {
+    if (!runtime.isRunning) return;
+
+    const bot = db.botInstances.get(runtime.botId);
+    if (!bot || bot.status !== 'RUNNING') return;
+
+    const cfg = bot.volumeSpreadConfig;
+    if (!cfg) return;
+
+    const minDelayMs = Math.max(1, cfg.min_delay || 2) * 1000;
+    const maxDelayMs = Math.max(minDelayMs, (cfg.max_delay || 5) * 1000);
+    const delayMs = minDelayMs + crypto.randomInt(0, Math.max(1, maxDelayMs - minDelayMs + 1));
+
+    runtime.timer = setTimeout(() => {
+      this.executeVolumeSpreadTick(runtime);
+    }, delayMs);
+  }
+
+  private executeVolumeSpreadTick(runtime: WorkerRuntime) {
+    if (!runtime.isRunning) return;
+
+    const bot = db.botInstances.get(runtime.botId);
+    if (!bot || bot.status !== 'RUNNING') return;
+
+    const cfg = bot.volumeSpreadConfig;
+    if (!cfg) return;
+
+    // Rate limiting check
+    const now = Date.now();
+    if (now - runtime.windowStart > 60000) {
+      runtime.windowStart = now;
+      runtime.ordersPlacedInWindow = 0;
+    }
+    if (runtime.ordersPlacedInWindow >= db.riskControls.maxOrderSubmissionRatePerMin) {
+      this.addLog(bot, 'Rate limit order per menit tercapai. Menunda spread cross tick...', 'RISK');
+      this.scheduleVolumeSpreadTick(runtime);
+      return;
+    }
+
+    try {
+      const leg = VolumeSpreadBotExecutor.prepareSpreadCrossTick(bot, this.addLog.bind(this));
+
+      if (leg.status === 'STOP_TARGET_REACHED') {
+        bot.status = 'STOPPED';
+        this.addLog(bot, leg.reason || 'Target volume tercapai! Spread Volume Bot (Phase 2) selesai.', 'INFO');
+        this.stopWorker(bot.id, true);
+        return;
+      }
+
+      if (leg.status === 'PAIR_HALTED' || leg.status === 'WAITING_SPREAD') {
+        this.addLog(bot, leg.reason || 'Menunggu kondisi spread book...', 'RISK');
+        bot.lastHeartbeat = Date.now();
+        this.scheduleVolumeSpreadTick(runtime);
+        return;
+      }
+
+      if (leg.status === 'INSUFFICIENT_BALANCE') {
+        runtime.consecutiveErrors++;
+        this.addLog(bot, leg.reason || 'Saldo Base/Quote akun tidak mencukupi untuk spread self-cross.', 'RISK');
+        if (runtime.consecutiveErrors >= db.riskControls.maxConsecutiveErrors) {
+          bot.status = 'RISK_HALTED';
+          bot.errorInfo = leg.reason || 'Saldo tidak mencukupi berulang kali.';
+          this.stopWorker(bot.id, true);
+          return;
+        }
+        this.scheduleVolumeSpreadTick(runtime);
+        return;
+      }
+
+      runtime.ordersPlacedInWindow += 1;
+
+      const crossDelayMs = Math.min(2000, Math.max(0, Math.round(cfg.cross_delay_ms || 0)));
+
+      const finishCross = () => {
+        if (!runtime.isRunning) return;
+        const activeBot = db.botInstances.get(runtime.botId);
+        if (!activeBot || activeBot.status !== 'RUNNING') return;
+
+        try {
+          const crossRes = VolumeSpreadBotExecutor.completeSpreadCrossLeg(activeBot, leg, this.addLog.bind(this));
+          runtime.ordersPlacedInWindow += 1;
+          runtime.consecutiveErrors = 0;
+
+          if (crossRes.status === 'STOP_TARGET_REACHED') {
+            activeBot.status = 'STOPPED';
+            this.addLog(activeBot, `Target volume Phase 2 (${cfg.vol_quote_stop_target}) tercapai! Bot berhenti otomatis.`, 'INFO');
+            this.stopWorker(activeBot.id, true);
+            return;
+          }
+        } catch (err: any) {
+          runtime.consecutiveErrors++;
+          this.addLog(activeBot, `Error saat taker self-cross: ${err.message}`, 'ERROR');
+          if (runtime.consecutiveErrors >= db.riskControls.maxConsecutiveErrors) {
+            activeBot.status = 'RISK_HALTED';
+            activeBot.errorInfo = `Consecutive error threshold breached (${runtime.consecutiveErrors}).`;
+            this.stopWorker(activeBot.id, true);
+            return;
+          }
+        }
+
+        this.scheduleVolumeSpreadTick(runtime);
+      };
+
+      if (crossDelayMs === 0) {
+        finishCross();
+      } else {
+        runtime.crossTimer = setTimeout(() => {
+          runtime.crossTimer = null;
+          finishCross();
+        }, crossDelayMs);
+      }
+    } catch (err: any) {
+      runtime.consecutiveErrors++;
+      this.addLog(bot, `Error eksekusi Spread Volume tick: ${err.message}`, 'ERROR');
+      if (runtime.consecutiveErrors >= db.riskControls.maxConsecutiveErrors) {
+        bot.status = 'RISK_HALTED';
+        bot.errorInfo = `Consecutive error threshold breached (${runtime.consecutiveErrors}).`;
+        this.addLog(bot, bot.errorInfo, 'RISK');
+        this.stopWorker(bot.id, true);
+        return;
+      }
+      this.scheduleVolumeSpreadTick(runtime);
+    }
   }
 
   /**

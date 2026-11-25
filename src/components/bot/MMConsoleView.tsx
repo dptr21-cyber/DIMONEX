@@ -27,6 +27,7 @@ import {
   Cpu,
   Crosshair,
   DollarSign,
+  Flame,
   FlaskConical,
   Globe,
   Layers,
@@ -62,6 +63,7 @@ import { PerformanceDashboardSection } from './PerformanceDashboardSection.js';
 import { PortfolioRebalanceSection } from './PortfolioRebalanceSection.js';
 import { HftEngineTelemetrySection } from './HftEngineTelemetrySection.js';
 import { PriceThresholdSection } from './PriceThresholdSection.js';
+import { MarketMakerInternalSpreadSection } from './MarketMakerInternalSpreadSection.js';
 
 interface Props {
   user: UserProfile | null;
@@ -87,6 +89,7 @@ type MMTab =
   | 'FX_RATES'
   | 'ORDER_BOTS' 
   | 'VOLUME_BOTS' 
+  | 'INTERNAL_SPREAD'
   | 'CONFIGURATIONS' 
   | 'BOT_ACCOUNTS' 
   | 'ORDERS' 
@@ -138,6 +141,7 @@ export const MMConsoleView: React.FC<Props> = ({
   // Modal states
   const [isOrderBotModalOpen, setIsOrderBotModalOpen] = useState(false);
   const [isVolumeBotModalOpen, setIsVolumeBotModalOpen] = useState(false);
+  const [isVolumeSpreadModalOpen, setIsVolumeSpreadModalOpen] = useState(false);
   const [isPriceFollowerModalOpen, setIsPriceFollowerModalOpen] = useState(false);
   const [isDepthLiquidityModalOpen, setIsDepthLiquidityModalOpen] = useState(false);
   const [isMovementDepthModalOpen, setIsMovementDepthModalOpen] = useState(false);
@@ -331,6 +335,25 @@ export const MMConsoleView: React.FC<Props> = ({
   const [editVbVolIdrStart, setEditVbVolIdrStart] = useState('0');
   const [editVbSellAccountId, setEditVbSellAccountId] = useState('');
 
+  // Volume Spread Bot Phase 2 Edit state
+  const [editVsbSpreadMode, setEditVsbSpreadMode] = useState<'INSIDE_SPREAD' | 'MIDPOINT_JITTER' | 'PING_PONG_EDGE'>('INSIDE_SPREAD');
+  const [editVsbSidePattern, setEditVsbSidePattern] = useState<'ALTERNATE' | 'RANDOM' | 'BUY_EATS_SELL' | 'SELL_EATS_BUY'>('ALTERNATE');
+  const [editVsbMinQty, setEditVsbMinQty] = useState('0.005');
+  const [editVsbMaxQty, setEditVsbMaxQty] = useState('0.025');
+  const [editVsbMinDelay, setEditVsbMinDelay] = useState('2');
+  const [editVsbMaxDelay, setEditVsbMaxDelay] = useState('5');
+  const [editVsbBandMinPct, setEditVsbBandMinPct] = useState('15');
+  const [editVsbBandMaxPct, setEditVsbBandMaxPct] = useState('85');
+  const [editVsbMinSpreadBps, setEditVsbMinSpreadBps] = useState('2');
+  const [editVsbFallbackHalfSpreadBps, setEditVsbFallbackHalfSpreadBps] = useState('15');
+  const [editVsbRequireTwoSided, setEditVsbRequireTwoSided] = useState(false);
+  const [editVsbCrossDelayMs, setEditVsbCrossDelayMs] = useState('150');
+  const [editVsbTickSize, setEditVsbTickSize] = useState('');
+  const [editVsbMinLimitPrice, setEditVsbMinLimitPrice] = useState('1400000000');
+  const [editVsbMaxLimitPrice, setEditVsbMaxLimitPrice] = useState('1550000000');
+  const [editVsbVolQuoteStop, setEditVsbVolQuoteStop] = useState('5000000000');
+  const [editVsbCounterpartyAccountId, setEditVsbCounterpartyAccountId] = useState('');
+
   // Depth Liquidity Edit state
   const [editDlPriceMode, setEditDlPriceMode] = useState<'EXTERNAL_REFERENCE' | 'CUSTOM_BOUNDS'>('CUSTOM_BOUNDS');
   const [editDlMinBuyPrice, setEditDlMinBuyPrice] = useState('16200');
@@ -428,6 +451,27 @@ export const MMConsoleView: React.FC<Props> = ({
   const [vbVolIdrStop, setVbVolIdrStop] = useState('5000000000'); // 5B IDR
   const [vbVolIdrStart, setVbVolIdrStart] = useState('0');
   const [vbSellAccountId, setVbSellAccountId] = useState('');
+
+  // Volume Spread Bot Phase 2 Form state
+  const [vsbName, setVsbName] = useState('Volume Spread Phase 2');
+  const [vsbPairId, setVsbPairId] = useState('BTC-IDR');
+  const [vsbSpreadMode, setVsbSpreadMode] = useState<'INSIDE_SPREAD' | 'MIDPOINT_JITTER' | 'PING_PONG_EDGE'>('INSIDE_SPREAD');
+  const [vsbSidePattern, setVsbSidePattern] = useState<'ALTERNATE' | 'RANDOM' | 'BUY_EATS_SELL' | 'SELL_EATS_BUY'>('ALTERNATE');
+  const [vsbMinQty, setVsbMinQty] = useState('0.005');
+  const [vsbMaxQty, setVsbMaxQty] = useState('0.025');
+  const [vsbMinDelay, setVsbMinDelay] = useState('2');
+  const [vsbMaxDelay, setVsbMaxDelay] = useState('5');
+  const [vsbBandMinPct, setVsbBandMinPct] = useState('15');
+  const [vsbBandMaxPct, setVsbBandMaxPct] = useState('85');
+  const [vsbMinSpreadBps, setVsbMinSpreadBps] = useState('2');
+  const [vsbFallbackHalfSpreadBps, setVsbFallbackHalfSpreadBps] = useState('15');
+  const [vsbRequireTwoSided, setVsbRequireTwoSided] = useState(false);
+  const [vsbCrossDelayMs, setVsbCrossDelayMs] = useState('150');
+  const [vsbTickSize, setVsbTickSize] = useState('');
+  const [vsbMinLimitPrice, setVsbMinLimitPrice] = useState('500000000');
+  const [vsbMaxLimitPrice, setVsbMaxLimitPrice] = useState('2500000000');
+  const [vsbVolQuoteStop, setVsbVolQuoteStop] = useState('5000000000');
+  const [vsbCounterpartyAccountId, setVsbCounterpartyAccountId] = useState('');
 
   const selectedPair = tradingPairs.find(p => p.id === selectedPairId) || tradingPairs[0] || {
     id: 'BTC-IDR',
@@ -737,6 +781,26 @@ export const MMConsoleView: React.FC<Props> = ({
       setEditVbSellAccountId(bot.volumeBotConfig.volume_sell_account_id || '');
     }
 
+    if (bot.volumeSpreadConfig) {
+      setEditVsbSpreadMode(bot.volumeSpreadConfig.spread_mode || 'INSIDE_SPREAD');
+      setEditVsbSidePattern(bot.volumeSpreadConfig.side_pattern || 'ALTERNATE');
+      setEditVsbMinQty(bot.volumeSpreadConfig.random_min_quantity || '0.005');
+      setEditVsbMaxQty(bot.volumeSpreadConfig.random_max_quantity || '0.025');
+      setEditVsbMinDelay(String(bot.volumeSpreadConfig.min_delay ?? 2));
+      setEditVsbMaxDelay(String(bot.volumeSpreadConfig.max_delay ?? 5));
+      setEditVsbBandMinPct(String(bot.volumeSpreadConfig.spread_band_min_pct ?? 15));
+      setEditVsbBandMaxPct(String(bot.volumeSpreadConfig.spread_band_max_pct ?? 85));
+      setEditVsbMinSpreadBps(String(bot.volumeSpreadConfig.min_spread_bps ?? 2));
+      setEditVsbFallbackHalfSpreadBps(String(bot.volumeSpreadConfig.fallback_half_spread_bps ?? 15));
+      setEditVsbRequireTwoSided(Boolean(bot.volumeSpreadConfig.require_two_sided_book));
+      setEditVsbCrossDelayMs(String(bot.volumeSpreadConfig.cross_delay_ms ?? 150));
+      setEditVsbTickSize(bot.volumeSpreadConfig.tick_size || '');
+      setEditVsbMinLimitPrice(bot.volumeSpreadConfig.min_limit_price || '1400000000');
+      setEditVsbMaxLimitPrice(bot.volumeSpreadConfig.max_limit_price || '1550000000');
+      setEditVsbVolQuoteStop(bot.volumeSpreadConfig.vol_quote_stop_target || '5000000000');
+      setEditVsbCounterpartyAccountId(bot.volumeSpreadConfig.counterparty_account_id || '');
+    }
+
     if (bot.depthLiquidityConfig) {
       setEditDlPriceMode(bot.depthLiquidityConfig.price_mode || (bot.depthLiquidityConfig.min_limit_buy_price ? 'CUSTOM_BOUNDS' : 'EXTERNAL_REFERENCE'));
       setEditDlMinBuyPrice(bot.depthLiquidityConfig.min_limit_buy_price || '');
@@ -849,6 +913,27 @@ export const MMConsoleView: React.FC<Props> = ({
         vol_idr_stop_target: editVbVolIdrStop,
         vol_idr_start_threshold: editVbVolIdrStart,
         volume_sell_account_id: editVbSellAccountId || undefined
+      };
+    } else if (editingBot.botType === 'VOLUME_SPREAD_BOT') {
+      payload.volumeSpreadConfig = {
+        ...editingBot.volumeSpreadConfig,
+        spread_mode: editVsbSpreadMode,
+        side_pattern: editVsbSidePattern,
+        random_min_quantity: editVsbMinQty,
+        random_max_quantity: editVsbMaxQty,
+        min_delay: Number(editVsbMinDelay),
+        max_delay: Number(editVsbMaxDelay),
+        spread_band_min_pct: Number(editVsbBandMinPct),
+        spread_band_max_pct: Number(editVsbBandMaxPct),
+        min_spread_bps: Number(editVsbMinSpreadBps),
+        fallback_half_spread_bps: Number(editVsbFallbackHalfSpreadBps),
+        require_two_sided_book: editVsbRequireTwoSided,
+        cross_delay_ms: Number(editVsbCrossDelayMs),
+        tick_size: editVsbTickSize || undefined,
+        min_limit_price: editVsbMinLimitPrice,
+        max_limit_price: editVsbMaxLimitPrice,
+        vol_quote_stop_target: editVsbVolQuoteStop,
+        counterparty_account_id: editVsbCounterpartyAccountId || undefined
       };
     } else if (editingBot.botType === 'DEPTH_LIQUIDITY') {
       payload.depthLiquidityConfig = {
@@ -974,6 +1059,36 @@ export const MMConsoleView: React.FC<Props> = ({
         volume_sell_account_id: vbSellAccountId
       });
       setIsVolumeBotModalOpen(false);
+    } catch (e) {}
+  };
+
+  // Create Volume Spread Bot (Phase 2 — Inside Spread Self-Cross)
+  const handleCreateVolumeSpreadBot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      await handleAction('/api/mm/volume-spread-bot/create', 'POST', {
+        name: vsbName,
+        pairId: vsbPairId,
+        environment: currentEnv,
+        spread_mode: vsbSpreadMode,
+        side_pattern: vsbSidePattern,
+        random_min_quantity: vsbMinQty,
+        random_max_quantity: vsbMaxQty,
+        min_delay: vsbMinDelay,
+        max_delay: vsbMaxDelay,
+        spread_band_min_pct: vsbBandMinPct,
+        spread_band_max_pct: vsbBandMaxPct,
+        min_spread_bps: vsbMinSpreadBps,
+        fallback_half_spread_bps: vsbFallbackHalfSpreadBps,
+        require_two_sided_book: vsbRequireTwoSided,
+        cross_delay_ms: vsbCrossDelayMs,
+        tick_size: vsbTickSize || undefined,
+        min_limit_price: vsbMinLimitPrice,
+        max_limit_price: vsbMaxLimitPrice,
+        vol_quote_stop_target: vsbVolQuoteStop,
+        counterparty_account_id: vsbCounterpartyAccountId || undefined
+      });
+      setIsVolumeSpreadModalOpen(false);
     } catch (e) {}
   };
 
@@ -1429,6 +1544,7 @@ export const MMConsoleView: React.FC<Props> = ({
     { id: 'FX_RATES', label: 'USDT/IDR FX Engine', icon: DollarSign },
     { id: 'ORDER_BOTS', label: 'Order Bots', icon: Bot },
     { id: 'VOLUME_BOTS', label: 'Volume & Test Bots', icon: Cpu },
+    { id: 'INTERNAL_SPREAD', label: 'Internal Spread', icon: Flame },
     { id: 'CONFIGURATIONS', label: 'Configurations', icon: Sliders },
     { id: 'BOT_ACCOUNTS', label: 'Bot Accounts', icon: ShieldCheck },
     { id: 'ORDERS', label: 'Orders', icon: Layers },
@@ -1537,7 +1653,7 @@ export const MMConsoleView: React.FC<Props> = ({
               </span>
             </div>
             <span className="text-[11px] text-[#71818B] mt-1.5 block font-mono">
-              Smart HFT: {instances.filter(b => b.botType === 'SMART_HFT_LADDER' && b.status === 'RUNNING').length} · Quant HFT: {instances.filter(b => b.botType === 'QUANT_HFT_MM' && b.status === 'RUNNING').length} · Depth: {instances.filter(b => b.botType === 'DEPTH_LIQUIDITY' && b.status === 'RUNNING').length} · WS Move: {instances.filter(b => b.botType === 'MOVEMENT_DEPTH_LIQUIDITY' && b.status === 'RUNNING').length} · Order: {instances.filter(b => b.botType === 'ORDER_BOT' && b.status === 'RUNNING').length} · Vol: {instances.filter(b => b.botType === 'VOLUME_BOT' && b.status === 'RUNNING').length}
+              Smart HFT: {instances.filter(b => b.botType === 'SMART_HFT_LADDER' && b.status === 'RUNNING').length} · Quant HFT: {instances.filter(b => b.botType === 'QUANT_HFT_MM' && b.status === 'RUNNING').length} · Depth: {instances.filter(b => b.botType === 'DEPTH_LIQUIDITY' && b.status === 'RUNNING').length} · WS Move: {instances.filter(b => b.botType === 'MOVEMENT_DEPTH_LIQUIDITY' && b.status === 'RUNNING').length} · Order: {instances.filter(b => b.botType === 'ORDER_BOT' && b.status === 'RUNNING').length} · Vol P1: {instances.filter(b => b.botType === 'VOLUME_BOT' && b.status === 'RUNNING').length} · Vol P2: {instances.filter(b => b.botType === 'VOLUME_SPREAD_BOT' && b.status === 'RUNNING').length}
             </span>
           </div>
 
@@ -1711,6 +1827,12 @@ export const MMConsoleView: React.FC<Props> = ({
               </Button>
               <Button variant="secondary" size="sm" onClick={() => setIsVolumeBotModalOpen(true)}>
                 + Volume Bot
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setIsVolumeSpreadModalOpen(true)}>
+                + Spread Volume Bot (P2)
+              </Button>
+              <Button variant="secondary" size="sm" onClick={() => setActiveTab('INTERNAL_SPREAD')} icon={<Flame className="w-3.5 h-3.5" />}>
+                Internal Spread (Self-Eating)
               </Button>
               <Button variant="secondary" size="sm" onClick={() => setIsPriceFollowerModalOpen(true)}>
                 + Price Follower
@@ -3028,6 +3150,16 @@ export const MMConsoleView: React.FC<Props> = ({
         />
       )}
 
+      {/* TAB: MARKET MAKER INTERNAL SPREAD (SELF-EATING ENGINE + D3 HEATMAP) */}
+      {activeTab === 'INTERNAL_SPREAD' && (
+        <MarketMakerInternalSpreadSection
+          tradingPairs={tradingPairs}
+          currentEnv={currentEnv}
+          instances={instances}
+          onSetFeedback={setFeedbackMsg}
+        />
+      )}
+
       {/* TAB: AUTOMATED PORTFOLIO REBALANCING */}
       {activeTab === 'PORTFOLIO_REBALANCE' && (
         <PortfolioRebalanceSection
@@ -3464,12 +3596,22 @@ export const MMConsoleView: React.FC<Props> = ({
               <h2 className="text-base font-bold text-white">Volume & Test Bots (Phase 9)</h2>
               <p className="text-xs text-[#A1AFB8]">Penyedia likuiditas otomatis dengan target IDR stop/start dan isolasi sandbox.</p>
             </div>
-            <button
-              onClick={() => setIsVolumeBotModalOpen(true)}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-[7px] shadow"
-            >
-              + Deploy Volume Bot
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setActiveTab('INTERNAL_SPREAD')}
+                icon={<Flame className="w-3.5 h-3.5" />}
+              >
+                Internal Spread Mode
+              </Button>
+              <button
+                onClick={() => setIsVolumeBotModalOpen(true)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-[7px] shadow whitespace-nowrap"
+              >
+                + Deploy Volume Bot
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -3533,6 +3675,180 @@ export const MMConsoleView: React.FC<Props> = ({
                 </div>
               </div>
             ))}
+          </div>
+
+          {/* PHASE 2: SPREAD VOLUME BOT (ANTAR SPREAD / SELF-CROSS) */}
+          <div className="mt-6 pt-5 border-t border-[#202B34] flex flex-col gap-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-[#E4EBEF]">
+                  Volume Bot Phase 2 — Antar Spread (Self-Cross)
+                </h2>
+                <p className="text-xs text-[#A1AFB8]">
+                  Menempatkan Maker GTC di dalam celah Bid-Ask lalu mengeksekusi Taker IOC di harga sama (makan order sendiri antar spread tanpa menyentuh order luar).
+                </p>
+              </div>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => setIsVolumeSpreadModalOpen(true)}
+                className="whitespace-nowrap"
+              >
+                + Deploy Spread Volume Bot (Phase 2)
+              </Button>
+            </div>
+
+            {instances.filter(b => b.botType === 'VOLUME_SPREAD_BOT').length === 0 ? (
+              <div className="p-6 bg-[#141C24] border border-[#202B34] rounded-[10px] text-center">
+                <p className="text-xs text-[#A1AFB8] mb-3">
+                  Belum ada instance Volume Bot Phase 2 (Antar Spread) di environment {currentEnv}.
+                </p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setIsVolumeSpreadModalOpen(true)}
+                  className="whitespace-nowrap"
+                >
+                  Buat Volume Bot Phase 2 Pertama
+                </Button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {instances.filter(b => b.botType === 'VOLUME_SPREAD_BOT').map(b => {
+                  const cfg = b.volumeSpreadConfig;
+                  const botPair = tradingPairs.find(p => p.id === b.pairId);
+                  const qDec = botPair?.quoteDecimals ?? 2;
+                  const bDec = botPair?.baseDecimals ?? 8;
+                  const quoteSym = botPair?.quoteCurrency || 'IDR';
+                  const baseSym = botPair?.baseCurrency || b.pairId.split('-')[0];
+                  const execQuoteDisplay = cfg?.executedQuoteVolumeUnits
+                    ? formatQuotePrice(cfg.executedQuoteVolumeUnits, quoteSym, qDec)
+                    : `0 ${quoteSym}`;
+                  const lastPriceDisplay = cfg?.lastExecPriceUnits
+                    ? formatQuotePrice(cfg.lastExecPriceUnits, quoteSym, qDec)
+                    : '—';
+
+                  return (
+                    <div
+                      key={b.id}
+                      className="p-4 bg-[#141C24] border border-[#202B34] hover:border-[#2B3944] transition-colors rounded-[10px] flex flex-col justify-between gap-3"
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-2 mb-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-semibold text-[#E4EBEF] truncate">{b.name}</span>
+                              <span className="text-[10px] font-mono text-[#71818B] shrink-0">{b.pairId}</span>
+                            </div>
+                            <div className="text-[11px] font-mono text-[#8DA5B1] mt-0.5">
+                              {cfg?.spread_mode || 'INSIDE_SPREAD'} · {cfg?.side_pattern || 'ALTERNATE'}
+                            </div>
+                          </div>
+                          <StatusBadge
+                            tone={
+                              b.status === 'RUNNING'
+                                ? 'success'
+                                : b.status === 'RISK_HALTED' || b.status === 'ERROR'
+                                ? 'danger'
+                                : b.status === 'PAUSED'
+                                ? 'warning'
+                                : 'neutral'
+                            }
+                          >
+                            {b.status}
+                          </StatusBadge>
+                        </div>
+
+                        <div className="space-y-1.5 text-xs text-[#A1AFB8] font-mono tabular-nums">
+                          <div className="flex justify-between">
+                            <span className="text-[#71818B]">Spread Band:</span>
+                            <span className="text-[#E4EBEF]">
+                              {cfg?.spread_band_min_pct ?? 15}% – {cfg?.spread_band_max_pct ?? 85}% ({cfg?.cross_delay_ms ?? 150} ms)
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#71818B]">Qty / Delay:</span>
+                            <span className="text-[#E4EBEF]">
+                              {cfg?.random_min_quantity}–{cfg?.random_max_quantity} {baseSym} · {cfg?.min_delay}s–{cfg?.max_delay}s
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#71818B]">Last Cross:</span>
+                            <span className="text-[#E4EBEF]">
+                              {cfg?.lastSideExecuted ? `${cfg.lastSideExecuted} @ ` : ''}{lastPriceDisplay}
+                              {typeof cfg?.lastSpreadBps === 'number' ? ` (${cfg.lastSpreadBps} bps)` : ''}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#71818B]">Self-Trades / Base:</span>
+                            <span className="text-[#E4EBEF]">
+                              {cfg?.spreadSelfTradesCount ?? b.stats.totalTrades} tx · {formatCrypto(b.stats.executedVolume || '0', bDec, baseSym)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-[#71818B]">Exec Quote / Target:</span>
+                            <span className="text-[#35B887]">
+                              {execQuoteDisplay} / {cfg?.vol_quote_stop_target || '0'} {quoteSym}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 pt-3 border-t border-[#202B34] flex-wrap">
+                        {b.status === 'RUNNING' ? (
+                          <>
+                            <button
+                              onClick={() => handlePauseBot(b.id)}
+                              className="flex-1 py-1.5 px-2 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 text-xs rounded-[6px] font-medium whitespace-nowrap"
+                            >
+                              Pause
+                            </button>
+                            <button
+                              onClick={() => handleStopBot(b.id)}
+                              className="flex-1 py-1.5 px-2 bg-red-600/20 text-red-400 hover:bg-red-600/30 text-xs rounded-[6px] font-medium whitespace-nowrap"
+                            >
+                              Stop
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={() => handleStartBot(b.id)}
+                            className="flex-1 py-1.5 px-2 bg-[#16A36E] hover:bg-[#19B87C] text-white text-xs rounded-[6px] font-medium whitespace-nowrap"
+                          >
+                            Start
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleOpenEditModal(b)}
+                          className="px-2.5 py-1.5 bg-[#17212B] text-amber-400 hover:bg-[#1D2832] text-xs rounded-[6px] whitespace-nowrap"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleOpenCloneModal(b)}
+                          className="px-2.5 py-1.5 bg-[#17212B] text-sky-400 hover:bg-[#1D2832] text-xs rounded-[6px] whitespace-nowrap"
+                        >
+                          Clone
+                        </button>
+                        <button
+                          onClick={() => setSelectedBotId(b.id)}
+                          className="px-2.5 py-1.5 bg-[#17212B] text-[#E4EBEF] hover:bg-[#1D2832] text-xs rounded-[6px] whitespace-nowrap"
+                        >
+                          Logs
+                        </button>
+                        <button
+                          onClick={() => handleOpenDeleteModal(b)}
+                          title="Hapus Bot Permanen"
+                          className="px-2.5 py-1.5 bg-red-600/20 text-red-400 hover:bg-red-600/30 text-xs rounded-[6px] font-medium whitespace-nowrap"
+                        >
+                          Hapus
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -4420,6 +4736,287 @@ export const MMConsoleView: React.FC<Props> = ({
                 >
                   Deploy Volume Bot
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: CREATE VOLUME SPREAD BOT (Phase 2 — Inside Spread Self-Cross) */}
+      {isVolumeSpreadModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#090D12]/80 p-4 overflow-y-auto">
+          <div className="bg-[#111820] border border-[#202B34] rounded-[10px] max-w-2xl w-full p-6 text-[#E4EBEF] max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#202B34]">
+              <div>
+                <h2 className="text-base font-semibold text-[#E4EBEF] mb-0.5">
+                  Deploy Volume Bot Phase 2 — Antar Spread ({currentEnv})
+                </h2>
+                <p className="text-xs text-[#A1AFB8]">
+                  Maker GTC &amp; Taker IOC mengeksekusi tepat di dalam spread Bid-Ask (makan order sendiri antar spread tanpa menyapu order luar).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsVolumeSpreadModalOpen(false)}
+                className="text-[#A1AFB8] hover:text-white text-lg font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateVolumeSpreadBot} className="space-y-4 text-xs font-sans">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[#A1AFB8] block mb-1">Nama Bot</label>
+                  <input
+                    type="text"
+                    value={vsbName}
+                    onChange={e => setVsbName(e.target.value)}
+                    required
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
+                  />
+                </div>
+                <div>
+                  <label className="text-[#A1AFB8] block mb-1">Trading Pair</label>
+                  <select
+                    value={vsbPairId}
+                    onChange={e => {
+                      const nextPairId = e.target.value;
+                      setVsbPairId(nextPairId);
+                      const p = tradingPairs.find(item => item.id === nextPairId);
+                      if (p && safeBigInt(p.lastPrice) > 0n) {
+                        const last = safeBigInt(p.lastPrice);
+                        const dec = p.quoteDecimals;
+                        const div = 10n ** BigInt(dec);
+                        const floorStr = ((last * 70n) / 100n / div).toString();
+                        const ceilStr = ((last * 130n) / 100n / div).toString();
+                        if (floorStr !== '0' && ceilStr !== '0') {
+                          setVsbMinLimitPrice(floorStr);
+                          setVsbMaxLimitPrice(ceilStr);
+                        }
+                      }
+                    }}
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
+                  >
+                    {tradingPairs.map(p => (
+                      <option key={p.id} value={p.id}>{p.id}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[#A1AFB8] block mb-1">Mode Penempatan Spread</label>
+                  <select
+                    value={vsbSpreadMode}
+                    onChange={e => setVsbSpreadMode(e.target.value as any)}
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
+                  >
+                    <option value="INSIDE_SPREAD">Inside Spread (Acak dalam rentang %)</option>
+                    <option value="MIDPOINT_JITTER">Midpoint Jitter (Dekat titik tengah)</option>
+                    <option value="PING_PONG_EDGE">Ping-Pong Edge (Dekat sisi Bid/Ask)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[#A1AFB8] block mb-1">Pola Arah Makan Order</label>
+                  <select
+                    value={vsbSidePattern}
+                    onChange={e => setVsbSidePattern(e.target.value as any)}
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
+                  >
+                    <option value="ALTERNATE">Alternate (Bergantian Buy/Sell)</option>
+                    <option value="RANDOM">Random (Acak Buy/Sell)</option>
+                    <option value="BUY_EATS_SELL">Buy Eats Sell (Maker Sell, Taker Buy)</option>
+                    <option value="SELL_EATS_BUY">Sell Eats Buy (Maker Buy, Taker Sell)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[#A1AFB8] block mb-1">Random Min Quantity</label>
+                  <input
+                    type="text"
+                    value={vsbMinQty}
+                    onChange={e => setVsbMinQty(e.target.value)}
+                    required
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                  />
+                </div>
+                <div>
+                  <label className="text-[#A1AFB8] block mb-1">Random Max Quantity</label>
+                  <input
+                    type="text"
+                    value={vsbMaxQty}
+                    onChange={e => setVsbMaxQty(e.target.value)}
+                    required
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[#A1AFB8] block mb-1">Inside-Spread Band Min - Max (%)</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      max={99}
+                      value={vsbBandMinPct}
+                      onChange={e => setVsbBandMinPct(e.target.value)}
+                      className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      max={99}
+                      value={vsbBandMaxPct}
+                      onChange={e => setVsbBandMaxPct(e.target.value)}
+                      className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[#A1AFB8] block mb-1">Jeda Taker Makan Maker (ms, 0 = instan)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={2000}
+                    value={vsbCrossDelayMs}
+                    onChange={e => setVsbCrossDelayMs(e.target.value)}
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[#A1AFB8] block mb-1">Interval Siklus (Min - Max Detik)</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      value={vsbMinDelay}
+                      onChange={e => setVsbMinDelay(e.target.value)}
+                      className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      value={vsbMaxDelay}
+                      onChange={e => setVsbMaxDelay(e.target.value)}
+                      className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[#A1AFB8] block mb-1">Min Book Spread / Fallback Half (bps)</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      value={vsbMinSpreadBps}
+                      onChange={e => setVsbMinSpreadBps(e.target.value)}
+                      placeholder="Min Spread bps"
+                      className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      value={vsbFallbackHalfSpreadBps}
+                      onChange={e => setVsbFallbackHalfSpreadBps(e.target.value)}
+                      placeholder="Fallback bps"
+                      className="w-1/2 bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[#A1AFB8] block mb-1">Min Limit Price (Floor)</label>
+                  <input
+                    type="text"
+                    value={vsbMinLimitPrice}
+                    onChange={e => setVsbMinLimitPrice(e.target.value)}
+                    required
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                  />
+                </div>
+                <div>
+                  <label className="text-[#A1AFB8] block mb-1">Max Limit Price (Ceiling)</label>
+                  <input
+                    type="text"
+                    value={vsbMaxLimitPrice}
+                    onChange={e => setVsbMaxLimitPrice(e.target.value)}
+                    required
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-[#A1AFB8] block mb-1">Target Stop Volume (Quote)</label>
+                  <input
+                    type="text"
+                    value={vsbVolQuoteStop}
+                    onChange={e => setVsbVolQuoteStop(e.target.value)}
+                    required
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                  />
+                </div>
+                <div>
+                  <label className="text-[#A1AFB8] block mb-1">Tick Size (Opsional)</label>
+                  <input
+                    type="text"
+                    value={vsbTickSize}
+                    onChange={e => setVsbTickSize(e.target.value)}
+                    placeholder="Auto dari market"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                  />
+                </div>
+                <div>
+                  <label className="text-[#A1AFB8] block mb-1">Akun Maker Lawan (Opsional)</label>
+                  <input
+                    type="text"
+                    value={vsbCounterpartyAccountId}
+                    onChange={e => setVsbCounterpartyAccountId(e.target.value)}
+                    placeholder="Kosong = Akun Sendiri"
+                    className="w-full bg-[#17212B] text-white p-2 rounded border border-[#2B3944]"
+                  />
+                </div>
+              </div>
+
+              <label className="flex items-center gap-2 text-xs text-[#E4EBEF] cursor-pointer pt-1">
+                <input
+                  type="checkbox"
+                  checked={vsbRequireTwoSided}
+                  onChange={e => setVsbRequireTwoSided(e.target.checked)}
+                  className="rounded border-[#2B3944] bg-[#17212B]"
+                />
+                <span>Wajibkan Order Book 2 Sisi Aktif (Jeda jika salah satu sisi Bid/Ask kosong atau spread &lt; Min Spread bps)</span>
+              </label>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#202B34]">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setIsVolumeSpreadModalOpen(false)}
+                >
+                  Batal
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  disabled={isLoading}
+                >
+                  Deploy Volume Bot Phase 2
+                </Button>
               </div>
             </form>
           </div>
@@ -6562,6 +7159,206 @@ export const MMConsoleView: React.FC<Props> = ({
                     </div>
                   </div>
                 </>
+              )}
+
+              {/* VOLUME SPREAD BOT (PHASE 2) SPECIFIC FIELDS */}
+              {editingBot.botType === 'VOLUME_SPREAD_BOT' && (
+                <div className="p-3 bg-[#17212B] rounded-[7px] border border-[#202B34] space-y-3">
+                  <span className="text-xs font-semibold text-[#35B887] block uppercase tracking-wide">
+                    Pengaturan Volume Bot Phase 2 (Antar Spread / Self-Cross)
+                  </span>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[#A1AFB8] block mb-1">Mode Penempatan Spread</label>
+                      <select
+                        value={editVsbSpreadMode}
+                        onChange={e => setEditVsbSpreadMode(e.target.value as any)}
+                        className="w-full bg-[#111820] text-white p-2 rounded border border-[#2B3944]"
+                      >
+                        <option value="INSIDE_SPREAD">Inside Spread</option>
+                        <option value="MIDPOINT_JITTER">Midpoint Jitter</option>
+                        <option value="PING_PONG_EDGE">Ping-Pong Edge</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[#A1AFB8] block mb-1">Pola Arah Makan Order</label>
+                      <select
+                        value={editVsbSidePattern}
+                        onChange={e => setEditVsbSidePattern(e.target.value as any)}
+                        className="w-full bg-[#111820] text-white p-2 rounded border border-[#2B3944]"
+                      >
+                        <option value="ALTERNATE">Alternate (Buy/Sell)</option>
+                        <option value="RANDOM">Random</option>
+                        <option value="BUY_EATS_SELL">Buy Eats Sell</option>
+                        <option value="SELL_EATS_BUY">Sell Eats Buy</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[#A1AFB8] block mb-1">Random Min Quantity</label>
+                      <input
+                        type="text"
+                        value={editVsbMinQty}
+                        onChange={e => setEditVsbMinQty(e.target.value)}
+                        required
+                        className="w-full bg-[#111820] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[#A1AFB8] block mb-1">Random Max Quantity</label>
+                      <input
+                        type="text"
+                        value={editVsbMaxQty}
+                        onChange={e => setEditVsbMaxQty(e.target.value)}
+                        required
+                        className="w-full bg-[#111820] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[#A1AFB8] block mb-1">Inside-Spread Band Min - Max (%)</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          min={1}
+                          max={99}
+                          value={editVsbBandMinPct}
+                          onChange={e => setEditVsbBandMinPct(e.target.value)}
+                          className="w-1/2 bg-[#111820] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                        />
+                        <input
+                          type="number"
+                          min={1}
+                          max={99}
+                          value={editVsbBandMaxPct}
+                          onChange={e => setEditVsbBandMaxPct(e.target.value)}
+                          className="w-1/2 bg-[#111820] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[#A1AFB8] block mb-1">Jeda Taker Makan Maker (ms)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={2000}
+                        value={editVsbCrossDelayMs}
+                        onChange={e => setEditVsbCrossDelayMs(e.target.value)}
+                        className="w-full bg-[#111820] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[#A1AFB8] block mb-1">Interval Siklus (Min - Max Detik)</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          min={1}
+                          value={editVsbMinDelay}
+                          onChange={e => setEditVsbMinDelay(e.target.value)}
+                          className="w-1/2 bg-[#111820] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                        />
+                        <input
+                          type="number"
+                          min={1}
+                          value={editVsbMaxDelay}
+                          onChange={e => setEditVsbMaxDelay(e.target.value)}
+                          className="w-1/2 bg-[#111820] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[#A1AFB8] block mb-1">Min Book Spread / Fallback (bps)</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          min={1}
+                          value={editVsbMinSpreadBps}
+                          onChange={e => setEditVsbMinSpreadBps(e.target.value)}
+                          className="w-1/2 bg-[#111820] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                        />
+                        <input
+                          type="number"
+                          min={1}
+                          value={editVsbFallbackHalfSpreadBps}
+                          onChange={e => setEditVsbFallbackHalfSpreadBps(e.target.value)}
+                          className="w-1/2 bg-[#111820] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[#A1AFB8] block mb-1">Min Limit Price</label>
+                      <input
+                        type="text"
+                        value={editVsbMinLimitPrice}
+                        onChange={e => setEditVsbMinLimitPrice(e.target.value)}
+                        className="w-full bg-[#111820] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[#A1AFB8] block mb-1">Max Limit Price</label>
+                      <input
+                        type="text"
+                        value={editVsbMaxLimitPrice}
+                        onChange={e => setEditVsbMaxLimitPrice(e.target.value)}
+                        className="w-full bg-[#111820] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-[#A1AFB8] block mb-1">Target Stop Volume (Quote)</label>
+                      <input
+                        type="text"
+                        value={editVsbVolQuoteStop}
+                        onChange={e => setEditVsbVolQuoteStop(e.target.value)}
+                        required
+                        className="w-full bg-[#111820] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[#A1AFB8] block mb-1">Tick Size (Opsional)</label>
+                      <input
+                        type="text"
+                        value={editVsbTickSize}
+                        onChange={e => setEditVsbTickSize(e.target.value)}
+                        placeholder="Auto"
+                        className="w-full bg-[#111820] text-white p-2 rounded border border-[#2B3944] font-mono tabular-nums"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[#A1AFB8] block mb-1">Akun Maker Lawan</label>
+                      <input
+                        type="text"
+                        value={editVsbCounterpartyAccountId}
+                        onChange={e => setEditVsbCounterpartyAccountId(e.target.value)}
+                        placeholder="Kosong = Sendiri"
+                        className="w-full bg-[#111820] text-white p-2 rounded border border-[#2B3944]"
+                      />
+                    </div>
+                  </div>
+
+                  <label className="flex items-center gap-2 text-xs text-[#E4EBEF] cursor-pointer pt-1">
+                    <input
+                      type="checkbox"
+                      checked={editVsbRequireTwoSided}
+                      onChange={e => setEditVsbRequireTwoSided(e.target.checked)}
+                      className="rounded border-[#2B3944] bg-[#111820]"
+                    />
+                    <span>Wajibkan Order Book 2 Sisi Aktif</span>
+                  </label>
+                </div>
               )}
 
               {/* DEPTH LIQUIDITY BOT SPECIFIC FIELDS */}
