@@ -169,13 +169,14 @@ function getExchangeDataDirectory() {
     return tmpDir;
   }
 }
-var SYSTEM_TREASURY_ID, SYSTEM_FEE_ID, SYSTEM_HOT_WALLET_ID, DEFAULT_RISK_CONTROLS, DATA_DIR, STATE_FILE, DatabaseStore, db;
+var SYSTEM_TREASURY_ID, SYSTEM_FEE_ID, SYSTEM_HOT_WALLET_ID, SYSTEM_EARN_CUSTODY_ID, DEFAULT_RISK_CONTROLS, DATA_DIR, STATE_FILE, DatabaseStore, db;
 var init_database = __esm({
   "server/db/database.ts"() {
     init_PrecisionMath();
     SYSTEM_TREASURY_ID = "sys-treasury-0000-0000-000000000000";
     SYSTEM_FEE_ID = "sys-fees-0000-0000-000000000000";
     SYSTEM_HOT_WALLET_ID = "sys-hotwallet-0000-0000-000000000000";
+    SYSTEM_EARN_CUSTODY_ID = "sys-earn-custody-0000-0000-000000000000";
     DEFAULT_RISK_CONTROLS = {
       maxActiveBots: 50,
       maxOpenOrdersPerBot: 100,
@@ -244,6 +245,27 @@ var init_database = __esm({
         this.notificationDeliveries = /* @__PURE__ */ new Map();
         this.userNotifications = /* @__PURE__ */ new Map();
         this.userNotificationPreferences = /* @__PURE__ */ new Map();
+        this.rewardTasks = /* @__PURE__ */ new Map();
+        // key: taskId
+        this.rewardVouchers = /* @__PURE__ */ new Map();
+        // key: voucherId
+        this.voucherRedemptions = /* @__PURE__ */ new Map();
+        // key: `${userId}:${voucherId}`
+        this.rewardClaims = /* @__PURE__ */ new Map();
+        // key: `${userId}:${taskId}`
+        this.referralRelations = /* @__PURE__ */ new Map();
+        // key: refereeUserId
+        this.referralPayouts = /* @__PURE__ */ new Map();
+        // key: payoutId
+        this.volumeExecutionV2Bots = /* @__PURE__ */ new Map();
+        // key: botId
+        this.chartDrawings = /* @__PURE__ */ new Map();
+        // key: `${userId}:${pairId}`
+        this.earnVaults = /* @__PURE__ */ new Map();
+        // key: vaultId
+        this.earnPositions = /* @__PURE__ */ new Map();
+        // key: positionId
+        this.earnPayouts = [];
         this.saveTimer = null;
         this.isSaving = false;
         this.lastLoadedMtime = 0;
@@ -1267,7 +1289,18 @@ var init_database = __esm({
             notificationOutboxJobs: Array.from(this.notificationOutboxJobs.entries()),
             notificationDeliveries: Array.from(this.notificationDeliveries.entries()),
             userNotifications: Array.from(this.userNotifications.entries()),
-            userNotificationPreferences: Array.from(this.userNotificationPreferences.entries())
+            userNotificationPreferences: Array.from(this.userNotificationPreferences.entries()),
+            rewardTasks: Array.from(this.rewardTasks.entries()),
+            rewardVouchers: Array.from(this.rewardVouchers.entries()),
+            voucherRedemptions: Array.from(this.voucherRedemptions.entries()),
+            rewardClaims: Array.from(this.rewardClaims.entries()),
+            referralRelations: Array.from(this.referralRelations.entries()),
+            referralPayouts: Array.from(this.referralPayouts.entries()),
+            volumeExecutionV2Bots: Array.from(this.volumeExecutionV2Bots.entries()),
+            chartDrawings: Array.from(this.chartDrawings.entries()),
+            earnVaults: Array.from(this.earnVaults.entries()),
+            earnPositions: Array.from(this.earnPositions.entries()),
+            earnPayouts: this.earnPayouts.slice(-2e3)
           };
           const jsonStr = JSON.stringify(
             state,
@@ -1398,6 +1431,17 @@ var init_database = __esm({
                 if (data.notificationDeliveries) this.notificationDeliveries = new Map(data.notificationDeliveries);
                 if (data.userNotifications) this.userNotifications = new Map(data.userNotifications);
                 if (data.userNotificationPreferences) this.userNotificationPreferences = new Map(data.userNotificationPreferences);
+                if (data.rewardTasks) this.rewardTasks = new Map(data.rewardTasks);
+                if (data.rewardVouchers) this.rewardVouchers = new Map(data.rewardVouchers);
+                if (data.voucherRedemptions) this.voucherRedemptions = new Map(data.voucherRedemptions);
+                if (data.rewardClaims) this.rewardClaims = new Map(data.rewardClaims);
+                if (data.referralRelations) this.referralRelations = new Map(data.referralRelations);
+                if (data.referralPayouts) this.referralPayouts = new Map(data.referralPayouts);
+                if (data.volumeExecutionV2Bots) this.volumeExecutionV2Bots = new Map(data.volumeExecutionV2Bots);
+                if (data.chartDrawings) this.chartDrawings = new Map(data.chartDrawings);
+                if (data.earnVaults) this.earnVaults = new Map(data.earnVaults);
+                if (data.earnPositions) this.earnPositions = new Map(data.earnPositions);
+                if (data.earnPayouts) this.earnPayouts = data.earnPayouts;
                 this.lastLoadedMtime = fs.statSync(p).mtimeMs;
                 console.log(`[DIMONEX Database] Berhasil memuat snapshot disk (${p}): ${this.users.size} pengguna, ${this.orders.size} order, ${this.trades.length} transaksi, ${this.sessions.size} sesi login aktif.`);
                 return true;
@@ -1798,7 +1842,7 @@ var init_database = __esm({
 });
 
 // server/services/external/FxConversionService.ts
-import crypto6 from "crypto";
+import crypto7 from "crypto";
 var FxConversionService, fxConversionService;
 var init_FxConversionService = __esm({
   "server/services/external/FxConversionService.ts"() {
@@ -1828,7 +1872,7 @@ var init_FxConversionService = __esm({
           quotaSavedCount: 0
         };
         const initialAudit = {
-          id: `fx-audit-${crypto6.randomUUID().slice(0, 8)}`,
+          id: `fx-audit-${crypto7.randomUUID().slice(0, 8)}`,
           timestamp: now,
           actor: "system@dimonex.id",
           previousRate: 16350,
@@ -1845,7 +1889,7 @@ var init_FxConversionService = __esm({
        * Cryptographic hash verification for immutable audit log integrity
        */
       computeAuditHash(actor, prev, next, ts, source) {
-        return crypto6.createHash("sha256").update(`${actor}:${prev}:${next}:${ts}:${source}:dimonex-fx-v1`).digest("hex");
+        return crypto7.createHash("sha256").update(`${actor}:${prev}:${next}:${ts}:${source}:dimonex-fx-v1`).digest("hex");
       }
       /**
        * Background runner to periodically sync rate based on configured interval
@@ -1896,7 +1940,7 @@ var init_FxConversionService = __esm({
           this.config.isManualLocked = Boolean(newConfig.isManualLocked);
         }
         db.auditLogs.unshift({
-          id: `audit-${crypto6.randomUUID().slice(0, 8)}`,
+          id: `audit-${crypto7.randomUUID().slice(0, 8)}`,
           actorId: actorEmail,
           action: "FX_CONFIG_UPDATE",
           resource: "USDT-IDR",
@@ -1934,7 +1978,7 @@ var init_FxConversionService = __esm({
         };
         this.config.isManualLocked = true;
         const auditEntry = {
-          id: `fx-audit-${crypto6.randomUUID().slice(0, 8)}`,
+          id: `fx-audit-${crypto7.randomUUID().slice(0, 8)}`,
           timestamp: now,
           actor: actorEmail,
           previousRate: prevRate,
@@ -1947,7 +1991,7 @@ var init_FxConversionService = __esm({
         this.auditHistory.unshift(auditEntry);
         if (this.auditHistory.length > 200) this.auditHistory.pop();
         db.auditLogs.unshift({
-          id: `audit-${crypto6.randomUUID().slice(0, 8)}`,
+          id: `audit-${crypto7.randomUUID().slice(0, 8)}`,
           actorId: actorEmail,
           action: "FX_RATE_UPDATE",
           resource: "USDT-IDR",
@@ -1982,7 +2026,7 @@ var init_FxConversionService = __esm({
           notes: customNotes || `Disinkronkan secara otomatis dari ${sourceLabel} live market API`
         };
         const auditEntry = {
-          id: `fx-audit-${crypto6.randomUUID().slice(0, 8)}`,
+          id: `fx-audit-${crypto7.randomUUID().slice(0, 8)}`,
           timestamp: now,
           actor: actorEmail,
           previousRate: prevRate,
@@ -1995,7 +2039,7 @@ var init_FxConversionService = __esm({
         this.auditHistory.unshift(auditEntry);
         if (this.auditHistory.length > 200) this.auditHistory.pop();
         db.auditLogs.unshift({
-          id: `audit-${crypto6.randomUUID().slice(0, 8)}`,
+          id: `audit-${crypto7.randomUUID().slice(0, 8)}`,
           actorId: actorEmail,
           action: "FX_RATE_LIVE_SYNC",
           resource: "USDT-IDR",
@@ -3740,526 +3784,15 @@ import { Router } from "express";
 
 // server/auth/AuthService.ts
 init_database();
-import crypto2 from "crypto";
-var BASE32_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-var SESSION_SECRET = process.env.SESSION_SECRET || "dimonex-stateless-hmac-secret-v1-production-2026";
-var BLOCKED_REGISTRATION_DOMAINS = [
-  "forexzig.com",
-  ...process.env.BLOCKED_EMAIL_DOMAINS ? process.env.BLOCKED_EMAIL_DOMAINS.split(",").map((d) => d.trim().toLowerCase()).filter(Boolean) : []
-];
-var BlockedEmailDomainError = class extends Error {
-  constructor(domain, message) {
-    super(message);
-    this.name = "BlockedEmailDomainError";
-    this.domain = domain;
-  }
-};
-var AuthService = class {
-  /**
-   * Check whether an email belongs to a blocked domain or its subdomains.
-   */
-  static getBlockedDomain(email) {
-    const cleanEmail = email.trim().toLowerCase();
-    const atIdx = cleanEmail.lastIndexOf("@");
-    if (atIdx === -1) return null;
-    const domain = cleanEmail.slice(atIdx + 1).replace(/\.+$/, "");
-    if (!domain) return null;
-    for (const blocked of BLOCKED_REGISTRATION_DOMAINS) {
-      if (domain === blocked || domain.endsWith(`.${blocked}`)) {
-        return blocked;
-      }
-    }
-    return null;
-  }
-  /**
-   * Issues a cryptographically signed HMAC-SHA256 token.
-   * Self-contained and verifiable across all stateless Vercel Serverless Lambda instances.
-   */
-  static issueToken(user, device = "Web Client", ip = "127.0.0.1") {
-    const now = Date.now();
-    const expiresAt = now + 14 * 24 * 3600 * 1e3;
-    const payload = {
-      userId: user.id,
-      email: user.email,
-      role: user.role,
-      iat: now,
-      exp: expiresAt
-    };
-    const payloadEncoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
-    const signature = crypto2.createHmac("sha256", SESSION_SECRET).update(payloadEncoded).digest("base64url");
-    const token = `${payloadEncoded}.${signature}`;
-    db.sessions.set(token, {
-      userId: user.id,
-      token,
-      device,
-      ip,
-      expiresAt
-    });
-    if (process.env.VERCEL === "1") {
-      db.saveToDisk();
-    } else {
-      db.scheduleSave();
-    }
-    return token;
-  }
-  /**
-   * RFC 6238 TOTP Secret Generator (Base32 encoded)
-   */
-  static generateTotpSecret() {
-    const randomBytes = crypto2.randomBytes(20);
-    let secret = "";
-    for (let i = 0; i < randomBytes.length; i++) {
-      secret += BASE32_CHARS[randomBytes[i] % 32];
-    }
-    const otpauthUrl = `otpauth://totp/DIMONEX:trader?secret=${secret}&issuer=DIMONEX`;
-    return { secret, otpauthUrl };
-  }
-  /**
-   * Verify standard RFC 6238 6-digit TOTP code
-   */
-  static verifyTotpCode(secret, code, window = 1) {
-    const cleanCode = code.trim();
-    if (!/^\d{6}$/.test(cleanCode)) return false;
-    let bits = "";
-    for (let i = 0; i < secret.length; i++) {
-      const val = BASE32_CHARS.indexOf(secret.charAt(i).toUpperCase());
-      if (val === -1) continue;
-      bits += val.toString(2).padStart(5, "0");
-    }
-    const bytes = [];
-    for (let i = 0; i + 8 <= bits.length; i += 8) {
-      bytes.push(parseInt(bits.slice(i, i + 8), 2));
-    }
-    const key = Buffer.from(bytes);
-    const currentTimeStep = Math.floor(Date.now() / 1e3 / 30);
-    for (let step = currentTimeStep - window; step <= currentTimeStep + window; step++) {
-      const stepBuffer = Buffer.alloc(8);
-      stepBuffer.writeBigInt64BE(BigInt(step));
-      const hmac = crypto2.createHmac("sha1", key).update(stepBuffer).digest();
-      const offset = hmac[hmac.length - 1] & 15;
-      const binary = (hmac[offset] & 127) << 24 | (hmac[offset + 1] & 255) << 16 | (hmac[offset + 2] & 255) << 8 | hmac[offset + 3] & 255;
-      const otp = (binary % 1e6).toString().padStart(6, "0");
-      if (otp === cleanCode) {
-        return true;
-      }
-    }
-    return false;
-  }
-  /**
-   * Register a new user with default role 'user' and pending KYC.
-   */
-  static register(email, password, ip = "127.0.0.1") {
-    const cleanEmail = email.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
-      throw new Error("Format alamat email tidak valid.");
-    }
-    const blockedDomain = this.getBlockedDomain(cleanEmail);
-    if (blockedDomain) {
-      db.auditLogs.push({
-        id: crypto2.randomUUID(),
-        actorId: cleanEmail,
-        action: "REGISTRATION_BLOCKED_DOMAIN",
-        resource: blockedDomain,
-        details: `Pendaftaran ditolak untuk domain terblokir ${blockedDomain} (IP: ${ip}) guna mencegah spam/bot.`,
-        createdAt: Date.now()
-      });
-      db.scheduleSave();
-      throw new BlockedEmailDomainError(
-        blockedDomain,
-        `Pendaftaran dari domain ${blockedDomain} diblokir untuk mencegah spam dan akun bot.`
-      );
-    }
-    for (const [_, u] of db.users.entries()) {
-      if (u.email === cleanEmail) {
-        throw new Error("Email sudah terdaftar. Silakan gunakan email lain atau masuk.");
-      }
-    }
-    if (password.length < 8) {
-      throw new Error("Kata sandi harus minimal 8 karakter");
-    }
-    const salt = db.generateSalt();
-    const hash = db.hashPassword(password, salt);
-    const userId = crypto2.randomUUID();
-    const now = Date.now();
-    const user = {
-      id: userId,
-      email: cleanEmail,
-      passwordHash: hash,
-      passwordSalt: salt,
-      role: "user",
-      status: "active",
-      isTotpEnabled: false,
-      failedLoginAttempts: 0,
-      createdAt: now,
-      updatedAt: now
-    };
-    db.users.set(user.id, user);
-    db.createOrGetAccount(user.id, "IDR", "0");
-    db.createOrGetAccount(user.id, "BTC", "0");
-    db.createOrGetAccount(user.id, "ETH", "0");
-    db.createOrGetAccount(user.id, "USDT", "0");
-    const token = this.issueToken(user, "Web Browser / Chrome", "127.0.0.1");
-    const { passwordHash, passwordSalt, ...safeUser } = user;
-    return { user: safeUser, token };
-  }
-  /**
-   * Login with anti-brute force and 2FA TOTP enforcement.
-   */
-  static login(email, password, totpCode, ip = "127.0.0.1") {
-    const cleanEmail = email.trim().toLowerCase();
-    let targetUser;
-    for (const [_, u] of db.users.entries()) {
-      if (u.email === cleanEmail) {
-        targetUser = u;
-        break;
-      }
-    }
-    if (!targetUser) {
-      throw new Error("Email atau kata sandi tidak valid");
-    }
-    const now = Date.now();
-    if (targetUser.lockedUntil && targetUser.lockedUntil > now) {
-      const waitMinutes = Math.ceil((targetUser.lockedUntil - now) / 6e4);
-      throw new Error(`Akun terkunci sementara karena percobaan gagal berulang. Coba lagi dalam ${waitMinutes} menit.`);
-    }
-    const computedHash = db.hashPassword(password, targetUser.passwordSalt);
-    if (computedHash !== targetUser.passwordHash) {
-      targetUser.failedLoginAttempts += 1;
-      if (targetUser.failedLoginAttempts >= 5) {
-        targetUser.lockedUntil = now + 15 * 60 * 1e3;
-        targetUser.failedLoginAttempts = 0;
-        throw new Error("Terlalu banyak percobaan gagal. Akun dibekukan selama 15 menit untuk keamanan.");
-      }
-      throw new Error("Email atau kata sandi tidak valid");
-    }
-    targetUser.failedLoginAttempts = 0;
-    targetUser.lockedUntil = void 0;
-    if (targetUser.isTotpEnabled && targetUser.totpSecret) {
-      if (!totpCode) {
-        return { requiresTotp: true };
-      }
-      const isTotpValid = this.verifyTotpCode(targetUser.totpSecret, totpCode);
-      if (!isTotpValid) {
-        throw new Error("Kode 2FA TOTP tidak valid atau kedaluwarsa.");
-      }
-    }
-    const token = this.issueToken(targetUser, "Web Client / Dimonex Desktop", ip);
-    const { passwordHash, passwordSalt, ...safeUser } = targetUser;
-    return { user: safeUser, token };
-  }
-  /**
-   * Validate bearer token and return user.
-   * Supports both Stateless Cryptographic HMAC tokens (survives all serverless container recycles)
-   * and backward-compatible stateful in-memory tokens.
-   */
-  static authenticateToken(token) {
-    if (!token || typeof token !== "string") return null;
-    if (token.includes(".")) {
-      const parts = token.split(".");
-      if (parts.length === 2) {
-        const [payloadEncoded, signature] = parts;
-        try {
-          const expectedSig = crypto2.createHmac("sha256", SESSION_SECRET).update(payloadEncoded).digest("base64url");
-          if (signature.length === expectedSig.length && crypto2.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
-            const payload = JSON.parse(Buffer.from(payloadEncoded, "base64url").toString("utf-8"));
-            if (payload && payload.exp > Date.now()) {
-              let user2 = db.users.get(payload.userId);
-              if (!user2) {
-                db.loadFromDisk();
-                user2 = db.users.get(payload.userId);
-              }
-              if (user2 && user2.status === "active") {
-                const { passwordHash: passwordHash2, passwordSalt: passwordSalt2, ...safeUser2 } = user2;
-                return safeUser2;
-              }
-              if (!user2 && payload.email) {
-                const salt = db.generateSalt();
-                const rehydratedUser = {
-                  id: payload.userId,
-                  email: payload.email,
-                  passwordHash: "",
-                  passwordSalt: salt,
-                  role: payload.role || "user",
-                  status: "active",
-                  isTotpEnabled: false,
-                  failedLoginAttempts: 0,
-                  createdAt: payload.iat || Date.now(),
-                  updatedAt: Date.now()
-                };
-                db.users.set(rehydratedUser.id, rehydratedUser);
-                db.createOrGetAccount(rehydratedUser.id, "IDR", "0");
-                db.createOrGetAccount(rehydratedUser.id, "BTC", "0");
-                db.createOrGetAccount(rehydratedUser.id, "ETH", "0");
-                db.createOrGetAccount(rehydratedUser.id, "USDT", "0");
-                db.saveToDisk();
-                const { passwordHash: passwordHash2, passwordSalt: passwordSalt2, ...safeUser2 } = rehydratedUser;
-                return safeUser2;
-              }
-            }
-          }
-        } catch {
-        }
-      }
-    }
-    const session = db.sessions.get(token);
-    if (!session || session.expiresAt < Date.now()) {
-      return null;
-    }
-    const user = db.users.get(session.userId);
-    if (!user || user.status !== "active") {
-      return null;
-    }
-    const { passwordHash, passwordSalt, ...safeUser } = user;
-    return safeUser;
-  }
-};
+import crypto4 from "crypto";
 
-// server/routes/auth.ts
+// server/services/rewards/VipRewardsService.ts
 init_database();
-var authRouter = Router();
-var requireAuth = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Otorisasi diperlukan: Token tidak ditemukan" });
-  }
-  const token = authHeader.slice(7);
-  const user = AuthService.authenticateToken(token);
-  if (!user) {
-    return res.status(401).json({ error: "Sesi telah kedaluwarsa atau tidak valid" });
-  }
-  req.user = user;
-  req.token = token;
-  next();
-};
-var requireAdmin = (req, res, next) => {
-  requireAuth(req, res, () => {
-    const user = req.user;
-    const role = (user.role || "").toUpperCase();
-    if (role !== "ADMIN" && role !== "SUPERADMIN") {
-      return res.status(403).json({ error: "Akses ditolak: Memerlukan hak akses administrator (ADMIN)" });
-    }
-    next();
-  });
-};
-authRouter.post("/register", (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: "Email dan kata sandi wajib diisi" });
-    }
-    const ip = req.ip || "127.0.0.1";
-    const result = AuthService.register(email, password, ip);
-    res.json(result);
-  } catch (err) {
-    if (err instanceof BlockedEmailDomainError) {
-      return res.status(403).json({
-        error: err.message,
-        code: "BLOCKED_EMAIL_DOMAIN",
-        domain: err.domain
-      });
-    }
-    res.status(400).json({ error: err.message });
-  }
-});
-authRouter.post("/login", (req, res) => {
-  try {
-    const { email, password, totpCode } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: "Email dan kata sandi wajib diisi" });
-    }
-    const ip = req.ip || "127.0.0.1";
-    const result = AuthService.login(email, password, totpCode, ip);
-    res.json(result);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-var VALID_SPOT_LAYOUTS = /* @__PURE__ */ new Set(["CLASSIC", "PRO_TERMINAL", "CHART_FOCUS"]);
-function getNormalizedPreferences(userId) {
-  const dbUser = db.users.get(userId);
-  const prefs = dbUser?.preferences;
-  const spotLayout = prefs?.spotLayout && VALID_SPOT_LAYOUTS.has(prefs.spotLayout) ? prefs.spotLayout : "CLASSIC";
-  return {
-    spotLayout,
-    hideRecentTradesInChartFocus: prefs?.hideRecentTradesInChartFocus ?? true,
-    updatedAt: prefs?.updatedAt || dbUser?.updatedAt || Date.now()
-  };
-}
-authRouter.get("/me", requireAuth, (req, res) => {
-  const user = req.user;
-  const kyc = db.kyc.get(user.id);
-  const preferences = getNormalizedPreferences(user.id);
-  res.json({ user: { ...user, preferences }, kyc, preferences });
-});
-authRouter.get("/preferences", requireAuth, (req, res) => {
-  const user = req.user;
-  res.json(getNormalizedPreferences(user.id));
-});
-authRouter.put("/preferences", requireAuth, (req, res) => {
-  const user = req.user;
-  const dbUser = db.users.get(user.id);
-  if (!dbUser) {
-    return res.status(404).json({ error: "Pengguna tidak ditemukan" });
-  }
-  const { spotLayout, hideRecentTradesInChartFocus } = req.body || {};
-  if (spotLayout !== void 0 && !VALID_SPOT_LAYOUTS.has(spotLayout)) {
-    return res.status(400).json({
-      error: "Preset layout tidak valid. Pilihan: CLASSIC, PRO_TERMINAL, CHART_FOCUS"
-    });
-  }
-  const current = getNormalizedPreferences(user.id);
-  const nextPrefs = {
-    spotLayout: spotLayout || current.spotLayout,
-    hideRecentTradesInChartFocus: typeof hideRecentTradesInChartFocus === "boolean" ? hideRecentTradesInChartFocus : current.hideRecentTradesInChartFocus,
-    updatedAt: Date.now()
-  };
-  dbUser.preferences = nextPrefs;
-  dbUser.updatedAt = Date.now();
-  if (process.env.VERCEL === "1") {
-    db.saveToDisk();
-  } else {
-    db.scheduleSave();
-  }
-  res.json({ success: true, preferences: nextPrefs });
-});
-authRouter.post("/2fa/generate", requireAuth, (req, res) => {
-  const user = req.user;
-  const { secret, otpauthUrl } = AuthService.generateTotpSecret();
-  const dbUser = db.users.get(user.id);
-  dbUser.totpSecret = secret;
-  res.json({ secret, otpauthUrl });
-});
-authRouter.post("/2fa/enable", requireAuth, (req, res) => {
-  const user = req.user;
-  const { code } = req.body;
-  const dbUser = db.users.get(user.id);
-  if (!dbUser.totpSecret) {
-    return res.status(400).json({ error: "Silakan generate kunci 2FA terlebih dahulu" });
-  }
-  const isValid = AuthService.verifyTotpCode(dbUser.totpSecret, code);
-  if (!isValid) {
-    return res.status(400).json({ error: "Kode TOTP salah atau kedaluwarsa" });
-  }
-  dbUser.isTotpEnabled = true;
-  dbUser.updatedAt = Date.now();
-  res.json({ success: true, message: "2FA TOTP berhasil diaktifkan" });
-});
-authRouter.post("/2fa/disable", requireAuth, (req, res) => {
-  const user = req.user;
-  const { code } = req.body;
-  const dbUser = db.users.get(user.id);
-  if (dbUser.isTotpEnabled && dbUser.totpSecret) {
-    const isValid = AuthService.verifyTotpCode(dbUser.totpSecret, code);
-    if (!isValid) {
-      return res.status(400).json({ error: "Kode TOTP diperlukan untuk menonaktifkan 2FA" });
-    }
-  }
-  dbUser.isTotpEnabled = false;
-  dbUser.totpSecret = void 0;
-  res.json({ success: true, message: "2FA TOTP berhasil dinonaktifkan" });
-});
-authRouter.get("/sessions", requireAuth, (req, res) => {
-  const user = req.user;
-  const currentToken = req.token;
-  const userSessions = Array.from(db.sessions.values()).filter((s) => s.userId === user.id).map((s) => ({
-    device: s.device,
-    ip: s.ip,
-    isCurrent: s.token === currentToken,
-    expiresAt: s.expiresAt
-  }));
-  res.json(userSessions);
-});
-authRouter.post("/logout", requireAuth, (req, res) => {
-  const token = req.token;
-  db.sessions.delete(token);
-  res.json({ success: true, message: "Berhasil keluar" });
-});
-
-// server/routes/kyc.ts
-import { Router as Router2 } from "express";
 import crypto3 from "crypto";
-init_database();
-var kycRouter = Router2();
-kycRouter.get("/status", requireAuth, (req, res) => {
-  const user = req.user;
-  const kyc = db.kyc.get(user.id);
-  if (!kyc) {
-    return res.json({
-      status: "unverified",
-      tierLevel: 0,
-      limits: {
-        dailyDepositIdr: "0",
-        dailyWithdrawalIdr: "0"
-      }
-    });
-  }
-  const limits = {
-    dailyDepositIdr: kyc.tierLevel === 2 ? "500000000" : "25000000",
-    dailyWithdrawalIdr: kyc.tierLevel === 2 ? "500000000" : "25000000"
-  };
-  res.json({
-    ...kyc,
-    limits
-  });
-});
-kycRouter.post("/submit", requireAuth, (req, res) => {
-  try {
-    const user = req.user;
-    const { fullName, nik, birthDate, idCardUrl, selfieUrl } = req.body;
-    if (!fullName || !nik || !birthDate) {
-      return res.status(400).json({ error: "Nama Lengkap (sesuai KTP), NIK, dan Tanggal Lahir wajib diisi" });
-    }
-    if (!/^\d{16}$/.test(nik.trim())) {
-      return res.status(400).json({ error: "Format NIK harus tepat 16 digit angka" });
-    }
-    let existingKyc = db.kyc.get(user.id);
-    const newKyc = {
-      id: existingKyc ? existingKyc.id : crypto3.randomUUID(),
-      userId: user.id,
-      fullName: fullName.trim(),
-      nik: nik.trim(),
-      birthDate,
-      idCardUrl: idCardUrl || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><rect width="200" height="120" fill="%231e293b"/><text x="100" y="60" fill="%23fff" text-anchor="middle">KTP Valid</text></svg>',
-      selfieUrl: selfieUrl || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><circle cx="60" cy="60" r="50" fill="%233b82f6"/></svg>',
-      status: "approved",
-      // Auto-approved in MVP simulation for seamless UX
-      tierLevel: 1,
-      reviewedBy: "system-kyc-engine",
-      reviewedAt: Date.now(),
-      createdAt: existingKyc ? existingKyc.createdAt : Date.now()
-    };
-    db.kyc.set(user.id, newKyc);
-    db.auditLogs.push({
-      id: crypto3.randomUUID(),
-      actorId: user.id,
-      action: "KYC_SUBMITTED",
-      resource: `user_kyc:${newKyc.id}`,
-      details: `KYC submitted for NIK ${nik.slice(0, 6)}****** with full name: ${fullName}`,
-      createdAt: Date.now()
-    });
-    res.json({
-      success: true,
-      message: "KYC berhasil diverifikasi! Akun Anda kini berstatus Terverifikasi (Tier 1)",
-      kyc: newKyc
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-// server/routes/trading.ts
-import { Router as Router3 } from "express";
-
-// server/engine/MatchingEngine.ts
-import crypto7 from "crypto";
-
-// server/engine/OrderBook.ts
-init_PrecisionMath();
-import crypto5 from "crypto";
 
 // server/ledger/LedgerService.ts
 init_database();
-import crypto4 from "crypto";
+import crypto2 from "crypto";
 var LedgerService = class {
   /**
    * Execute a double-entry atomic journal transaction.
@@ -4302,7 +3835,7 @@ var LedgerService = class {
       }
     }
     const createdEntries = [];
-    const journalId = crypto4.randomUUID();
+    const journalId = crypto2.randomUUID();
     const now = Date.now();
     for (const draft of req.entries) {
       const acc = mutatedAccounts.get(draft.accountId);
@@ -4323,7 +3856,7 @@ var LedgerService = class {
       acc.version += 1;
       acc.updatedAt = now;
       createdEntries.push({
-        id: crypto4.randomUUID(),
+        id: crypto2.randomUUID(),
         journalId,
         accountId: acc.id,
         entryType: draft.entryType,
@@ -4561,7 +4094,7 @@ var LedgerService = class {
       acc.version += 1;
       acc.updatedAt = now;
     });
-    const journalId = crypto4.randomUUID();
+    const journalId = crypto2.randomUUID();
     const journal = {
       id: journalId,
       idempotencyKey: `trade-settle-${tradeId}`,
@@ -4603,7 +4136,2147 @@ var LedgerService = class {
   }
 };
 
+// server/services/rewards/VipRewardsService.ts
+init_PrecisionMath();
+var THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1e3;
+var MIN_REFERRAL_CLAIM_USDT = 0.01;
+var MAX_SINGLE_REWARD_USDT = 1e5;
+var VALID_TASK_CATEGORIES = [
+  "SECURITY",
+  "FUNDING",
+  "TRADING",
+  "COMPLIANCE",
+  "VIP"
+];
+var VALID_TASK_RULE_TYPES = [
+  "ENABLE_2FA",
+  "DEPOSIT_USDT",
+  "SPOT_TRADES_COUNT",
+  "SPOT_VOLUME_USDT",
+  "FUTURES_VOLUME_USDT",
+  "COMBINED_VOLUME_30D_USDT",
+  "KYC_APPROVED"
+];
+var VALID_TASK_ACTION_VIEWS = [
+  "SECURITY",
+  "DEPOSIT",
+  "TRADE",
+  "FUTURES",
+  "KYC"
+];
+var VALID_VOUCHER_TYPES = [
+  "USDT_BONUS",
+  "FEE_REBATE",
+  "TRADING_CREDIT"
+];
+var VIP_TIER_SCHEDULE = [
+  {
+    level: 0,
+    code: "V0",
+    name: "Regular",
+    minVolume30dUsdt: 0,
+    makerFeeBps: 10,
+    takerFeeBps: 20,
+    makerFeePct: "0.100%",
+    takerFeePct: "0.200%",
+    referralRebatePct: 20,
+    dailyWithdrawalLimitBtc: 10,
+    perks: ["Standard Spot & Futures API", "20% Referral Fee Rebate", "24/7 Support"]
+  },
+  {
+    level: 1,
+    code: "V1",
+    name: "VIP 1",
+    minVolume30dUsdt: 5e4,
+    makerFeeBps: 6,
+    takerFeeBps: 8,
+    makerFeePct: "0.060%",
+    takerFeePct: "0.080%",
+    referralRebatePct: 25,
+    dailyWithdrawalLimitBtc: 50,
+    perks: ["25% Referral Fee Rebate", "50 BTC Daily Withdrawal", "Priority Support"]
+  },
+  {
+    level: 2,
+    code: "V2",
+    name: "VIP 2",
+    minVolume30dUsdt: 25e4,
+    makerFeeBps: 4.5,
+    takerFeeBps: 6.5,
+    makerFeePct: "0.045%",
+    takerFeePct: "0.065%",
+    referralRebatePct: 30,
+    dailyWithdrawalLimitBtc: 100,
+    perks: ["30% Referral Fee Rebate", "Priority Matching Queue", "Dedicated Account Manager"]
+  },
+  {
+    level: 3,
+    code: "V3",
+    name: "VIP 3",
+    minVolume30dUsdt: 1e6,
+    makerFeeBps: 3.5,
+    takerFeeBps: 5,
+    makerFeePct: "0.035%",
+    takerFeePct: "0.050%",
+    referralRebatePct: 35,
+    dailyWithdrawalLimitBtc: 250,
+    perks: ["35% Referral Fee Rebate", "OTC Block Trading Desk", "Higher API Rate Limits"]
+  },
+  {
+    level: 4,
+    code: "V4",
+    name: "VIP 4",
+    minVolume30dUsdt: 5e6,
+    makerFeeBps: 2.5,
+    takerFeeBps: 4,
+    makerFeePct: "0.025%",
+    takerFeePct: "0.040%",
+    referralRebatePct: 40,
+    dailyWithdrawalLimitBtc: 500,
+    perks: ["40% Referral Fee Rebate", "Sub-Account Management", "Market Maker Program Access"]
+  },
+  {
+    level: 5,
+    code: "V5",
+    name: "VIP 5",
+    minVolume30dUsdt: 2e7,
+    makerFeeBps: 1.5,
+    takerFeeBps: 3,
+    makerFeePct: "0.015%",
+    takerFeePct: "0.030%",
+    referralRebatePct: 40,
+    dailyWithdrawalLimitBtc: 1e3,
+    perks: ["40% Referral Fee Rebate", "Colocation Gateway Access", "Zero-Fee Internal Transfers"]
+  },
+  {
+    level: 6,
+    code: "V6",
+    name: "Institutional",
+    minVolume30dUsdt: 5e7,
+    makerFeeBps: 1,
+    takerFeeBps: 2,
+    makerFeePct: "0.010%",
+    takerFeePct: "0.020%",
+    referralRebatePct: 40,
+    dailyWithdrawalLimitBtc: 2500,
+    perks: ["Bespoke Liquidity Credit Lines", "Direct Settlement Desk", "Custom Institutional SLA"]
+  }
+];
+var DEFAULT_REWARD_TASKS = [
+  {
+    id: "SECURITY_2FA",
+    title: "Enable Authenticator 2FA",
+    description: "Protect your DIMONEX account with RFC-6238 TOTP two-factor authentication.",
+    category: "SECURITY",
+    ruleType: "ENABLE_2FA",
+    targetValue: 1,
+    rewardCurrency: "USDT",
+    rewardAmountUsdt: 10,
+    actionLabel: "Configure 2FA",
+    actionView: "SECURITY",
+    isActive: true,
+    sortOrder: 10
+  },
+  {
+    id: "FIRST_DEPOSIT",
+    title: "Fund Wallet (\u2265 $100 Equiv.)",
+    description: "Complete at least $100 USDT equivalent in verified IDR or crypto deposits.",
+    category: "FUNDING",
+    ruleType: "DEPOSIT_USDT",
+    targetValue: 100,
+    rewardCurrency: "USDT",
+    rewardAmountUsdt: 25,
+    actionLabel: "Deposit Funds",
+    actionView: "DEPOSIT",
+    isActive: true,
+    sortOrder: 20
+  },
+  {
+    id: "FIRST_SPOT_TRADE",
+    title: "Execute First Spot Trade",
+    description: "Fill at least one Spot order on any active DIMONEX trading pair.",
+    category: "TRADING",
+    ruleType: "SPOT_TRADES_COUNT",
+    targetValue: 1,
+    rewardCurrency: "USDT",
+    rewardAmountUsdt: 15,
+    actionLabel: "Trade Spot",
+    actionView: "TRADE",
+    isActive: true,
+    sortOrder: 30
+  },
+  {
+    id: "FUTURES_VOLUME_2K",
+    title: "Trade $2,000 in Perpetual Futures",
+    description: "Reach $2,000 in cumulative filled perpetual futures notional volume.",
+    category: "TRADING",
+    ruleType: "FUTURES_VOLUME_USDT",
+    targetValue: 2e3,
+    rewardCurrency: "USDT",
+    rewardAmountUsdt: 50,
+    actionLabel: "Open Futures",
+    actionView: "FUTURES",
+    isActive: true,
+    sortOrder: 40
+  },
+  {
+    id: "KYC_TIER_2",
+    title: "Complete Verified KYC",
+    description: "Pass identity verification to unlock institutional withdrawal and compliance limits.",
+    category: "COMPLIANCE",
+    ruleType: "KYC_APPROVED",
+    targetValue: 1,
+    rewardCurrency: "USDT",
+    rewardAmountUsdt: 30,
+    actionLabel: "Verify KYC",
+    actionView: "KYC",
+    isActive: true,
+    sortOrder: 50
+  },
+  {
+    id: "SPOT_VOLUME_50K",
+    title: "Reach VIP 1 ($50,000 30D Volume)",
+    description: "Achieve $50,000 in rolling 30-day Spot & Futures volume to unlock VIP 1.",
+    category: "VIP",
+    ruleType: "COMBINED_VOLUME_30D_USDT",
+    targetValue: 5e4,
+    rewardCurrency: "USDT",
+    rewardAmountUsdt: 100,
+    actionLabel: "Start Trading",
+    actionView: "TRADE",
+    isActive: true,
+    sortOrder: 60
+  }
+];
+function formatUsdtLabel(amount) {
+  return Number.isInteger(amount) ? `${amount} USDT` : `${amount.toFixed(2)} USDT`;
+}
+function taskConfigToDefinition(cfg) {
+  return {
+    id: cfg.id,
+    title: cfg.title,
+    description: cfg.description,
+    category: cfg.category,
+    ruleType: cfg.ruleType,
+    targetValue: cfg.targetValue,
+    rewardCurrency: "USDT",
+    rewardAmountUsdt: cfg.rewardAmountUsdt,
+    rewardDisplay: formatUsdtLabel(cfg.rewardAmountUsdt),
+    actionLabel: cfg.actionLabel,
+    actionView: cfg.actionView
+  };
+}
+function safeUnitsToNumber(raw, decimals) {
+  if (!raw) return 0;
+  try {
+    const num = Number(BigInt(raw));
+    if (!Number.isFinite(num)) return 0;
+    return num / 10 ** decimals;
+  } catch {
+    const parsed = parseFloat(raw);
+    return Number.isFinite(parsed) ? parsed / 10 ** decimals : 0;
+  }
+}
+function getCurrencyDecimals(currency) {
+  const c = (currency || "").toUpperCase();
+  if (c === "IDR") return 2;
+  if (c === "USDT" || c === "USDC") return 6;
+  const asset = Array.from(db.assets.values()).find((a) => a.symbol.toUpperCase() === c);
+  return typeof asset?.decimals === "number" ? asset.decimals : 8;
+}
+function getLiveUsdtIdrRate() {
+  const pair = db.tradingPairs.get("USDT-IDR");
+  if (pair?.lastPrice) {
+    const rate = safeUnitsToNumber(pair.lastPrice, pair.quoteDecimals ?? 2);
+    if (rate > 1e3) return rate;
+  }
+  return 16450;
+}
+function convertCurrencyToUsdt(amount, currency, usdtIdrRate) {
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  const c = (currency || "").toUpperCase();
+  if (c === "USDT" || c === "USDC" || c === "USD") return amount;
+  if (c === "IDR") return usdtIdrRate > 0 ? amount / usdtIdrRate : 0;
+  const usdtPair = db.tradingPairs.get(`${c}-USDT`);
+  if (usdtPair?.lastPrice) {
+    const px = safeUnitsToNumber(usdtPair.lastPrice, usdtPair.quoteDecimals ?? 6);
+    if (px > 0) return amount * px;
+  }
+  const idrPair = db.tradingPairs.get(`${c}-IDR`);
+  if (idrPair?.lastPrice) {
+    const pxIdr = safeUnitsToNumber(idrPair.lastPrice, idrPair.quoteDecimals ?? 2);
+    if (pxIdr > 0 && usdtIdrRate > 0) return amount * pxIdr / usdtIdrRate;
+  }
+  return 0;
+}
+function maskEmail(email) {
+  const clean = (email || "").trim();
+  const atIdx = clean.indexOf("@");
+  if (atIdx <= 1) return clean;
+  const local = clean.slice(0, atIdx);
+  const domain = clean.slice(atIdx);
+  const prefix = local.slice(0, Math.min(2, local.length));
+  return `${prefix}***${local.slice(-1)}${domain}`;
+}
+var VipRewardsService = class {
+  /**
+   * Seeds the 6 baseline institutional tasks into db.rewardTasks only if the store is empty.
+   * Once seeded, admins have full persistent CRUD control over all tasks.
+   */
+  ensureDefaultRewardTasks() {
+    if (db.rewardTasks.size > 0) return;
+    const now = Date.now();
+    for (const def of DEFAULT_REWARD_TASKS) {
+      db.rewardTasks.set(def.id, {
+        ...def,
+        createdBy: "system",
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+    db.scheduleSave();
+  }
+  getActiveTaskConfigs() {
+    this.ensureDefaultRewardTasks();
+    return Array.from(db.rewardTasks.values()).filter((t) => t.isActive).sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt - b.createdAt);
+  }
+  /**
+   * Ensures every user has a unique, persistent, deterministic-format referral code (`DMX-XXXXXX`).
+   */
+  ensureUserReferralCode(userId) {
+    const user = db.users.get(userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+    if (user.referralCode && /^DMX-[A-Z0-9]{6,10}$/.test(user.referralCode)) {
+      return user.referralCode;
+    }
+    const existingCodes = /* @__PURE__ */ new Set();
+    for (const u of db.users.values()) {
+      if (u.referralCode) existingCodes.add(u.referralCode.toUpperCase());
+    }
+    let attempt = 0;
+    let candidate = "";
+    do {
+      const digest = crypto3.createHash("sha256").update(`dimonex-ref:${userId}:${attempt}`).digest("hex").slice(0, 6).toUpperCase();
+      candidate = `DMX-${digest}`;
+      attempt++;
+    } while (existingCodes.has(candidate) && attempt < 20);
+    user.referralCode = candidate;
+    user.updatedAt = Date.now();
+    db.scheduleSave();
+    return candidate;
+  }
+  /**
+   * Resolves a user by their referral code (case-insensitive).
+   */
+  findUserByReferralCode(rawCode) {
+    const normalized = String(rawCode || "").trim().toUpperCase();
+    if (!normalized) return null;
+    for (const u of db.users.values()) {
+      if (!u.referralCode) {
+        this.ensureUserReferralCode(u.id);
+      }
+      if (u.referralCode && u.referralCode.toUpperCase() === normalized) {
+        return u;
+      }
+    }
+    return null;
+  }
+  /**
+   * Binds a referrer to a referee account with strict anti-abuse checks
+   * (no self-referral, no duplicate rebinding, no circular A->B->A loops).
+   */
+  bindReferralCode(refereeUserId, rawCode) {
+    const referee = db.users.get(refereeUserId);
+    if (!referee) {
+      throw new Error("User account not found");
+    }
+    const cleanCode = String(rawCode || "").trim().toUpperCase();
+    if (!/^DMX-[A-Z0-9]{4,12}$/.test(cleanCode)) {
+      throw new Error("Invalid referral code format. Expected format: DMX-XXXXXX.");
+    }
+    if (referee.referredByUserId || db.referralRelations.has(refereeUserId)) {
+      throw new Error("A referral code is already bound to this account.");
+    }
+    const referrer = this.findUserByReferralCode(cleanCode);
+    if (!referrer) {
+      throw new Error(`Referral code "${cleanCode}" was not found.`);
+    }
+    if (referrer.id === refereeUserId) {
+      throw new Error("You cannot apply your own referral code.");
+    }
+    if (referrer.status !== "active") {
+      throw new Error("Referrer account is not eligible.");
+    }
+    let cursorId = referrer.referredByUserId;
+    let hops = 0;
+    while (cursorId && hops < 10) {
+      if (cursorId === refereeUserId) {
+        throw new Error("Circular referral relationship is not allowed.");
+      }
+      cursorId = db.users.get(cursorId)?.referredByUserId;
+      hops++;
+    }
+    const relation = {
+      id: crypto3.randomUUID(),
+      referrerUserId: referrer.id,
+      refereeUserId,
+      referralCodeUsed: cleanCode,
+      createdAt: Date.now()
+    };
+    referee.referredByUserId = referrer.id;
+    referee.updatedAt = Date.now();
+    db.referralRelations.set(refereeUserId, relation);
+    db.auditLogs.push({
+      id: crypto3.randomUUID(),
+      actorId: refereeUserId,
+      action: "REFERRAL_CODE_BOUND",
+      resource: cleanCode,
+      details: `User ${referee.email} bound referral code ${cleanCode} (referrer: ${referrer.email})`,
+      createdAt: Date.now()
+    });
+    db.saveToDisk();
+    return relation;
+  }
+  /**
+   * Computes a user's REAL trading volume & fees from db.trades and db.futuresOrders.
+   */
+  computeUserTradingActivity(userId, usdtIdrRate) {
+    const cutoff30d = Date.now() - THIRTY_DAYS_MS;
+    let spotVolume30dUsdt = 0;
+    let spotVolumeAllTimeUsdt = 0;
+    let spotFees30dUsdt = 0;
+    let spotFeesAllTimeUsdt = 0;
+    let spotTradeCount30d = 0;
+    let spotTradeCountAllTime = 0;
+    for (const trade of db.trades) {
+      const isMaker = trade.makerUserId === userId;
+      const isTaker = trade.takerUserId === userId;
+      if (!isMaker && !isTaker) continue;
+      const pair = db.tradingPairs.get(trade.pairId);
+      const quoteCurrency = pair?.quoteCurrency || (trade.pairId.endsWith("-USDT") ? "USDT" : "IDR");
+      const quoteDecimals = pair?.quoteDecimals ?? (quoteCurrency === "USDT" ? 6 : 2);
+      const quoteAmt = safeUnitsToNumber(trade.quoteVolume, quoteDecimals);
+      const volUsdt = convertCurrencyToUsdt(quoteAmt, quoteCurrency, usdtIdrRate);
+      let feeQuoteAmt = 0;
+      if (isMaker) feeQuoteAmt += safeUnitsToNumber(trade.makerFee, quoteDecimals);
+      if (isTaker) feeQuoteAmt += safeUnitsToNumber(trade.takerFee, quoteDecimals);
+      const feeUsdt = convertCurrencyToUsdt(feeQuoteAmt, quoteCurrency, usdtIdrRate);
+      spotVolumeAllTimeUsdt += volUsdt;
+      spotFeesAllTimeUsdt += feeUsdt;
+      spotTradeCountAllTime += 1;
+      if (trade.createdAt >= cutoff30d) {
+        spotVolume30dUsdt += volUsdt;
+        spotFees30dUsdt += feeUsdt;
+        spotTradeCount30d += 1;
+      }
+    }
+    let futuresVolume30dUsdt = 0;
+    let futuresVolumeAllTimeUsdt = 0;
+    let futuresFees30dUsdt = 0;
+    let futuresFeesAllTimeUsdt = 0;
+    let futuresOrderCount30d = 0;
+    let futuresOrderCountAllTime = 0;
+    for (const order of db.futuresOrders.values()) {
+      if (order.userId !== userId || order.status !== "FILLED") continue;
+      const qty = safeUnitsToNumber(order.quantityUnits, order.baseDecimals ?? 8);
+      const px = safeUnitsToNumber(order.limitPriceUnits, order.quoteDecimals ?? 6);
+      const notionalQuote = qty * px;
+      const volUsdt = convertCurrencyToUsdt(notionalQuote, order.quoteCurrency || "USDT", usdtIdrRate);
+      const feeQuote = safeUnitsToNumber(order.feeReservedUnits, order.quoteDecimals ?? 6);
+      const feeUsdt = convertCurrencyToUsdt(feeQuote, order.quoteCurrency || "USDT", usdtIdrRate);
+      futuresVolumeAllTimeUsdt += volUsdt;
+      futuresFeesAllTimeUsdt += feeUsdt;
+      futuresOrderCountAllTime += 1;
+      const ts = order.filledAt || order.createdAt;
+      if (ts >= cutoff30d) {
+        futuresVolume30dUsdt += volUsdt;
+        futuresFees30dUsdt += feeUsdt;
+        futuresOrderCount30d += 1;
+      }
+    }
+    return {
+      spotVolume30dUsdt,
+      spotVolumeAllTimeUsdt,
+      spotFees30dUsdt,
+      spotFeesAllTimeUsdt,
+      spotTradeCount30d,
+      spotTradeCountAllTime,
+      futuresVolume30dUsdt,
+      futuresVolumeAllTimeUsdt,
+      futuresFees30dUsdt,
+      futuresFeesAllTimeUsdt,
+      futuresOrderCount30d,
+      futuresOrderCountAllTime,
+      totalVolume30dUsdt: spotVolume30dUsdt + futuresVolume30dUsdt,
+      totalVolumeAllTimeUsdt: spotVolumeAllTimeUsdt + futuresVolumeAllTimeUsdt,
+      totalFees30dUsdt: spotFees30dUsdt + futuresFees30dUsdt,
+      totalFeesAllTimeUsdt: spotFeesAllTimeUsdt + futuresFeesAllTimeUsdt,
+      totalTrades30d: spotTradeCount30d + futuresOrderCount30d
+    };
+  }
+  /**
+   * Computes a user's REAL total completed deposits (in USDT equivalent).
+   */
+  computeUserDepositsUsdt(userId, usdtIdrRate) {
+    let totalUsdt = 0;
+    for (const tx of db.fiatTransactions.values()) {
+      if (tx.userId === userId && tx.type === "DEPOSIT" && (tx.status === "COMPLETED" || tx.status === "APPROVED")) {
+        const idrAmt = safeUnitsToNumber(tx.amount, 2);
+        totalUsdt += convertCurrencyToUsdt(idrAmt, "IDR", usdtIdrRate);
+      }
+    }
+    for (const tx of db.cryptoTransactions.values()) {
+      if (tx.userId === userId && tx.type === "DEPOSIT" && (tx.status === "COMPLETED" || tx.status === "APPROVED")) {
+        const dec = getCurrencyDecimals(tx.currency);
+        const amt = safeUnitsToNumber(tx.amount, dec);
+        totalUsdt += convertCurrencyToUsdt(amt, tx.currency, usdtIdrRate);
+      }
+    }
+    if (totalUsdt === 0) {
+      const userAccountIds = new Set(db.getUserAccounts(userId).map((a) => a.id));
+      for (const journal of db.journalTransactions.values()) {
+        if (journal.txType !== "DEPOSIT") continue;
+        const creditEntries = db.ledgerEntries.filter(
+          (e) => e.journalId === journal.id && e.entryType === "CREDIT" && userAccountIds.has(e.accountId)
+        );
+        for (const entry of creditEntries) {
+          const acc = db.ledgerAccounts.get(entry.accountId);
+          if (!acc) continue;
+          const dec = getCurrencyDecimals(acc.currency);
+          const amt = safeUnitsToNumber(entry.amount, dec);
+          totalUsdt += convertCurrencyToUsdt(amt, acc.currency, usdtIdrRate);
+        }
+      }
+    }
+    return totalUsdt;
+  }
+  /**
+   * Computes a user's REAL total portfolio equity (USDT & IDR) from live ledger accounts.
+   */
+  computeUserPortfolioUsdt(userId, usdtIdrRate) {
+    const accounts = db.getUserAccounts(userId);
+    let totalUsdt = 0;
+    for (const acc of accounts) {
+      const totalUnits = BigInt(acc.balanceAvailable) + BigInt(acc.balanceLocked);
+      if (totalUnits <= 0n) continue;
+      const dec = getCurrencyDecimals(acc.currency);
+      const amt = safeUnitsToNumber(totalUnits.toString(), dec);
+      totalUsdt += convertCurrencyToUsdt(amt, acc.currency, usdtIdrRate);
+    }
+    return totalUsdt;
+  }
+  /**
+   * Resolves the authoritative VIP tier for a given 30-day rolling USDT volume.
+   */
+  resolveVipTier(volume30dUsdt) {
+    let currentTier = VIP_TIER_SCHEDULE[0];
+    for (const tier of VIP_TIER_SCHEDULE) {
+      if (volume30dUsdt >= tier.minVolume30dUsdt) {
+        currentTier = tier;
+      }
+    }
+    const nextTier = VIP_TIER_SCHEDULE.find((t) => t.level === currentTier.level + 1) || null;
+    if (!nextTier) {
+      return {
+        currentTier,
+        nextTier: null,
+        progressPct: 100,
+        remainingVolumeUsdt: 0
+      };
+    }
+    const floor = currentTier.minVolume30dUsdt;
+    const span = Math.max(1, nextTier.minVolume30dUsdt - floor);
+    const rawPct = (volume30dUsdt - floor) / span * 100;
+    const progressPct = Math.max(0, Math.min(100, Number(rawPct.toFixed(2))));
+    const remainingVolumeUsdt = Math.max(0, nextTier.minVolume30dUsdt - volume30dUsdt);
+    return { currentTier, nextTier, progressPct, remainingVolumeUsdt };
+  }
+  /**
+   * Evaluates all active dynamic tasks in db.rewardTasks against real live DB state.
+   */
+  evaluateUserTasks(userId, usdtIdrRate) {
+    const user = db.users.get(userId);
+    if (!user) throw new Error("User not found");
+    const activeTasks = this.getActiveTaskConfigs();
+    const kyc = db.kyc.get(userId);
+    const activity = this.computeUserTradingActivity(userId, usdtIdrRate);
+    const depositsUsdt = this.computeUserDepositsUsdt(userId, usdtIdrRate);
+    return activeTasks.map((cfg) => {
+      const def = taskConfigToDefinition(cfg);
+      const claimKey = `${userId}:${cfg.id}`;
+      const existingClaim = db.rewardClaims.get(claimKey);
+      let completed = false;
+      let progressPct = 0;
+      let progressLabel = "";
+      const target = Math.max(1, Number(cfg.targetValue || 1));
+      switch (cfg.ruleType) {
+        case "ENABLE_2FA": {
+          completed = Boolean(user.isTotpEnabled);
+          progressPct = completed ? 100 : 0;
+          progressLabel = completed ? "2FA Enabled" : "2FA Not Configured";
+          break;
+        }
+        case "DEPOSIT_USDT": {
+          completed = depositsUsdt >= target;
+          progressPct = Math.min(100, Number((depositsUsdt / target * 100).toFixed(1)));
+          progressLabel = `$${depositsUsdt.toFixed(2)} / $${target.toLocaleString("en-US")} deposited`;
+          break;
+        }
+        case "SPOT_TRADES_COUNT": {
+          const countTarget = Math.max(1, Math.round(target));
+          completed = activity.spotTradeCountAllTime >= countTarget;
+          progressPct = Math.min(100, Number((activity.spotTradeCountAllTime / countTarget * 100).toFixed(1)));
+          progressLabel = `${activity.spotTradeCountAllTime} / ${countTarget} spot ${countTarget === 1 ? "trade" : "trades"}`;
+          break;
+        }
+        case "SPOT_VOLUME_USDT": {
+          completed = activity.spotVolumeAllTimeUsdt >= target;
+          progressPct = Math.min(100, Number((activity.spotVolumeAllTimeUsdt / target * 100).toFixed(1)));
+          progressLabel = `$${activity.spotVolumeAllTimeUsdt.toFixed(2)} / $${target.toLocaleString("en-US")} spot vol`;
+          break;
+        }
+        case "FUTURES_VOLUME_USDT": {
+          completed = activity.futuresVolumeAllTimeUsdt >= target;
+          progressPct = Math.min(100, Number((activity.futuresVolumeAllTimeUsdt / target * 100).toFixed(1)));
+          progressLabel = `$${activity.futuresVolumeAllTimeUsdt.toFixed(2)} / $${target.toLocaleString("en-US")} futures`;
+          break;
+        }
+        case "KYC_APPROVED": {
+          completed = Boolean(kyc && kyc.status === "approved");
+          progressPct = completed ? 100 : kyc?.status === "pending" ? 50 : 0;
+          progressLabel = completed ? `Approved (Tier ${kyc?.tierLevel || 2})` : kyc?.status === "pending" ? "Verification Pending Review" : "Not Verified";
+          break;
+        }
+        case "COMBINED_VOLUME_30D_USDT": {
+          completed = activity.totalVolume30dUsdt >= target;
+          progressPct = Math.min(100, Number((activity.totalVolume30dUsdt / target * 100).toFixed(1)));
+          progressLabel = `$${activity.totalVolume30dUsdt.toFixed(2)} / $${target.toLocaleString("en-US")} (30d)`;
+          break;
+        }
+      }
+      return {
+        ...def,
+        completed,
+        progressPct,
+        progressLabel,
+        claimed: Boolean(existingClaim),
+        claimedAt: existingClaim?.claimedAt || null,
+        journalId: existingClaim?.journalId || null,
+        status: existingClaim ? "CLAIMED" : completed ? "READY" : "IN_PROGRESS"
+      };
+    });
+  }
+  /**
+   * Lists active platform vouchers with user-specific redemption and VIP eligibility status.
+   */
+  listUserVouchers(userId, currentVipLevel) {
+    const now = Date.now();
+    const items = Array.from(db.rewardVouchers.values()).filter((v) => {
+      const redeemedByUser = db.voucherRedemptions.has(`${userId}:${v.id}`);
+      if (redeemedByUser) return true;
+      if (!v.isActive) return false;
+      if (v.expiresAt && v.expiresAt <= now) return false;
+      return true;
+    }).sort((a, b) => b.createdAt - a.createdAt).map((v) => {
+      const redemption = db.voucherRedemptions.get(`${userId}:${v.id}`);
+      const isExpired = Boolean(v.expiresAt && v.expiresAt <= now);
+      const isExhausted = v.redeemedCount >= v.maxRedemptions;
+      const remainingSlots = Math.max(0, v.maxRedemptions - v.redeemedCount);
+      const eligibleByVip = currentVipLevel >= v.minVipLevel;
+      const canRedeem = Boolean(
+        v.isActive && !isExpired && !isExhausted && !redemption && eligibleByVip
+      );
+      return {
+        id: v.id,
+        code: v.code,
+        title: v.title,
+        description: v.description,
+        voucherType: v.voucherType,
+        rewardCurrency: v.rewardCurrency,
+        rewardAmountUsdt: v.rewardAmountUsdt,
+        rewardDisplay: formatUsdtLabel(v.rewardAmountUsdt),
+        minVipLevel: v.minVipLevel,
+        maxRedemptions: v.maxRedemptions,
+        redeemedCount: v.redeemedCount,
+        remainingSlots,
+        expiresAt: v.expiresAt || null,
+        isExpired,
+        isExhausted,
+        eligibleByVip,
+        redeemed: Boolean(redemption),
+        redeemedAt: redemption?.redeemedAt || null,
+        journalId: redemption?.journalId || null,
+        canRedeem
+      };
+    });
+    const userRedemptions = Array.from(db.voucherRedemptions.values()).filter((r) => r.userId === userId);
+    const totalRedeemedUsdt = userRedemptions.reduce(
+      (sum, r) => sum + safeUnitsToNumber(r.amountUnits, 6),
+      0
+    );
+    return {
+      items,
+      availableCount: items.filter((i) => i.canRedeem).length,
+      redeemedCount: userRedemptions.length,
+      totalRedeemedUsdt: Number(totalRedeemedUsdt.toFixed(2))
+    };
+  }
+  /**
+   * Computes real referral stats, per-referee breakdown, and claimable USDT commissions.
+   */
+  computeReferralSummary(userId, rebateRatePct, usdtIdrRate) {
+    const referralCode = this.ensureUserReferralCode(userId);
+    const user = db.users.get(userId);
+    let referredBy = null;
+    const ownRel = db.referralRelations.get(userId);
+    if (ownRel) {
+      const refUser = db.users.get(ownRel.referrerUserId);
+      referredBy = {
+        code: ownRel.referralCodeUsed,
+        emailMasked: refUser ? maskEmail(refUser.email) : "Verified Partner",
+        boundAt: ownRel.createdAt
+      };
+    } else if (user?.referredByUserId) {
+      const refUser = db.users.get(user.referredByUserId);
+      referredBy = {
+        code: refUser?.referralCode || "DMX-PARTNER",
+        emailMasked: refUser ? maskEmail(refUser.email) : "Verified Partner",
+        boundAt: user.createdAt
+      };
+    }
+    const referees = [];
+    let totalCommissionEarnedUsdt = 0;
+    let totalRefereeVolumeUsdt = 0;
+    for (const rel of db.referralRelations.values()) {
+      if (rel.referrerUserId !== userId) continue;
+      const refereeUser = db.users.get(rel.refereeUserId);
+      if (!refereeUser) continue;
+      const refActivity = this.computeUserTradingActivity(refereeUser.id, usdtIdrRate);
+      const commissionUsdt = Number((refActivity.totalFeesAllTimeUsdt * rebateRatePct / 100).toFixed(6));
+      totalCommissionEarnedUsdt += commissionUsdt;
+      totalRefereeVolumeUsdt += refActivity.totalVolumeAllTimeUsdt;
+      referees.push({
+        userId: refereeUser.id,
+        emailMasked: maskEmail(refereeUser.email),
+        joinedAt: rel.createdAt,
+        volume30dUsdt: Number(refActivity.totalVolume30dUsdt.toFixed(2)),
+        volumeAllTimeUsdt: Number(refActivity.totalVolumeAllTimeUsdt.toFixed(2)),
+        feesGeneratedUsdt: Number(refActivity.totalFeesAllTimeUsdt.toFixed(4)),
+        commissionEarnedUsdt: Number(commissionUsdt.toFixed(4)),
+        isActiveTrader: refActivity.totalTrades30d > 0
+      });
+    }
+    referees.sort((a, b) => b.joinedAt - a.joinedAt);
+    let totalCommissionClaimedUsdt = 0;
+    for (const payout of db.referralPayouts.values()) {
+      if (payout.userId === userId) {
+        totalCommissionClaimedUsdt += safeUnitsToNumber(payout.amountUnits, 6);
+      }
+    }
+    const claimableCommissionUsdt = Math.max(
+      0,
+      Number((totalCommissionEarnedUsdt - totalCommissionClaimedUsdt).toFixed(6))
+    );
+    return {
+      referralCode,
+      referredBy,
+      rebateRatePct,
+      totalReferees: referees.length,
+      activeReferees: referees.filter((r) => r.isActiveTrader).length,
+      totalRefereeVolumeUsdt: Number(totalRefereeVolumeUsdt.toFixed(2)),
+      totalCommissionEarnedUsdt: Number(totalCommissionEarnedUsdt.toFixed(4)),
+      totalCommissionClaimedUsdt: Number(totalCommissionClaimedUsdt.toFixed(4)),
+      claimableCommissionUsdt: Number(claimableCommissionUsdt.toFixed(4)),
+      minClaimThresholdUsdt: MIN_REFERRAL_CLAIM_USDT,
+      referees
+    };
+  }
+  /**
+   * Builds unified settled rewards history rows across tasks, vouchers, and referral commissions.
+   */
+  buildUnifiedHistoryRecords(filterUserId) {
+    const records = [];
+    for (const claim of db.rewardClaims.values()) {
+      if (filterUserId && claim.userId !== filterUserId) continue;
+      const u = db.users.get(claim.userId);
+      records.push({
+        id: claim.id,
+        userId: claim.userId,
+        userEmail: u?.email,
+        type: "TASK_REWARD",
+        title: claim.taskTitle,
+        code: claim.taskId,
+        currency: claim.currency,
+        amountUsdt: Number(safeUnitsToNumber(claim.amountUnits, 6).toFixed(4)),
+        amountDisplay: claim.amountDisplay,
+        status: claim.status || "SETTLED",
+        journalId: claim.journalId,
+        claimedAt: claim.claimedAt
+      });
+    }
+    for (const red of db.voucherRedemptions.values()) {
+      if (filterUserId && red.userId !== filterUserId) continue;
+      const u = db.users.get(red.userId);
+      records.push({
+        id: red.id,
+        userId: red.userId,
+        userEmail: u?.email,
+        type: "VOUCHER_REDEMPTION",
+        title: red.voucherTitle,
+        code: red.voucherCode,
+        currency: red.currency,
+        amountUsdt: Number(safeUnitsToNumber(red.amountUnits, 6).toFixed(4)),
+        amountDisplay: red.amountDisplay,
+        status: red.status || "SETTLED",
+        journalId: red.journalId,
+        claimedAt: red.redeemedAt
+      });
+    }
+    for (const payout of db.referralPayouts.values()) {
+      if (filterUserId && payout.userId !== filterUserId) continue;
+      const u = db.users.get(payout.userId);
+      records.push({
+        id: payout.id,
+        userId: payout.userId,
+        userEmail: u?.email,
+        type: "REFERRAL_COMMISSION",
+        title: `Referral Fee Rebate (${payout.rebateRatePct}% \xB7 ${payout.refereeCount} referees)`,
+        code: null,
+        currency: payout.currency,
+        amountUsdt: Number(safeUnitsToNumber(payout.amountUnits, 6).toFixed(4)),
+        amountDisplay: payout.amountDisplay,
+        status: payout.status || "SETTLED",
+        journalId: payout.journalId,
+        claimedAt: payout.claimedAt
+      });
+    }
+    records.sort((a, b) => b.claimedAt - a.claimedAt);
+    return records;
+  }
+  /**
+   * Dedicated per-user Rewards History query with type filtering and server pagination.
+   */
+  getUserRewardsHistory(userId, options) {
+    const user = db.users.get(userId);
+    if (!user) throw new Error("User account not found");
+    const allUserRecords = this.buildUnifiedHistoryRecords(userId);
+    const typeFilter = String(options?.type || "ALL").toUpperCase();
+    const filtered = typeFilter === "ALL" ? allUserRecords : allUserRecords.filter((r) => r.type === typeFilter);
+    const limit = Math.max(1, Math.min(100, Number(options?.limit) || 15));
+    const totalFiltered = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(totalFiltered / limit));
+    const page = Math.max(1, Math.min(totalPages, Number(options?.page) || 1));
+    const offset = (page - 1) * limit;
+    const items = filtered.slice(offset, offset + limit).map(({ userEmail: _ignored, ...rest }) => rest);
+    const totalSettledUsdt = allUserRecords.reduce((sum, r) => sum + r.amountUsdt, 0);
+    const taskCount = allUserRecords.filter((r) => r.type === "TASK_REWARD").length;
+    const voucherCount = allUserRecords.filter((r) => r.type === "VOUCHER_REDEMPTION").length;
+    const referralCount = allUserRecords.filter((r) => r.type === "REFERRAL_COMMISSION").length;
+    return {
+      items,
+      summary: {
+        totalCount: allUserRecords.length,
+        totalSettledUsdt: Number(totalSettledUsdt.toFixed(4)),
+        taskCount,
+        voucherCount,
+        referralCount
+      },
+      pagination: {
+        page,
+        limit,
+        total: totalFiltered,
+        totalPages
+      }
+    };
+  }
+  /**
+   * Returns the complete authoritative VIP, Task Center, Vouchers, Referral & Payout History payload.
+   */
+  getUserSummary(userId) {
+    const user = db.users.get(userId);
+    if (!user) throw new Error("User account not found");
+    const usdtIdrRate = getLiveUsdtIdrRate();
+    const activity = this.computeUserTradingActivity(userId, usdtIdrRate);
+    const portfolioUsdt = this.computeUserPortfolioUsdt(userId, usdtIdrRate);
+    const { currentTier, nextTier, progressPct, remainingVolumeUsdt } = this.resolveVipTier(
+      activity.totalVolume30dUsdt
+    );
+    const tasks = this.evaluateUserTasks(userId, usdtIdrRate);
+    const vouchers = this.listUserVouchers(userId, currentTier.level);
+    const referral = this.computeReferralSummary(userId, currentTier.referralRebatePct, usdtIdrRate);
+    const kyc = db.kyc.get(userId);
+    const payoutHistory = this.buildUnifiedHistoryRecords(userId).map(
+      ({ userEmail: _ignored, ...rest }) => rest
+    );
+    const totalTaskRewardsClaimedUsdt = Array.from(db.rewardClaims.values()).filter((c) => c.userId === userId).reduce((sum, c) => sum + safeUnitsToNumber(c.amountUnits, 6), 0);
+    const totalTasksReady = tasks.filter((t) => t.status === "READY").length;
+    return {
+      usdtIdrRate,
+      account: {
+        userId: user.id,
+        email: user.email,
+        status: user.status,
+        kycStatus: kyc?.status || "unverified",
+        kycTier: kyc?.tierLevel || 0,
+        isTotpEnabled: Boolean(user.isTotpEnabled),
+        portfolioEquityUsdt: Number(portfolioUsdt.toFixed(2)),
+        portfolioEquityIdr: Math.round(portfolioUsdt * usdtIdrRate)
+      },
+      vip: {
+        currentTier,
+        nextTier,
+        progressPct,
+        remainingVolumeUsdt: Number(remainingVolumeUsdt.toFixed(2)),
+        volume30dUsdt: Number(activity.totalVolume30dUsdt.toFixed(2)),
+        volume30dIdr: Math.round(activity.totalVolume30dUsdt * usdtIdrRate),
+        spotVolume30dUsdt: Number(activity.spotVolume30dUsdt.toFixed(2)),
+        futuresVolume30dUsdt: Number(activity.futuresVolume30dUsdt.toFixed(2)),
+        feesPaid30dUsdt: Number(activity.totalFees30dUsdt.toFixed(4)),
+        tradesCount30d: activity.totalTrades30d,
+        schedule: VIP_TIER_SCHEDULE
+      },
+      tasks: {
+        items: tasks,
+        readyCount: totalTasksReady,
+        claimedCount: tasks.filter((t) => t.claimed).length,
+        totalClaimedUsdt: Number(totalTaskRewardsClaimedUsdt.toFixed(2))
+      },
+      vouchers,
+      referral,
+      payoutHistory
+    };
+  }
+  /**
+   * Atomically claims an eligible milestone task reward into the user's real USDT ledger account.
+   */
+  claimTaskReward(userId, taskId) {
+    this.ensureDefaultRewardTasks();
+    const taskCfg = db.rewardTasks.get(taskId);
+    if (!taskCfg) {
+      throw new Error(`Unknown reward task: ${taskId}`);
+    }
+    if (!taskCfg.isActive) {
+      throw new Error("This reward task is currently paused and cannot be claimed.");
+    }
+    const claimKey = `${userId}:${taskId}`;
+    const existing = db.rewardClaims.get(claimKey);
+    if (existing) {
+      throw new Error("This reward task has already been claimed.");
+    }
+    const usdtIdrRate = getLiveUsdtIdrRate();
+    const evaluated = this.evaluateUserTasks(userId, usdtIdrRate).find((t) => t.id === taskId);
+    if (!evaluated || !evaluated.completed) {
+      throw new Error(`Task requirements not met yet (${evaluated?.progressLabel || "Incomplete"}).`);
+    }
+    const amountUnits = PrecisionMath.parseToUnits(taskCfg.rewardAmountUsdt.toFixed(6), 6);
+    const idempotencyKey = `reward-claim:${userId}:${taskId}`;
+    const treasuryAcc = db.createOrGetAccount(SYSTEM_TREASURY_ID, "USDT");
+    const userAcc = db.createOrGetAccount(userId, "USDT");
+    const { journal } = LedgerService.executeJournal({
+      idempotencyKey,
+      txType: "REWARD_PAYOUT",
+      referenceId: claimKey,
+      description: `DIMONEX Trader Reward Claim: ${taskCfg.title} (${formatUsdtLabel(taskCfg.rewardAmountUsdt)})`,
+      entries: [
+        { accountId: treasuryAcc.id, entryType: "DEBIT", amount: amountUnits },
+        { accountId: userAcc.id, entryType: "CREDIT", amount: amountUnits }
+      ]
+    });
+    const record = {
+      id: crypto3.randomUUID(),
+      userId,
+      taskId,
+      taskTitle: taskCfg.title,
+      currency: "USDT",
+      amountUnits: amountUnits.toString(),
+      amountDisplay: `+${taskCfg.rewardAmountUsdt.toFixed(2)} USDT`,
+      status: "SETTLED",
+      journalId: journal.id,
+      idempotencyKey,
+      claimedAt: Date.now()
+    };
+    db.rewardClaims.set(claimKey, record);
+    db.auditLogs.push({
+      id: crypto3.randomUUID(),
+      actorId: userId,
+      action: "REWARD_TASK_CLAIMED",
+      resource: taskId,
+      details: `Credited ${record.amountDisplay} to Spot Wallet (Journal ${journal.id})`,
+      createdAt: Date.now()
+    });
+    db.saveToDisk();
+    return record;
+  }
+  /**
+   * Atomically redeems a platform voucher code into the user's real USDT ledger account.
+   */
+  redeemVoucher(userId, rawCode) {
+    const user = db.users.get(userId);
+    if (!user) throw new Error("User account not found");
+    if (user.status !== "active") {
+      throw new Error("Account is not eligible to redeem vouchers.");
+    }
+    const normalized = String(rawCode || "").trim().toUpperCase();
+    if (!/^[A-Z0-9_-]{3,32}$/.test(normalized)) {
+      throw new Error("Invalid voucher code format. Use 3\u201332 alphanumeric characters.");
+    }
+    let voucher;
+    for (const v of db.rewardVouchers.values()) {
+      if (v.code.toUpperCase() === normalized) {
+        voucher = v;
+        break;
+      }
+    }
+    if (!voucher) {
+      throw new Error(`Voucher code "${normalized}" was not found.`);
+    }
+    if (!voucher.isActive) {
+      throw new Error(`Voucher "${voucher.code}" is currently inactive or revoked.`);
+    }
+    if (voucher.expiresAt && voucher.expiresAt <= Date.now()) {
+      throw new Error(`Voucher "${voucher.code}" has expired.`);
+    }
+    if (voucher.redeemedCount >= voucher.maxRedemptions) {
+      throw new Error(`Voucher "${voucher.code}" has reached its maximum redemption limit.`);
+    }
+    const redemptionKey = `${userId}:${voucher.id}`;
+    if (db.voucherRedemptions.has(redemptionKey)) {
+      throw new Error(`You have already redeemed voucher "${voucher.code}".`);
+    }
+    const usdtIdrRate = getLiveUsdtIdrRate();
+    const activity = this.computeUserTradingActivity(userId, usdtIdrRate);
+    const { currentTier } = this.resolveVipTier(activity.totalVolume30dUsdt);
+    if (currentTier.level < voucher.minVipLevel) {
+      const reqTier = VIP_TIER_SCHEDULE.find((t) => t.level === voucher.minVipLevel);
+      throw new Error(
+        `Voucher "${voucher.code}" requires ${reqTier?.name || `VIP ${voucher.minVipLevel}`} or higher (your current tier: ${currentTier.name}).`
+      );
+    }
+    const amountUnits = PrecisionMath.parseToUnits(voucher.rewardAmountUsdt.toFixed(6), 6);
+    if (amountUnits <= 0n) {
+      throw new Error("Voucher reward amount must be positive.");
+    }
+    const idempotencyKey = `voucher-redeem:${userId}:${voucher.id}`;
+    const treasuryAcc = db.createOrGetAccount(SYSTEM_TREASURY_ID, "USDT");
+    const userAcc = db.createOrGetAccount(userId, "USDT");
+    const { journal } = LedgerService.executeJournal({
+      idempotencyKey,
+      txType: "VOUCHER_REDEMPTION",
+      referenceId: redemptionKey,
+      description: `DIMONEX Voucher Redemption: ${voucher.code} \u2014 ${voucher.title}`,
+      entries: [
+        { accountId: treasuryAcc.id, entryType: "DEBIT", amount: amountUnits },
+        { accountId: userAcc.id, entryType: "CREDIT", amount: amountUnits }
+      ]
+    });
+    const record = {
+      id: crypto3.randomUUID(),
+      voucherId: voucher.id,
+      voucherCode: voucher.code,
+      voucherTitle: voucher.title,
+      voucherType: voucher.voucherType,
+      userId,
+      currency: "USDT",
+      amountUnits: amountUnits.toString(),
+      amountDisplay: `+${voucher.rewardAmountUsdt.toFixed(2)} USDT`,
+      status: "SETTLED",
+      journalId: journal.id,
+      idempotencyKey,
+      redeemedAt: Date.now()
+    };
+    voucher.redeemedCount += 1;
+    voucher.updatedAt = Date.now();
+    db.voucherRedemptions.set(redemptionKey, record);
+    db.auditLogs.push({
+      id: crypto3.randomUUID(),
+      actorId: userId,
+      action: "VOUCHER_REDEEMED",
+      resource: voucher.code,
+      details: `User ${user.email} redeemed voucher ${voucher.code} for ${record.amountDisplay} (Journal ${journal.id})`,
+      createdAt: Date.now()
+    });
+    db.saveToDisk();
+    return record;
+  }
+  /**
+   * Atomically claims accrued real referral commissions into the user's real USDT ledger account.
+   */
+  claimReferralCommission(userId) {
+    const usdtIdrRate = getLiveUsdtIdrRate();
+    const activity = this.computeUserTradingActivity(userId, usdtIdrRate);
+    const { currentTier } = this.resolveVipTier(activity.totalVolume30dUsdt);
+    const referral = this.computeReferralSummary(userId, currentTier.referralRebatePct, usdtIdrRate);
+    if (referral.claimableCommissionUsdt < MIN_REFERRAL_CLAIM_USDT) {
+      throw new Error(
+        `Minimum claimable referral commission is ${MIN_REFERRAL_CLAIM_USDT.toFixed(2)} USDT (current: ${referral.claimableCommissionUsdt.toFixed(4)} USDT).`
+      );
+    }
+    const payoutAmountStr = referral.claimableCommissionUsdt.toFixed(6);
+    const amountUnits = PrecisionMath.parseToUnits(payoutAmountStr, 6);
+    if (amountUnits <= 0n) {
+      throw new Error("No claimable referral commission available.");
+    }
+    const payoutId = crypto3.randomUUID();
+    const idempotencyKey = `referral-payout:${userId}:${payoutId}`;
+    const treasuryAcc = db.createOrGetAccount(SYSTEM_TREASURY_ID, "USDT");
+    const userAcc = db.createOrGetAccount(userId, "USDT");
+    const { journal } = LedgerService.executeJournal({
+      idempotencyKey,
+      txType: "REFERRAL_REBATE",
+      referenceId: payoutId,
+      description: `DIMONEX Referral Commission Payout (${currentTier.referralRebatePct}% rebate)`,
+      entries: [
+        { accountId: treasuryAcc.id, entryType: "DEBIT", amount: amountUnits },
+        { accountId: userAcc.id, entryType: "CREDIT", amount: amountUnits }
+      ]
+    });
+    const record = {
+      id: payoutId,
+      userId,
+      currency: "USDT",
+      amountUnits: amountUnits.toString(),
+      amountDisplay: `+${referral.claimableCommissionUsdt.toFixed(4)} USDT`,
+      status: "SETTLED",
+      rebateRatePct: currentTier.referralRebatePct,
+      refereeCount: referral.totalReferees,
+      journalId: journal.id,
+      idempotencyKey,
+      claimedAt: Date.now()
+    };
+    db.referralPayouts.set(record.id, record);
+    db.auditLogs.push({
+      id: crypto3.randomUUID(),
+      actorId: userId,
+      action: "REFERRAL_COMMISSION_CLAIMED",
+      resource: record.id,
+      details: `Credited ${record.amountDisplay} referral commission (Journal ${journal.id})`,
+      createdAt: Date.now()
+    });
+    db.saveToDisk();
+    return record;
+  }
+  getPublicSchedule() {
+    const activeTasks = this.getActiveTaskConfigs().map(taskConfigToDefinition);
+    return {
+      usdtIdrRate: getLiveUsdtIdrRate(),
+      vipTiers: VIP_TIER_SCHEDULE,
+      taskCatalog: activeTasks,
+      minReferralClaimUsdt: MIN_REFERRAL_CLAIM_USDT
+    };
+  }
+  // ==========================================================================
+  // ADMIN CONSOLE MANAGEMENT — TASK CENTER, VOUCHERS & GLOBAL PAYOUT LEDGER
+  // ==========================================================================
+  getAdminRewardsOverview() {
+    this.ensureDefaultRewardTasks();
+    const now = Date.now();
+    const allTasks = Array.from(db.rewardTasks.values());
+    const allVouchers = Array.from(db.rewardVouchers.values());
+    const allHistory = this.buildUnifiedHistoryRecords();
+    let taskDistributedUsdt = 0;
+    let voucherDistributedUsdt = 0;
+    let referralDistributedUsdt = 0;
+    for (const item of allHistory) {
+      if (item.type === "TASK_REWARD") taskDistributedUsdt += item.amountUsdt;
+      else if (item.type === "VOUCHER_REDEMPTION") voucherDistributedUsdt += item.amountUsdt;
+      else if (item.type === "REFERRAL_COMMISSION") referralDistributedUsdt += item.amountUsdt;
+    }
+    return {
+      tasks: {
+        total: allTasks.length,
+        active: allTasks.filter((t) => t.isActive).length,
+        paused: allTasks.filter((t) => !t.isActive).length,
+        totalClaims: db.rewardClaims.size,
+        totalDistributedUsdt: Number(taskDistributedUsdt.toFixed(4))
+      },
+      vouchers: {
+        total: allVouchers.length,
+        active: allVouchers.filter(
+          (v) => v.isActive && (!v.expiresAt || v.expiresAt > now) && v.redeemedCount < v.maxRedemptions
+        ).length,
+        totalRedemptions: db.voucherRedemptions.size,
+        totalDistributedUsdt: Number(voucherDistributedUsdt.toFixed(4))
+      },
+      referrals: {
+        totalRelations: db.referralRelations.size,
+        totalPayouts: db.referralPayouts.size,
+        totalDistributedUsdt: Number(referralDistributedUsdt.toFixed(4))
+      },
+      totals: {
+        totalSettlements: allHistory.length,
+        totalDistributedUsdt: Number(
+          (taskDistributedUsdt + voucherDistributedUsdt + referralDistributedUsdt).toFixed(4)
+        )
+      }
+    };
+  }
+  listAdminTasks() {
+    this.ensureDefaultRewardTasks();
+    const claimsByTask = /* @__PURE__ */ new Map();
+    for (const claim of db.rewardClaims.values()) {
+      const prev = claimsByTask.get(claim.taskId) || { count: 0, totalUsdt: 0 };
+      prev.count += 1;
+      prev.totalUsdt += safeUnitsToNumber(claim.amountUnits, 6);
+      claimsByTask.set(claim.taskId, prev);
+    }
+    return Array.from(db.rewardTasks.values()).sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt - b.createdAt).map((t) => {
+      const stats = claimsByTask.get(t.id) || { count: 0, totalUsdt: 0 };
+      return {
+        ...t,
+        rewardDisplay: formatUsdtLabel(t.rewardAmountUsdt),
+        claimCount: stats.count,
+        totalDistributedUsdt: Number(stats.totalUsdt.toFixed(2))
+      };
+    });
+  }
+  createAdminTask(input, actorId) {
+    this.ensureDefaultRewardTasks();
+    const title = String(input.title || "").trim();
+    const description = String(input.description || "").trim();
+    if (title.length < 3 || title.length > 100) {
+      throw new Error("Task title must be between 3 and 100 characters.");
+    }
+    if (description.length < 5 || description.length > 300) {
+      throw new Error("Task description must be between 5 and 300 characters.");
+    }
+    if (!VALID_TASK_CATEGORIES.includes(input.category)) {
+      throw new Error(`Invalid task category: ${input.category}`);
+    }
+    if (!VALID_TASK_RULE_TYPES.includes(input.ruleType)) {
+      throw new Error(`Invalid task rule type: ${input.ruleType}`);
+    }
+    if (!VALID_TASK_ACTION_VIEWS.includes(input.actionView)) {
+      throw new Error(`Invalid action view: ${input.actionView}`);
+    }
+    const rewardAmountUsdt = Number(input.rewardAmountUsdt);
+    if (!Number.isFinite(rewardAmountUsdt) || rewardAmountUsdt <= 0 || rewardAmountUsdt > MAX_SINGLE_REWARD_USDT) {
+      throw new Error(`Reward amount must be between 0.01 and ${MAX_SINGLE_REWARD_USDT.toLocaleString()} USDT.`);
+    }
+    const isBinaryRule = input.ruleType === "ENABLE_2FA" || input.ruleType === "KYC_APPROVED";
+    const targetValue = isBinaryRule ? 1 : Number(input.targetValue);
+    if (!Number.isFinite(targetValue) || targetValue <= 0) {
+      throw new Error("Target threshold must be a positive number.");
+    }
+    let id = String(input.id || "").trim().toUpperCase().replace(/[^A-Z0-9_-]/g, "_");
+    if (!id) {
+      id = `TASK_${crypto3.randomBytes(4).toString("hex").toUpperCase()}`;
+    }
+    if (!/^[A-Z0-9_-]{3,48}$/.test(id)) {
+      throw new Error("Task ID must be 3\u201348 uppercase alphanumeric, dash, or underscore characters.");
+    }
+    if (db.rewardTasks.has(id)) {
+      throw new Error(`Task ID "${id}" already exists.`);
+    }
+    const actionLabel = String(input.actionLabel || "Complete Task").trim().slice(0, 40) || "Complete Task";
+    const maxSort = Array.from(db.rewardTasks.values()).reduce((m, t) => Math.max(m, t.sortOrder), 0);
+    const sortOrder = Number.isFinite(Number(input.sortOrder)) ? Number(input.sortOrder) : maxSort + 10;
+    const now = Date.now();
+    const task = {
+      id,
+      title,
+      description,
+      category: input.category,
+      ruleType: input.ruleType,
+      targetValue: Number(targetValue.toFixed(4)),
+      rewardCurrency: "USDT",
+      rewardAmountUsdt: Number(rewardAmountUsdt.toFixed(2)),
+      actionLabel,
+      actionView: input.actionView,
+      isActive: input.isActive !== false,
+      sortOrder,
+      createdBy: actorId,
+      createdAt: now,
+      updatedAt: now
+    };
+    db.rewardTasks.set(task.id, task);
+    db.auditLogs.push({
+      id: crypto3.randomUUID(),
+      actorId,
+      action: "ADMIN_REWARD_TASK_CREATED",
+      resource: task.id,
+      details: `Created trader reward task "${task.title}" (${task.ruleType} >= ${task.targetValue}, reward: ${task.rewardAmountUsdt} USDT)`,
+      createdAt: now
+    });
+    db.saveToDisk();
+    return task;
+  }
+  updateAdminTask(taskId, patch, actorId) {
+    this.ensureDefaultRewardTasks();
+    const task = db.rewardTasks.get(taskId);
+    if (!task) {
+      throw new Error(`Reward task "${taskId}" not found.`);
+    }
+    if (patch.title !== void 0) {
+      const title = String(patch.title).trim();
+      if (title.length < 3 || title.length > 100) {
+        throw new Error("Task title must be between 3 and 100 characters.");
+      }
+      task.title = title;
+    }
+    if (patch.description !== void 0) {
+      const desc = String(patch.description).trim();
+      if (desc.length < 5 || desc.length > 300) {
+        throw new Error("Task description must be between 5 and 300 characters.");
+      }
+      task.description = desc;
+    }
+    if (patch.category !== void 0) {
+      if (!VALID_TASK_CATEGORIES.includes(patch.category)) {
+        throw new Error(`Invalid task category: ${patch.category}`);
+      }
+      task.category = patch.category;
+    }
+    if (patch.ruleType !== void 0) {
+      if (!VALID_TASK_RULE_TYPES.includes(patch.ruleType)) {
+        throw new Error(`Invalid task rule type: ${patch.ruleType}`);
+      }
+      task.ruleType = patch.ruleType;
+    }
+    if (patch.targetValue !== void 0) {
+      const isBinary = task.ruleType === "ENABLE_2FA" || task.ruleType === "KYC_APPROVED";
+      const val = isBinary ? 1 : Number(patch.targetValue);
+      if (!Number.isFinite(val) || val <= 0) {
+        throw new Error("Target threshold must be a positive number.");
+      }
+      task.targetValue = Number(val.toFixed(4));
+    }
+    if (patch.rewardAmountUsdt !== void 0) {
+      const amt = Number(patch.rewardAmountUsdt);
+      if (!Number.isFinite(amt) || amt <= 0 || amt > MAX_SINGLE_REWARD_USDT) {
+        throw new Error(`Reward amount must be between 0.01 and ${MAX_SINGLE_REWARD_USDT.toLocaleString()} USDT.`);
+      }
+      task.rewardAmountUsdt = Number(amt.toFixed(2));
+    }
+    if (patch.actionLabel !== void 0) {
+      const label = String(patch.actionLabel).trim().slice(0, 40);
+      if (label) task.actionLabel = label;
+    }
+    if (patch.actionView !== void 0) {
+      if (!VALID_TASK_ACTION_VIEWS.includes(patch.actionView)) {
+        throw new Error(`Invalid action view: ${patch.actionView}`);
+      }
+      task.actionView = patch.actionView;
+    }
+    if (patch.isActive !== void 0) {
+      task.isActive = Boolean(patch.isActive);
+    }
+    if (patch.sortOrder !== void 0 && Number.isFinite(Number(patch.sortOrder))) {
+      task.sortOrder = Number(patch.sortOrder);
+    }
+    task.updatedAt = Date.now();
+    db.auditLogs.push({
+      id: crypto3.randomUUID(),
+      actorId,
+      action: "ADMIN_REWARD_TASK_UPDATED",
+      resource: task.id,
+      details: `Updated reward task "${task.title}" (active=${task.isActive}, reward=${task.rewardAmountUsdt} USDT)`,
+      createdAt: task.updatedAt
+    });
+    db.saveToDisk();
+    return task;
+  }
+  deleteAdminTask(taskId, actorId) {
+    this.ensureDefaultRewardTasks();
+    const task = db.rewardTasks.get(taskId);
+    if (!task) {
+      throw new Error(`Reward task "${taskId}" not found.`);
+    }
+    let claimCount = 0;
+    for (const c of db.rewardClaims.values()) {
+      if (c.taskId === taskId) claimCount++;
+    }
+    const now = Date.now();
+    if (claimCount > 0) {
+      task.isActive = false;
+      task.updatedAt = now;
+      db.auditLogs.push({
+        id: crypto3.randomUUID(),
+        actorId,
+        action: "ADMIN_REWARD_TASK_ARCHIVED",
+        resource: task.id,
+        details: `Paused reward task "${task.title}" instead of hard-deleting (${claimCount} settled claims preserved).`,
+        createdAt: now
+      });
+      db.saveToDisk();
+      return { deleted: false, archived: true, task };
+    }
+    db.rewardTasks.delete(taskId);
+    db.auditLogs.push({
+      id: crypto3.randomUUID(),
+      actorId,
+      action: "ADMIN_REWARD_TASK_DELETED",
+      resource: taskId,
+      details: `Deleted reward task "${task.title}" (0 claims).`,
+      createdAt: now
+    });
+    db.saveToDisk();
+    return { deleted: true, archived: false };
+  }
+  listAdminVouchers() {
+    const now = Date.now();
+    const distributedByVoucher = /* @__PURE__ */ new Map();
+    for (const red of db.voucherRedemptions.values()) {
+      const prev = distributedByVoucher.get(red.voucherId) || 0;
+      distributedByVoucher.set(red.voucherId, prev + safeUnitsToNumber(red.amountUnits, 6));
+    }
+    return Array.from(db.rewardVouchers.values()).sort((a, b) => b.createdAt - a.createdAt).map((v) => ({
+      ...v,
+      rewardDisplay: formatUsdtLabel(v.rewardAmountUsdt),
+      remainingSlots: Math.max(0, v.maxRedemptions - v.redeemedCount),
+      isExpired: Boolean(v.expiresAt && v.expiresAt <= now),
+      isExhausted: v.redeemedCount >= v.maxRedemptions,
+      totalDistributedUsdt: Number((distributedByVoucher.get(v.id) || 0).toFixed(2))
+    }));
+  }
+  createAdminVoucher(input, actorId) {
+    const code = String(input.code || "").trim().toUpperCase();
+    if (!/^[A-Z0-9_-]{3,32}$/.test(code)) {
+      throw new Error("Voucher code must be 3\u201332 uppercase alphanumeric, hyphen, or underscore characters.");
+    }
+    for (const existing of db.rewardVouchers.values()) {
+      if (existing.code.toUpperCase() === code) {
+        throw new Error(`Voucher code "${code}" already exists.`);
+      }
+    }
+    const title = String(input.title || "").trim();
+    if (title.length < 3 || title.length > 100) {
+      throw new Error("Voucher title must be between 3 and 100 characters.");
+    }
+    const description = String(input.description || "").trim().slice(0, 300);
+    if (!VALID_VOUCHER_TYPES.includes(input.voucherType)) {
+      throw new Error(`Invalid voucher type: ${input.voucherType}`);
+    }
+    const rewardAmountUsdt = Number(input.rewardAmountUsdt);
+    if (!Number.isFinite(rewardAmountUsdt) || rewardAmountUsdt <= 0 || rewardAmountUsdt > MAX_SINGLE_REWARD_USDT) {
+      throw new Error(`Voucher reward must be between 0.01 and ${MAX_SINGLE_REWARD_USDT.toLocaleString()} USDT.`);
+    }
+    const minVipLevel = Math.max(0, Math.min(6, Math.round(Number(input.minVipLevel) || 0)));
+    const maxRedemptions = Math.round(Number(input.maxRedemptions));
+    if (!Number.isFinite(maxRedemptions) || maxRedemptions < 1 || maxRedemptions > 1e6) {
+      throw new Error("Max redemptions must be between 1 and 1,000,000.");
+    }
+    let expiresAt;
+    if (input.expiresAt !== void 0 && input.expiresAt !== null && input.expiresAt !== "") {
+      const ts = Number(input.expiresAt);
+      if (!Number.isFinite(ts) || ts <= Date.now()) {
+        throw new Error("Voucher expiration date must be in the future.");
+      }
+      expiresAt = ts;
+    }
+    const now = Date.now();
+    const voucher = {
+      id: crypto3.randomUUID(),
+      code,
+      title,
+      description,
+      voucherType: input.voucherType,
+      rewardCurrency: "USDT",
+      rewardAmountUsdt: Number(rewardAmountUsdt.toFixed(2)),
+      minVipLevel,
+      maxRedemptions,
+      redeemedCount: 0,
+      isActive: input.isActive !== false,
+      expiresAt,
+      createdBy: actorId,
+      createdAt: now,
+      updatedAt: now
+    };
+    db.rewardVouchers.set(voucher.id, voucher);
+    db.auditLogs.push({
+      id: crypto3.randomUUID(),
+      actorId,
+      action: "ADMIN_REWARD_VOUCHER_CREATED",
+      resource: voucher.code,
+      details: `Created voucher ${voucher.code} (${voucher.rewardAmountUsdt} USDT, max ${voucher.maxRedemptions}, min VIP ${voucher.minVipLevel})`,
+      createdAt: now
+    });
+    db.saveToDisk();
+    return voucher;
+  }
+  updateAdminVoucher(voucherId, patch, actorId) {
+    const voucher = db.rewardVouchers.get(voucherId);
+    if (!voucher) {
+      throw new Error("Voucher not found.");
+    }
+    if (patch.code !== void 0) {
+      const code = String(patch.code).trim().toUpperCase();
+      if (!/^[A-Z0-9_-]{3,32}$/.test(code)) {
+        throw new Error("Voucher code must be 3\u201332 uppercase alphanumeric, hyphen, or underscore characters.");
+      }
+      for (const existing of db.rewardVouchers.values()) {
+        if (existing.id !== voucherId && existing.code.toUpperCase() === code) {
+          throw new Error(`Voucher code "${code}" is already in use.`);
+        }
+      }
+      voucher.code = code;
+    }
+    if (patch.title !== void 0) {
+      const title = String(patch.title).trim();
+      if (title.length < 3 || title.length > 100) {
+        throw new Error("Voucher title must be between 3 and 100 characters.");
+      }
+      voucher.title = title;
+    }
+    if (patch.description !== void 0) {
+      voucher.description = String(patch.description).trim().slice(0, 300);
+    }
+    if (patch.voucherType !== void 0) {
+      if (!VALID_VOUCHER_TYPES.includes(patch.voucherType)) {
+        throw new Error(`Invalid voucher type: ${patch.voucherType}`);
+      }
+      voucher.voucherType = patch.voucherType;
+    }
+    if (patch.rewardAmountUsdt !== void 0) {
+      const amt = Number(patch.rewardAmountUsdt);
+      if (!Number.isFinite(amt) || amt <= 0 || amt > MAX_SINGLE_REWARD_USDT) {
+        throw new Error(`Voucher reward must be between 0.01 and ${MAX_SINGLE_REWARD_USDT.toLocaleString()} USDT.`);
+      }
+      voucher.rewardAmountUsdt = Number(amt.toFixed(2));
+    }
+    if (patch.minVipLevel !== void 0) {
+      voucher.minVipLevel = Math.max(0, Math.min(6, Math.round(Number(patch.minVipLevel) || 0)));
+    }
+    if (patch.maxRedemptions !== void 0) {
+      const maxRed = Math.round(Number(patch.maxRedemptions));
+      if (!Number.isFinite(maxRed) || maxRed < voucher.redeemedCount || maxRed > 1e6) {
+        throw new Error(
+          `Max redemptions must be at least ${Math.max(1, voucher.redeemedCount)} and at most 1,000,000.`
+        );
+      }
+      voucher.maxRedemptions = maxRed;
+    }
+    if (patch.isActive !== void 0) {
+      voucher.isActive = Boolean(patch.isActive);
+    }
+    if (patch.expiresAt !== void 0) {
+      if (patch.expiresAt === null) {
+        voucher.expiresAt = void 0;
+      } else {
+        const ts = Number(patch.expiresAt);
+        if (!Number.isFinite(ts) || ts <= 0) {
+          throw new Error("Invalid expiration timestamp.");
+        }
+        voucher.expiresAt = ts;
+      }
+    }
+    voucher.updatedAt = Date.now();
+    db.auditLogs.push({
+      id: crypto3.randomUUID(),
+      actorId,
+      action: "ADMIN_REWARD_VOUCHER_UPDATED",
+      resource: voucher.code,
+      details: `Updated voucher ${voucher.code} (active=${voucher.isActive}, reward=${voucher.rewardAmountUsdt} USDT, max=${voucher.maxRedemptions})`,
+      createdAt: voucher.updatedAt
+    });
+    db.saveToDisk();
+    return voucher;
+  }
+  deleteAdminVoucher(voucherId, actorId) {
+    const voucher = db.rewardVouchers.get(voucherId);
+    if (!voucher) {
+      throw new Error("Voucher not found.");
+    }
+    const now = Date.now();
+    if (voucher.redeemedCount > 0) {
+      voucher.isActive = false;
+      voucher.updatedAt = now;
+      db.auditLogs.push({
+        id: crypto3.randomUUID(),
+        actorId,
+        action: "ADMIN_REWARD_VOUCHER_REVOKED",
+        resource: voucher.code,
+        details: `Revoked voucher ${voucher.code} instead of deleting (${voucher.redeemedCount} settled redemptions preserved).`,
+        createdAt: now
+      });
+      db.saveToDisk();
+      return { deleted: false, archived: true, voucher };
+    }
+    db.rewardVouchers.delete(voucherId);
+    db.auditLogs.push({
+      id: crypto3.randomUUID(),
+      actorId,
+      action: "ADMIN_REWARD_VOUCHER_DELETED",
+      resource: voucher.code,
+      details: `Deleted unused voucher ${voucher.code}.`,
+      createdAt: now
+    });
+    db.saveToDisk();
+    return { deleted: true, archived: false };
+  }
+  listAdminRewardsHistory(options) {
+    const all = this.buildUnifiedHistoryRecords();
+    const typeFilter = String(options?.type || "ALL").toUpperCase();
+    const q = String(options?.search || "").trim().toLowerCase();
+    const filtered = all.filter((item) => {
+      if (typeFilter !== "ALL" && item.type !== typeFilter) return false;
+      if (q) {
+        const hay = `${item.userEmail || ""} ${item.title} ${item.code || ""} ${item.journalId}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    const limit = Math.max(1, Math.min(100, Number(options?.limit) || 25));
+    const total = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const page = Math.max(1, Math.min(totalPages, Number(options?.page) || 1));
+    const offset = (page - 1) * limit;
+    const totalFilteredUsdt = filtered.reduce((sum, r) => sum + r.amountUsdt, 0);
+    return {
+      items: filtered.slice(offset, offset + limit),
+      summary: {
+        totalRecords: total,
+        totalFilteredUsdt: Number(totalFilteredUsdt.toFixed(4))
+      },
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages
+      }
+    };
+  }
+};
+var vipRewardsService = new VipRewardsService();
+
+// server/auth/AuthService.ts
+var BASE32_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+var SESSION_SECRET = process.env.SESSION_SECRET || "dimonex-stateless-hmac-secret-v1-production-2026";
+var BLOCKED_REGISTRATION_DOMAINS = [
+  "forexzig.com",
+  ...process.env.BLOCKED_EMAIL_DOMAINS ? process.env.BLOCKED_EMAIL_DOMAINS.split(",").map((d) => d.trim().toLowerCase()).filter(Boolean) : []
+];
+var BlockedEmailDomainError = class extends Error {
+  constructor(domain, message) {
+    super(message);
+    this.name = "BlockedEmailDomainError";
+    this.domain = domain;
+  }
+};
+var AuthService = class {
+  /**
+   * Check whether an email belongs to a blocked domain or its subdomains.
+   */
+  static getBlockedDomain(email) {
+    const cleanEmail = email.trim().toLowerCase();
+    const atIdx = cleanEmail.lastIndexOf("@");
+    if (atIdx === -1) return null;
+    const domain = cleanEmail.slice(atIdx + 1).replace(/\.+$/, "");
+    if (!domain) return null;
+    for (const blocked of BLOCKED_REGISTRATION_DOMAINS) {
+      if (domain === blocked || domain.endsWith(`.${blocked}`)) {
+        return blocked;
+      }
+    }
+    return null;
+  }
+  /**
+   * Issues a cryptographically signed HMAC-SHA256 token.
+   * Self-contained and verifiable across all stateless Vercel Serverless Lambda instances.
+   */
+  static issueToken(user, device = "Web Client", ip = "127.0.0.1") {
+    const now = Date.now();
+    const expiresAt = now + 14 * 24 * 3600 * 1e3;
+    const payload = {
+      userId: user.id,
+      email: user.email,
+      role: user.role,
+      iat: now,
+      exp: expiresAt
+    };
+    const payloadEncoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    const signature = crypto4.createHmac("sha256", SESSION_SECRET).update(payloadEncoded).digest("base64url");
+    const token = `${payloadEncoded}.${signature}`;
+    db.sessions.set(token, {
+      userId: user.id,
+      token,
+      device,
+      ip,
+      expiresAt
+    });
+    if (process.env.VERCEL === "1") {
+      db.saveToDisk();
+    } else {
+      db.scheduleSave();
+    }
+    return token;
+  }
+  /**
+   * RFC 6238 TOTP Secret Generator (Base32 encoded)
+   */
+  static generateTotpSecret() {
+    const randomBytes = crypto4.randomBytes(20);
+    let secret = "";
+    for (let i = 0; i < randomBytes.length; i++) {
+      secret += BASE32_CHARS[randomBytes[i] % 32];
+    }
+    const otpauthUrl = `otpauth://totp/DIMONEX:trader?secret=${secret}&issuer=DIMONEX`;
+    return { secret, otpauthUrl };
+  }
+  /**
+   * Verify standard RFC 6238 6-digit TOTP code
+   */
+  static verifyTotpCode(secret, code, window = 1) {
+    const cleanCode = code.trim();
+    if (!/^\d{6}$/.test(cleanCode)) return false;
+    let bits = "";
+    for (let i = 0; i < secret.length; i++) {
+      const val = BASE32_CHARS.indexOf(secret.charAt(i).toUpperCase());
+      if (val === -1) continue;
+      bits += val.toString(2).padStart(5, "0");
+    }
+    const bytes = [];
+    for (let i = 0; i + 8 <= bits.length; i += 8) {
+      bytes.push(parseInt(bits.slice(i, i + 8), 2));
+    }
+    const key = Buffer.from(bytes);
+    const currentTimeStep = Math.floor(Date.now() / 1e3 / 30);
+    for (let step = currentTimeStep - window; step <= currentTimeStep + window; step++) {
+      const stepBuffer = Buffer.alloc(8);
+      stepBuffer.writeBigInt64BE(BigInt(step));
+      const hmac = crypto4.createHmac("sha1", key).update(stepBuffer).digest();
+      const offset = hmac[hmac.length - 1] & 15;
+      const binary = (hmac[offset] & 127) << 24 | (hmac[offset + 1] & 255) << 16 | (hmac[offset + 2] & 255) << 8 | hmac[offset + 3] & 255;
+      const otp = (binary % 1e6).toString().padStart(6, "0");
+      if (otp === cleanCode) {
+        return true;
+      }
+    }
+    return false;
+  }
+  /**
+   * Register a new user with default role 'user' and pending KYC.
+   */
+  static register(email, password, ip = "127.0.0.1", referralCode) {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      throw new Error("Format alamat email tidak valid.");
+    }
+    const blockedDomain = this.getBlockedDomain(cleanEmail);
+    if (blockedDomain) {
+      db.auditLogs.push({
+        id: crypto4.randomUUID(),
+        actorId: cleanEmail,
+        action: "REGISTRATION_BLOCKED_DOMAIN",
+        resource: blockedDomain,
+        details: `Pendaftaran ditolak untuk domain terblokir ${blockedDomain} (IP: ${ip}) guna mencegah spam/bot.`,
+        createdAt: Date.now()
+      });
+      db.scheduleSave();
+      throw new BlockedEmailDomainError(
+        blockedDomain,
+        `Pendaftaran dari domain ${blockedDomain} diblokir untuk mencegah spam dan akun bot.`
+      );
+    }
+    for (const [_, u] of db.users.entries()) {
+      if (u.email === cleanEmail) {
+        throw new Error("Email sudah terdaftar. Silakan gunakan email lain atau masuk.");
+      }
+    }
+    if (password.length < 8) {
+      throw new Error("Kata sandi harus minimal 8 karakter");
+    }
+    const cleanReferralCode = referralCode ? referralCode.trim().toUpperCase() : "";
+    if (cleanReferralCode) {
+      if (!/^DMX-[A-Z0-9]{4,12}$/.test(cleanReferralCode)) {
+        throw new Error("Format kode referral tidak valid. Contoh: DMX-XXXXXX.");
+      }
+      const referrer = vipRewardsService.findUserByReferralCode(cleanReferralCode);
+      if (!referrer || referrer.status !== "active") {
+        throw new Error(`Kode referral "${cleanReferralCode}" tidak ditemukan atau tidak aktif.`);
+      }
+    }
+    const salt = db.generateSalt();
+    const hash = db.hashPassword(password, salt);
+    const userId = crypto4.randomUUID();
+    const now = Date.now();
+    const user = {
+      id: userId,
+      email: cleanEmail,
+      passwordHash: hash,
+      passwordSalt: salt,
+      role: "user",
+      status: "active",
+      isTotpEnabled: false,
+      failedLoginAttempts: 0,
+      createdAt: now,
+      updatedAt: now
+    };
+    db.users.set(user.id, user);
+    db.createOrGetAccount(user.id, "IDR", "0");
+    db.createOrGetAccount(user.id, "BTC", "0");
+    db.createOrGetAccount(user.id, "ETH", "0");
+    db.createOrGetAccount(user.id, "USDT", "0");
+    vipRewardsService.ensureUserReferralCode(user.id);
+    if (cleanReferralCode) {
+      vipRewardsService.bindReferralCode(user.id, cleanReferralCode);
+    }
+    const token = this.issueToken(user, "Web Browser / Chrome", ip);
+    const { passwordHash, passwordSalt, ...safeUser } = user;
+    return { user: safeUser, token };
+  }
+  /**
+   * Login with anti-brute force and 2FA TOTP enforcement.
+   */
+  static login(email, password, totpCode, ip = "127.0.0.1") {
+    const cleanEmail = email.trim().toLowerCase();
+    let targetUser;
+    for (const [_, u] of db.users.entries()) {
+      if (u.email === cleanEmail) {
+        targetUser = u;
+        break;
+      }
+    }
+    if (!targetUser) {
+      throw new Error("Email atau kata sandi tidak valid");
+    }
+    const now = Date.now();
+    if (targetUser.lockedUntil && targetUser.lockedUntil > now) {
+      const waitMinutes = Math.ceil((targetUser.lockedUntil - now) / 6e4);
+      throw new Error(`Akun terkunci sementara karena percobaan gagal berulang. Coba lagi dalam ${waitMinutes} menit.`);
+    }
+    const computedHash = db.hashPassword(password, targetUser.passwordSalt);
+    if (computedHash !== targetUser.passwordHash) {
+      targetUser.failedLoginAttempts += 1;
+      if (targetUser.failedLoginAttempts >= 5) {
+        targetUser.lockedUntil = now + 15 * 60 * 1e3;
+        targetUser.failedLoginAttempts = 0;
+        throw new Error("Terlalu banyak percobaan gagal. Akun dibekukan selama 15 menit untuk keamanan.");
+      }
+      throw new Error("Email atau kata sandi tidak valid");
+    }
+    targetUser.failedLoginAttempts = 0;
+    targetUser.lockedUntil = void 0;
+    if (targetUser.isTotpEnabled && targetUser.totpSecret) {
+      if (!totpCode) {
+        return { requiresTotp: true };
+      }
+      const isTotpValid = this.verifyTotpCode(targetUser.totpSecret, totpCode);
+      if (!isTotpValid) {
+        throw new Error("Kode 2FA TOTP tidak valid atau kedaluwarsa.");
+      }
+    }
+    const token = this.issueToken(targetUser, "Web Client / Dimonex Desktop", ip);
+    const { passwordHash, passwordSalt, ...safeUser } = targetUser;
+    return { user: safeUser, token };
+  }
+  /**
+   * Validate bearer token and return user.
+   * Supports both Stateless Cryptographic HMAC tokens (survives all serverless container recycles)
+   * and backward-compatible stateful in-memory tokens.
+   */
+  static authenticateToken(token) {
+    if (!token || typeof token !== "string") return null;
+    if (token.includes(".")) {
+      const parts = token.split(".");
+      if (parts.length === 2) {
+        const [payloadEncoded, signature] = parts;
+        try {
+          const expectedSig = crypto4.createHmac("sha256", SESSION_SECRET).update(payloadEncoded).digest("base64url");
+          if (signature.length === expectedSig.length && crypto4.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
+            const payload = JSON.parse(Buffer.from(payloadEncoded, "base64url").toString("utf-8"));
+            if (payload && payload.exp > Date.now()) {
+              let user2 = db.users.get(payload.userId);
+              if (!user2) {
+                db.loadFromDisk();
+                user2 = db.users.get(payload.userId);
+              }
+              if (user2 && user2.status === "active") {
+                const { passwordHash: passwordHash2, passwordSalt: passwordSalt2, ...safeUser2 } = user2;
+                return safeUser2;
+              }
+              if (!user2 && payload.email) {
+                const salt = db.generateSalt();
+                const rehydratedUser = {
+                  id: payload.userId,
+                  email: payload.email,
+                  passwordHash: "",
+                  passwordSalt: salt,
+                  role: payload.role || "user",
+                  status: "active",
+                  isTotpEnabled: false,
+                  failedLoginAttempts: 0,
+                  createdAt: payload.iat || Date.now(),
+                  updatedAt: Date.now()
+                };
+                db.users.set(rehydratedUser.id, rehydratedUser);
+                db.createOrGetAccount(rehydratedUser.id, "IDR", "0");
+                db.createOrGetAccount(rehydratedUser.id, "BTC", "0");
+                db.createOrGetAccount(rehydratedUser.id, "ETH", "0");
+                db.createOrGetAccount(rehydratedUser.id, "USDT", "0");
+                db.saveToDisk();
+                const { passwordHash: passwordHash2, passwordSalt: passwordSalt2, ...safeUser2 } = rehydratedUser;
+                return safeUser2;
+              }
+            }
+          }
+        } catch {
+        }
+      }
+    }
+    const session = db.sessions.get(token);
+    if (!session || session.expiresAt < Date.now()) {
+      return null;
+    }
+    const user = db.users.get(session.userId);
+    if (!user || user.status !== "active") {
+      return null;
+    }
+    const { passwordHash, passwordSalt, ...safeUser } = user;
+    return safeUser;
+  }
+};
+
+// server/routes/auth.ts
+init_database();
+var authRouter = Router();
+var requireAuth = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Otorisasi diperlukan: Token tidak ditemukan" });
+  }
+  const token = authHeader.slice(7);
+  const user = AuthService.authenticateToken(token);
+  if (!user) {
+    return res.status(401).json({ error: "Sesi telah kedaluwarsa atau tidak valid" });
+  }
+  req.user = user;
+  req.token = token;
+  next();
+};
+var requireAdmin = (req, res, next) => {
+  requireAuth(req, res, () => {
+    const user = req.user;
+    const role = (user.role || "").toUpperCase();
+    if (role !== "ADMIN" && role !== "SUPERADMIN") {
+      return res.status(403).json({ error: "Akses ditolak: Memerlukan hak akses administrator (ADMIN)" });
+    }
+    next();
+  });
+};
+authRouter.post("/register", (req, res) => {
+  try {
+    const { email, password, referralCode } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email dan kata sandi wajib diisi" });
+    }
+    const ip = req.ip || "127.0.0.1";
+    const result = AuthService.register(
+      email,
+      password,
+      ip,
+      typeof referralCode === "string" ? referralCode : void 0
+    );
+    res.json(result);
+  } catch (err) {
+    if (err instanceof BlockedEmailDomainError) {
+      return res.status(403).json({
+        error: err.message,
+        code: "BLOCKED_EMAIL_DOMAIN",
+        domain: err.domain
+      });
+    }
+    res.status(400).json({ error: err.message });
+  }
+});
+authRouter.post("/login", (req, res) => {
+  try {
+    const { email, password, totpCode } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email dan kata sandi wajib diisi" });
+    }
+    const ip = req.ip || "127.0.0.1";
+    const result = AuthService.login(email, password, totpCode, ip);
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+var VALID_SPOT_LAYOUTS = /* @__PURE__ */ new Set(["CLASSIC", "PRO_TERMINAL", "CHART_FOCUS"]);
+function getNormalizedPreferences(userId) {
+  const dbUser = db.users.get(userId);
+  const prefs = dbUser?.preferences;
+  const spotLayout = prefs?.spotLayout && VALID_SPOT_LAYOUTS.has(prefs.spotLayout) ? prefs.spotLayout : "CLASSIC";
+  return {
+    spotLayout,
+    hideRecentTradesInChartFocus: prefs?.hideRecentTradesInChartFocus ?? true,
+    chartSettings: prefs?.chartSettings,
+    updatedAt: prefs?.updatedAt || dbUser?.updatedAt || Date.now()
+  };
+}
+authRouter.get("/me", requireAuth, (req, res) => {
+  const user = req.user;
+  const kyc = db.kyc.get(user.id);
+  const preferences = getNormalizedPreferences(user.id);
+  res.json({ user: { ...user, preferences }, kyc, preferences });
+});
+authRouter.get("/preferences", requireAuth, (req, res) => {
+  const user = req.user;
+  res.json(getNormalizedPreferences(user.id));
+});
+authRouter.put("/preferences", requireAuth, (req, res) => {
+  const user = req.user;
+  const dbUser = db.users.get(user.id);
+  if (!dbUser) {
+    return res.status(404).json({ error: "Pengguna tidak ditemukan" });
+  }
+  const { spotLayout, hideRecentTradesInChartFocus, chartSettings } = req.body || {};
+  if (spotLayout !== void 0 && !VALID_SPOT_LAYOUTS.has(spotLayout)) {
+    return res.status(400).json({
+      error: "Preset layout tidak valid. Pilihan: CLASSIC, PRO_TERMINAL, CHART_FOCUS"
+    });
+  }
+  const current = getNormalizedPreferences(user.id);
+  const nextPrefs = {
+    spotLayout: spotLayout || current.spotLayout,
+    hideRecentTradesInChartFocus: typeof hideRecentTradesInChartFocus === "boolean" ? hideRecentTradesInChartFocus : current.hideRecentTradesInChartFocus,
+    chartSettings: chartSettings && typeof chartSettings === "object" ? { ...current.chartSettings || {}, ...chartSettings } : current.chartSettings,
+    updatedAt: Date.now()
+  };
+  dbUser.preferences = nextPrefs;
+  dbUser.updatedAt = Date.now();
+  if (process.env.VERCEL === "1") {
+    db.saveToDisk();
+  } else {
+    db.scheduleSave();
+  }
+  res.json({ success: true, preferences: nextPrefs });
+});
+authRouter.post("/2fa/generate", requireAuth, (req, res) => {
+  const user = req.user;
+  const { secret, otpauthUrl } = AuthService.generateTotpSecret();
+  const dbUser = db.users.get(user.id);
+  dbUser.totpSecret = secret;
+  res.json({ secret, otpauthUrl });
+});
+authRouter.post("/2fa/enable", requireAuth, (req, res) => {
+  const user = req.user;
+  const { code } = req.body;
+  const dbUser = db.users.get(user.id);
+  if (!dbUser.totpSecret) {
+    return res.status(400).json({ error: "Silakan generate kunci 2FA terlebih dahulu" });
+  }
+  const isValid = AuthService.verifyTotpCode(dbUser.totpSecret, code);
+  if (!isValid) {
+    return res.status(400).json({ error: "Kode TOTP salah atau kedaluwarsa" });
+  }
+  dbUser.isTotpEnabled = true;
+  dbUser.updatedAt = Date.now();
+  res.json({ success: true, message: "2FA TOTP berhasil diaktifkan" });
+});
+authRouter.post("/2fa/disable", requireAuth, (req, res) => {
+  const user = req.user;
+  const { code } = req.body;
+  const dbUser = db.users.get(user.id);
+  if (dbUser.isTotpEnabled && dbUser.totpSecret) {
+    const isValid = AuthService.verifyTotpCode(dbUser.totpSecret, code);
+    if (!isValid) {
+      return res.status(400).json({ error: "Kode TOTP diperlukan untuk menonaktifkan 2FA" });
+    }
+  }
+  dbUser.isTotpEnabled = false;
+  dbUser.totpSecret = void 0;
+  res.json({ success: true, message: "2FA TOTP berhasil dinonaktifkan" });
+});
+authRouter.get("/sessions", requireAuth, (req, res) => {
+  const user = req.user;
+  const currentToken = req.token;
+  const userSessions = Array.from(db.sessions.values()).filter((s) => s.userId === user.id).map((s) => ({
+    device: s.device,
+    ip: s.ip,
+    isCurrent: s.token === currentToken,
+    expiresAt: s.expiresAt
+  }));
+  res.json(userSessions);
+});
+authRouter.post("/logout", requireAuth, (req, res) => {
+  const token = req.token;
+  db.sessions.delete(token);
+  res.json({ success: true, message: "Berhasil keluar" });
+});
+
+// server/routes/kyc.ts
+import { Router as Router2 } from "express";
+import crypto5 from "crypto";
+init_database();
+var kycRouter = Router2();
+kycRouter.get("/status", requireAuth, (req, res) => {
+  const user = req.user;
+  const kyc = db.kyc.get(user.id);
+  if (!kyc) {
+    return res.json({
+      status: "unverified",
+      tierLevel: 0,
+      limits: {
+        dailyDepositIdr: "0",
+        dailyWithdrawalIdr: "0"
+      }
+    });
+  }
+  const limits = {
+    dailyDepositIdr: kyc.tierLevel === 2 ? "500000000" : "25000000",
+    dailyWithdrawalIdr: kyc.tierLevel === 2 ? "500000000" : "25000000"
+  };
+  res.json({
+    ...kyc,
+    limits
+  });
+});
+kycRouter.post("/submit", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const { fullName, nik, birthDate, idCardUrl, selfieUrl } = req.body;
+    if (!fullName || !nik || !birthDate) {
+      return res.status(400).json({ error: "Nama Lengkap (sesuai KTP), NIK, dan Tanggal Lahir wajib diisi" });
+    }
+    if (!/^\d{16}$/.test(nik.trim())) {
+      return res.status(400).json({ error: "Format NIK harus tepat 16 digit angka" });
+    }
+    let existingKyc = db.kyc.get(user.id);
+    const newKyc = {
+      id: existingKyc ? existingKyc.id : crypto5.randomUUID(),
+      userId: user.id,
+      fullName: fullName.trim(),
+      nik: nik.trim(),
+      birthDate,
+      idCardUrl: idCardUrl || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><rect width="200" height="120" fill="%231e293b"/><text x="100" y="60" fill="%23fff" text-anchor="middle">KTP Valid</text></svg>',
+      selfieUrl: selfieUrl || 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><circle cx="60" cy="60" r="50" fill="%233b82f6"/></svg>',
+      status: "approved",
+      // Auto-approved in MVP simulation for seamless UX
+      tierLevel: 1,
+      reviewedBy: "system-kyc-engine",
+      reviewedAt: Date.now(),
+      createdAt: existingKyc ? existingKyc.createdAt : Date.now()
+    };
+    db.kyc.set(user.id, newKyc);
+    db.auditLogs.push({
+      id: crypto5.randomUUID(),
+      actorId: user.id,
+      action: "KYC_SUBMITTED",
+      resource: `user_kyc:${newKyc.id}`,
+      details: `KYC submitted for NIK ${nik.slice(0, 6)}****** with full name: ${fullName}`,
+      createdAt: Date.now()
+    });
+    res.json({
+      success: true,
+      message: "KYC berhasil diverifikasi! Akun Anda kini berstatus Terverifikasi (Tier 1)",
+      kyc: newKyc
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// server/routes/trading.ts
+import { Router as Router3 } from "express";
+
+// server/engine/MatchingEngine.ts
+import crypto8 from "crypto";
+
 // server/engine/OrderBook.ts
+init_PrecisionMath();
+import crypto6 from "crypto";
 init_database();
 
 // server/engine/KlineService.ts
@@ -4837,6 +6510,49 @@ var KlineService = class {
     this.scheduleSave();
   }
   /**
+   * Build exact historical candles for a single timeframe on-demand from db.trades
+   * (supports deep left-scroll pagination even when klineStore tail is capped).
+   */
+  buildCandlesForTimeframeFromTrades(pairId, tf) {
+    const pair = db.tradingPairs.get(pairId);
+    if (!pair) return [];
+    const pairTrades = (db.trades || []).filter((t) => t.pairId === pairId).sort((a, b) => a.createdAt - b.createdAt);
+    if (pairTrades.length === 0) return [];
+    const quoteDec = pair.quoteDecimals !== void 0 && pair.quoteDecimals !== null ? pair.quoteDecimals : pair.quoteCurrency === "USDT" ? 6 : 2;
+    const interval = TIMEFRAME_SECONDS[tf];
+    const map = /* @__PURE__ */ new Map();
+    const seenIds = /* @__PURE__ */ new Set();
+    let prevClose = null;
+    for (const trade of pairTrades) {
+      if (seenIds.has(trade.id)) continue;
+      seenIds.add(trade.id);
+      const price = Number(BigInt(trade.price)) / 10 ** quoteDec;
+      const qty = Number(trade.quantity) / 10 ** pair.baseDecimals;
+      const tradeSec = Math.floor(trade.createdAt / 1e3);
+      const candleTime = Math.floor(tradeSec / interval) * interval;
+      let existing = map.get(candleTime);
+      if (!existing) {
+        const open = prevClose !== null ? prevClose : price;
+        existing = {
+          time: candleTime,
+          open,
+          high: Math.max(open, price),
+          low: Math.min(open, price),
+          close: price,
+          volume: qty
+        };
+        map.set(candleTime, existing);
+      } else {
+        existing.high = Math.max(existing.high, price);
+        existing.low = Math.min(existing.low, price);
+        existing.close = price;
+        existing.volume = Number((existing.volume + qty).toFixed(6));
+      }
+      prevClose = existing.close;
+    }
+    return Array.from(map.values()).sort((a, b) => a.time - b.time);
+  }
+  /**
    * Get historical and current candles for a pair and timeframe.
    * Returns empty array if no trades have executed yet for this pair.
    */
@@ -4919,8 +6635,8 @@ var KlineService = class {
     }
   }
   /**
-   * TradingView Datafeed compliant getBars method.
-   * Supports filtering by from/to Unix seconds and countBack.
+   * TradingView Datafeed & Pro Chart compliant getBars method.
+   * Supports filtering by from/to Unix seconds, left-scroll pagination from full db.trades history, and limit.
    */
   getBars(pairId, resolution = "15m", fromSec, toSec, limit = 300) {
     const tf = this.normalizeResolution(resolution);
@@ -4935,13 +6651,23 @@ var KlineService = class {
         return [];
       }
     }
-    let result = candles;
+    let source = candles;
+    if (candles.length > 0 && (toSec !== void 0 && toSec < candles[0].time || fromSec !== void 0 && fromSec < candles[0].time)) {
+      const historicalAll = this.buildCandlesForTimeframeFromTrades(pairId, tf);
+      if (historicalAll.length > 0) {
+        const merged = /* @__PURE__ */ new Map();
+        for (const c of historicalAll) merged.set(c.time, c);
+        for (const c of candles) merged.set(c.time, c);
+        source = Array.from(merged.values()).sort((a, b) => a.time - b.time);
+      }
+    }
+    let result = source;
     if (fromSec !== void 0 && toSec !== void 0) {
-      result = candles.filter((c) => c.time >= fromSec && c.time <= toSec);
+      result = source.filter((c) => c.time >= fromSec && c.time <= toSec);
     } else if (fromSec !== void 0) {
-      result = candles.filter((c) => c.time >= fromSec);
+      result = source.filter((c) => c.time >= fromSec);
     } else if (toSec !== void 0) {
-      result = candles.filter((c) => c.time <= toSec);
+      result = source.filter((c) => c.time <= toSec);
     }
     if (limit && limit > 0 && result.length > limit) {
       return result.slice(-limit);
@@ -4967,7 +6693,7 @@ var OrderBook = class {
   recordEvent(type, data) {
     this.eventSequence += 1;
     const evt = {
-      id: crypto5.randomUUID(),
+      id: crypto6.randomUUID(),
       sequence: this.eventSequence,
       pairId: this.pairId,
       type,
@@ -5110,7 +6836,7 @@ var OrderBook = class {
       const takerRemAfter = takerRemainingQty - matchQty;
       const makerLockedSliceUnits = this.consumeOrderLockSlice(makerOrder, matchQty, makerRemainingQty, makerRemAfter);
       const takerLockedSliceUnits = this.consumeOrderLockSlice(takerOrder, matchQty, takerRemainingQty, takerRemAfter);
-      const tradeId = crypto5.randomUUID();
+      const tradeId = crypto6.randomUUID();
       const trade = {
         id: tradeId,
         pairId: this.pairId,
@@ -5741,7 +7467,7 @@ var MatchingEngineManager = class {
       lockedCurrency = pair.baseCurrency;
       LedgerService.lockBalance(input.userId, lockedCurrency, lockedAmount);
     }
-    const orderId = crypto7.randomUUID();
+    const orderId = crypto8.randomUUID();
     const order = {
       id: orderId,
       userId: input.userId,
@@ -6010,15 +7736,15 @@ var marketWsService = new MarketDataWebSocketService();
 
 // server/services/MarketLifecycleScheduler.ts
 init_database();
-import crypto10 from "crypto";
+import crypto11 from "crypto";
 
 // server/services/listing/ListingActivationService.ts
 init_database();
-import crypto9 from "crypto";
+import crypto10 from "crypto";
 
 // server/services/listing/ListingAuditService.ts
 init_database();
-import crypto8 from "crypto";
+import crypto9 from "crypto";
 var ListingAuditService = class {
   static {
     this.GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -6060,8 +7786,8 @@ var ListingAuditService = class {
   static recordEvent(input) {
     const events = db.listingAuditEvents;
     const previousHash = events.length > 0 ? events[events.length - 1].currentHash : this.GENESIS_HASH;
-    const eventId = crypto8.randomUUID();
-    const correlationId = input.correlationId || crypto8.randomUUID();
+    const eventId = crypto9.randomUUID();
+    const correlationId = input.correlationId || crypto9.randomUUID();
     const sanitizedPayload = this.redactSensitiveData(input.payload);
     const createdAt = Date.now();
     const dataToHash = {
@@ -6079,7 +7805,7 @@ var ListingAuditService = class {
       createdAt
     };
     const canonicalSerialized = this.canonicalStringify(dataToHash);
-    const currentHash = crypto8.createHash("sha256").update(canonicalSerialized).digest("hex");
+    const currentHash = crypto9.createHash("sha256").update(canonicalSerialized).digest("hex");
     const auditEvent = {
       id: eventId,
       aggregateId: input.aggregateId,
@@ -6137,7 +7863,7 @@ var ListingAuditService = class {
         createdAt: evt.createdAt
       };
       const canonicalSerialized = this.canonicalStringify(dataToHash);
-      const computedHash = crypto8.createHash("sha256").update(canonicalSerialized).digest("hex");
+      const computedHash = crypto9.createHash("sha256").update(canonicalSerialized).digest("hex");
       if (computedHash !== evt.currentHash) {
         return {
           isValid: false,
@@ -6220,7 +7946,7 @@ var ListingActivationService = class {
     if (duplicateMarket) {
       throw new Error(`Market pair untuk ${baseAsset.symbol}/${quoteAsset.symbol} sudah ada dengan ID ${duplicateMarket.id}`);
     }
-    const outboxId = crypto9.randomUUID();
+    const outboxId = crypto10.randomUUID();
     const outboxEvent = {
       id: outboxId,
       aggregateId: listing.id,
@@ -6499,7 +8225,7 @@ function scheduleDelistMarket(pairId, delistScheduledAt, actorId, actorEmail, re
   pair.delistReason = cleanReason;
   db.tradingPairs.set(pair.id, pair);
   db.auditLogs.push({
-    id: crypto10.randomUUID(),
+    id: crypto11.randomUUID(),
     actorId,
     action: "MARKET_DELIST_SCHEDULED",
     resource: `pair:${pair.id}`,
@@ -6525,7 +8251,7 @@ function cancelScheduledDelistMarket(pairId, actorId, actorEmail) {
   pair.delistReason = void 0;
   db.tradingPairs.set(pair.id, pair);
   db.auditLogs.push({
-    id: crypto10.randomUUID(),
+    id: crypto11.randomUUID(),
     actorId,
     action: "MARKET_DELIST_CANCELLED",
     resource: `pair:${pair.id}`,
@@ -6582,7 +8308,7 @@ function executeDelistMarket(pairId, actorId, actorEmail, reason) {
     db.markets.set(market.id, market);
   }
   db.auditLogs.push({
-    id: crypto10.randomUUID(),
+    id: crypto11.randomUUID(),
     actorId,
     action: "MARKET_DELISTED",
     resource: `pair:${pair.id}`,
@@ -6627,7 +8353,7 @@ function relistMarket(pairId, actorId, actorEmail) {
     db.markets.set(market.id, market);
   }
   db.auditLogs.push({
-    id: crypto10.randomUUID(),
+    id: crypto11.randomUUID(),
     actorId,
     action: "MARKET_RELISTED",
     resource: `pair:${pair.id}`,
@@ -6717,5172 +8443,14 @@ var MarketLifecycleScheduler = class {
 };
 var marketLifecycleScheduler = new MarketLifecycleScheduler();
 
-// server/routes/trading.ts
-var tradingRouter = Router3();
-tradingRouter.get("/pairs", (req, res) => {
-  for (const market of db.markets.values()) {
-    if (market.status === "ACTIVE" && !db.tradingPairs.has(market.id)) {
-      const baseAsset = db.assets.get(market.baseAssetId);
-      const quoteAsset = db.assets.get(market.quoteAssetId);
-      if (baseAsset && quoteAsset) {
-        const pair = {
-          id: market.id,
-          baseCurrency: baseAsset.symbol,
-          quoteCurrency: quoteAsset.symbol,
-          baseDecimals: baseAsset.decimals,
-          quoteDecimals: quoteAsset.decimals,
-          minOrderSize: market.minQuantity || "100000000",
-          maxOrderSize: (10000000n * 10n ** BigInt(baseAsset.decimals)).toString(),
-          // 10,000,000 tokens
-          makerFeeBps: market.makerFeeBps,
-          takerFeeBps: market.takerFeeBps,
-          isActive: true,
-          isHalted: false,
-          lastPrice: "0",
-          high24h: "0",
-          low24h: "0",
-          volume24h: "0",
-          quoteVolume24h: "0",
-          priceChange24h: "+0.00",
-          priceChangePercent24h: "0.00"
-        };
-        db.tradingPairs.set(market.id, pair);
-      }
-    }
-  }
-  for (const listing of db.listingRequests.values()) {
-    if (listing.status === "SCHEDULED") {
-      ensureScheduledPairEntry(listing);
-    }
-  }
-  db.ensureAssetsForTradingPairs();
-  db.recalculatePair24hStats();
-  const assetsBySymbol = new Map(
-    Array.from(db.assets.values()).map((a) => [a.symbol.toUpperCase(), a])
-  );
-  const enrichedPairs = Array.from(db.tradingPairs.values()).map((pair) => {
-    const market = db.markets.get(pair.id);
-    const listing = market ? db.listingRequests.get(market.listingRequestId) : Array.from(db.listingRequests.values()).find((l) => {
-      const base = db.assets.get(l.assetId);
-      const quote = db.assets.get(l.quoteAssetId);
-      return base && base.symbol === pair.baseCurrency && (!quote || quote.symbol === pair.quoteCurrency);
-    });
-    const baseAsset = assetsBySymbol.get(pair.baseCurrency.toUpperCase());
-    const quoteAsset = assetsBySymbol.get(pair.quoteCurrency.toUpperCase());
-    const isNew = pair.baseCurrency === "SOL" || listing !== void 0;
-    const resolvedScheduledAt = listing?.status === "SCHEDULED" ? listing.scheduledAt || pair.scheduledAt : pair.scheduledAt;
-    const resolvedListingStatus = pair.isDelisted ? "DELISTED" : listing?.status === "SCHEDULED" && !pair.isActive ? "SCHEDULED" : listing?.status || (pair.isActive ? "ACTIVE" : "PREPARING");
-    return {
-      ...pair,
-      baseName: baseAsset?.name || pair.baseCurrency,
-      baseLogoUrl: baseAsset?.logoUrl || "",
-      quoteLogoUrl: quoteAsset?.logoUrl || "",
-      isNewListing: isNew,
-      listingStatus: resolvedListingStatus,
-      depositEnabled: baseAsset?.depositEnabled ?? true,
-      withdrawalEnabled: baseAsset?.withdrawalEnabled ?? true,
-      depositOpenedAt: baseAsset?.depositOpenedAt || listing?.depositOpenedAt,
-      withdrawalOpenedAt: baseAsset?.withdrawalOpenedAt || listing?.withdrawalOpenedAt,
-      scheduledAt: resolvedScheduledAt,
-      isDelisted: Boolean(pair.isDelisted),
-      delistedAt: pair.delistedAt,
-      delistScheduledAt: pair.delistScheduledAt,
-      delistReason: pair.delistReason
-    };
-  });
-  res.json(enrichedPairs);
-});
-tradingRouter.get("/ticker/:pairId", (req, res) => {
-  db.recalculatePair24hStats(req.params.pairId);
-  const pair = db.tradingPairs.get(req.params.pairId);
-  if (!pair) return res.status(404).json({ error: "Pair tidak ditemukan" });
-  res.json(pair);
-});
-tradingRouter.get("/depth/:pairId", (req, res) => {
-  try {
-    const book = matchingEngine.getOrderBook(req.params.pairId);
-    const depth = book.getDepth(100);
-    res.json(depth);
-  } catch (err) {
-    res.status(404).json({ error: err.message });
-  }
-});
-tradingRouter.get("/trades/:pairId", (req, res) => {
-  const pairTrades = db.trades.filter((t) => t.pairId === req.params.pairId).slice(-50).reverse();
-  res.json(pairTrades);
-});
-tradingRouter.get("/candles/:pairId", (req, res) => {
-  try {
-    const pairId = req.params.pairId;
-    const resOrTf = req.query.timeframe || req.query.resolution || "15m";
-    const limit = req.query.limit ? parseInt(req.query.limit, 10) : req.query.countback ? parseInt(req.query.countback, 10) : 300;
-    const fromSec = req.query.from ? parseInt(req.query.from, 10) : void 0;
-    const toSec = req.query.to ? parseInt(req.query.to, 10) : void 0;
-    const candles = klineService.getBars(pairId, resOrTf, fromSec, toSec, limit);
-    if (req.query.format === "udf") {
-      if (!candles || candles.length === 0) {
-        return res.json({ s: "no_data", nextTime: void 0 });
-      }
-      return res.json({
-        s: "ok",
-        t: candles.map((c) => c.time),
-        o: candles.map((c) => c.open),
-        h: candles.map((c) => c.high),
-        l: candles.map((c) => c.low),
-        c: candles.map((c) => c.close),
-        v: candles.map((c) => c.volume)
-      });
-    }
-    res.json(candles);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-tradingRouter.get("/time", (_req, res) => {
-  res.send(Math.floor(Date.now() / 1e3).toString());
-});
-tradingRouter.get("/config", (_req, res) => {
-  res.json({
-    supports_search: true,
-    supports_group_request: false,
-    supports_marks: false,
-    supports_timescale_marks: false,
-    supports_time: true,
-    exchanges: [
-      { value: "DIMONEX", name: "DIMONEX Exchange", desc: "DIMONEX Centralized Exchange" }
-    ],
-    symbols_types: [
-      { name: "crypto", value: "crypto" }
-    ],
-    supported_resolutions: ["1", "5", "15", "60", "240", "1D", "1W"]
-  });
-});
-function resolvePairFromSymbol(sym) {
-  let clean = (sym || "").replace(/^DIMONEX:/i, "").trim();
-  let pair = db.tradingPairs.get(clean);
-  if (pair) return pair;
-  clean = clean.replace("/", "-").replace("_", "-");
-  pair = db.tradingPairs.get(clean);
-  if (pair) return pair;
-  for (const p of db.tradingPairs.values()) {
-    if (p.id.toLowerCase() === clean.toLowerCase() || `${p.baseCurrency}/${p.quoteCurrency}`.toLowerCase() === sym.toLowerCase() || `${p.baseCurrency}${p.quoteCurrency}`.toLowerCase() === sym.toLowerCase()) {
-      return p;
-    }
-  }
-  return db.tradingPairs.get("BTC-IDR") || Array.from(db.tradingPairs.values())[0];
-}
-tradingRouter.get("/search", (req, res) => {
-  const query = (req.query.query || "").toLowerCase();
-  const results = Array.from(db.tradingPairs.values()).filter((p) => !query || p.id.toLowerCase().includes(query) || p.baseCurrency.toLowerCase().includes(query)).map((p) => ({
-    symbol: p.id,
-    full_name: `DIMONEX:${p.id}`,
-    description: `${p.baseCurrency}/${p.quoteCurrency} Spot`,
-    exchange: "DIMONEX",
-    ticker: p.id,
-    type: "crypto"
-  }));
-  res.json(results);
-});
-tradingRouter.get("/symbols", (req, res) => {
-  const symbol = req.query.symbol;
-  const pair = resolvePairFromSymbol(symbol);
-  if (!pair) {
-    return res.status(404).json({ s: "error", errmsg: "Unknown symbol" });
-  }
-  const baseAsset = db.assets.get(pair.baseCurrency) || Array.from(db.assets.values()).find((a) => a.symbol === pair.baseCurrency);
-  const minMov = 1;
-  const quoteDec = pair.quoteDecimals !== void 0 && pair.quoteDecimals !== null ? pair.quoteDecimals : pair.quoteCurrency === "IDR" ? 2 : 6;
-  const priceScale = pair.quoteCurrency === "IDR" ? 1 : Math.pow(10, Math.min(8, Math.max(2, quoteDec)));
-  res.json({
-    name: pair.id,
-    ticker: pair.id,
-    description: `${pair.baseCurrency}/${pair.quoteCurrency} Spot Market`,
-    type: "crypto",
-    session: "24x7",
-    exchange: "DIMONEX",
-    listed_exchange: "DIMONEX",
-    timezone: "Asia/Jakarta",
-    minmov: minMov,
-    pricescale: priceScale,
-    minmov2: 0,
-    fractional: false,
-    has_intraday: true,
-    supported_resolutions: ["1", "5", "15", "60", "240", "1D", "1W"],
-    intraday_multipliers: ["1", "5", "15", "60", "240"],
-    has_empty_bars: true,
-    has_no_volume: false,
-    volume_precision: baseAsset?.decimals || 4,
-    data_status: "streaming",
-    currency_code: pair.quoteCurrency
-  });
-});
-tradingRouter.get("/history", (req, res) => {
-  try {
-    const symbol = req.query.symbol || "BTC-IDR";
-    const pair = resolvePairFromSymbol(symbol);
-    if (!pair) {
-      return res.json({ s: "no_data" });
-    }
-    const resolution = req.query.resolution || "15";
-    const fromSec = req.query.from ? parseInt(req.query.from, 10) : void 0;
-    const toSec = req.query.to ? parseInt(req.query.to, 10) : void 0;
-    const countback = req.query.countback ? parseInt(req.query.countback, 10) : 300;
-    const candles = klineService.getBars(pair.id, resolution, fromSec, toSec, countback);
-    if (!candles || candles.length === 0) {
-      return res.json({ s: "no_data" });
-    }
-    res.json({
-      s: "ok",
-      t: candles.map((c) => c.time),
-      o: candles.map((c) => c.open),
-      h: candles.map((c) => c.high),
-      l: candles.map((c) => c.low),
-      c: candles.map((c) => c.close),
-      v: candles.map((c) => c.volume)
-    });
-  } catch (err) {
-    res.status(500).json({ s: "error", errmsg: err.message });
-  }
-});
-tradingRouter.post("/order", requireAuth, (req, res) => {
-  try {
-    const user = req.user;
-    const { pairId, side, orderType, timeInForce, price, quantity, clientOrderId } = req.body;
-    if (!pairId || !side || !orderType || !quantity) {
-      return res.status(400).json({ error: "Parameter order tidak lengkap" });
-    }
-    const targetPair = db.tradingPairs.get(pairId);
-    if (targetPair?.isDelisted) {
-      return res.status(400).json({
-        error: `Market ${pairId} telah di-delisting dari bursa dan tidak lagi menerima order baru.`
-      });
-    }
-    if (targetPair && !targetPair.isActive && targetPair.scheduledAt && targetPair.scheduledAt > Date.now()) {
-      return res.status(400).json({
-        error: `Market ${pairId} dijadwalkan listing pada ${new Date(targetPair.scheduledAt).toLocaleString("id-ID")}. Trading akan dibuka otomatis setelah countdown selesai.`
-      });
-    }
-    const result = matchingEngine.placeOrder({
-      userId: user.id,
-      pairId,
-      side,
-      orderType,
-      timeInForce: timeInForce || "GTC",
-      price: price ? String(price) : void 0,
-      quantity: String(quantity),
-      clientOrderId
-    });
-    for (const trade of result.trades) {
-      marketWsService.broadcastTrade(trade);
-    }
-    marketWsService.broadcastOrderUpdate(result.takerOrder);
-    for (const maker of result.makerOrdersUpdated) {
-      marketWsService.broadcastOrderUpdate(maker);
-    }
-    marketWsService.broadcastDepth(pairId);
-    db.scheduleSave();
-    res.json({
-      success: true,
-      order: result.takerOrder,
-      trades: result.trades,
-      cancelledOrders: result.cancelledOrders
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-function performCancelOrder(orderId, user, pairId) {
-  const existingOrder = db.orders.get(orderId);
-  const resolvedPairId = existingOrder?.pairId || pairId;
-  if (!resolvedPairId) {
-    throw new Error("orderId tidak ditemukan atau pairId tidak tersedia");
-  }
-  const cancelledOrder = matchingEngine.cancelOrder(orderId, user.id, resolvedPairId, user.role);
-  marketWsService.broadcastOrderUpdate(cancelledOrder);
-  marketWsService.broadcastDepth(resolvedPairId);
-  db.scheduleSave();
-  return cancelledOrder;
-}
-tradingRouter.delete("/order/:orderId", requireAuth, (req, res) => {
-  try {
-    const user = req.user;
-    const orderId = req.params.orderId;
-    const pairId = req.query.pairId || req.body?.pairId;
-    const cancelledOrder = performCancelOrder(orderId, user, pairId);
-    res.json({
-      success: true,
-      message: "Order berhasil dibatalkan",
-      order: cancelledOrder
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-tradingRouter.post("/order/cancel", requireAuth, (req, res) => {
-  try {
-    const user = req.user;
-    const { orderId, pairId } = req.body;
-    if (!orderId) {
-      return res.status(400).json({ error: "orderId wajib diisi" });
-    }
-    const cancelledOrder = performCancelOrder(orderId, user, pairId);
-    res.json({
-      success: true,
-      message: "Order berhasil dibatalkan",
-      order: cancelledOrder
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-tradingRouter.get("/orders/open", requireAuth, (req, res) => {
-  const user = req.user;
-  const role = (user.role || "").toUpperCase();
-  const isMMOrAdmin = role === "MM" || role === "ADMIN" || role === "SUPERADMIN";
-  const userOpenOrders = Array.from(db.orders.values()).filter((o) => {
-    const isOwner = o.userId === user.id;
-    const isMMBotOrder = isMMOrAdmin && (o.clientOrderId?.startsWith("bot-") || o.clientOrderId?.includes("-ord-") || o.clientOrderId?.includes("-vol-"));
-    return (isOwner || isMMBotOrder) && (o.status === "NEW" || o.status === "PARTIALLY_FILLED");
-  }).sort((a, b) => b.createdAt - a.createdAt);
-  res.json(userOpenOrders);
-});
-tradingRouter.get("/orders/history", requireAuth, (req, res) => {
-  const user = req.user;
-  const userOrders = Array.from(db.orders.values()).filter((o) => o.userId === user.id).sort((a, b) => b.createdAt - a.createdAt).slice(0, 100);
-  res.json(userOrders);
-});
-tradingRouter.get("/reference-price/:pairId", async (req, res) => {
-  try {
-    const { priceAggregatorService: priceAggregatorService2 } = await Promise.resolve().then(() => (init_PriceAggregatorService(), PriceAggregatorService_exports));
-    const ref = priceAggregatorService2.getReferencePrice(req.params.pairId);
-    res.json(ref);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// server/routes/wallet.ts
-import { Router as Router4 } from "express";
-import crypto11 from "crypto";
+// server/services/PriceThresholdService.ts
 init_database();
 init_PrecisionMath();
-var walletRouter = Router4();
-walletRouter.get("/balances", requireAuth, (req, res) => {
-  const user = req.user;
-  const accounts = db.getUserAccounts(user.id);
-  const formattedBalances = accounts.map((acc) => {
-    const availBig = BigInt(acc.balanceAvailable);
-    const lockedBig = BigInt(acc.balanceLocked);
-    const totalBig = availBig + lockedBig;
-    const decimals = acc.currency === "IDR" ? 2 : acc.currency === "USDT" ? 6 : 8;
-    const humanAvail = PrecisionMath.formatFromUnits(availBig, decimals);
-    const humanLocked = PrecisionMath.formatFromUnits(lockedBig, decimals);
-    const humanTotal = PrecisionMath.formatFromUnits(totalBig, decimals);
-    return {
-      currency: acc.currency,
-      balanceAvailable: acc.balanceAvailable,
-      balanceLocked: acc.balanceLocked,
-      balanceTotal: totalBig.toString(),
-      available: humanAvail,
-      locked: humanLocked,
-      total: humanTotal,
-      displayAvailable: acc.currency === "IDR" ? PrecisionMath.formatIDRDisplay(availBig) : PrecisionMath.formatCryptoDisplay(availBig, acc.currency),
-      displayLocked: acc.currency === "IDR" ? PrecisionMath.formatIDRDisplay(lockedBig) : PrecisionMath.formatCryptoDisplay(lockedBig, acc.currency),
-      displayTotal: acc.currency === "IDR" ? PrecisionMath.formatIDRDisplay(totalBig) : PrecisionMath.formatCryptoDisplay(totalBig, acc.currency)
-    };
-  });
-  res.json(formattedBalances);
-});
-walletRouter.post("/idr/deposit-va", requireAuth, (req, res) => {
-  try {
-    const user = req.user;
-    const { bankCode, amount } = req.body;
-    if (!bankCode || !amount) {
-      return res.status(400).json({ error: "Bank dan nominal deposit wajib diisi" });
-    }
-    const prefixes = {
-      BCA: "88001",
-      MANDIRI: "89001",
-      BRI: "80001"
-    };
-    const prefix = prefixes[bankCode.toUpperCase()] || "88801";
-    const userSuffix = user.id.replace(/\D/g, "").slice(0, 10).padEnd(10, "7");
-    const vaNumber = `${prefix}${userSuffix}`;
-    const amountUnits = PrecisionMath.parseToUnits(amount, 2);
-    res.json({
-      vaNumber,
-      bankName: bankCode.toUpperCase(),
-      amount: amountUnits.toString(),
-      formattedAmount: PrecisionMath.formatIDRDisplay(amountUnits),
-      instructions: [
-        `1. Buka aplikasi m-Banking ${bankCode.toUpperCase()}`,
-        "2. Pilih menu Transfer > Virtual Account",
-        `3. Masukkan nomor Virtual Account: ${vaNumber}`,
-        `4. Pastikan nama penerima adalah DIMONEX - ${user.email}`,
-        `5. Masukkan nominal tepat: ${PrecisionMath.formatIDRDisplay(amountUnits)}`,
-        "6. Konfirmasi pembayaran"
-      ]
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-walletRouter.post("/idr/simulate-deposit-payment", requireAuth, (req, res) => {
-  try {
-    const user = req.user;
-    const { bankCode, amount } = req.body;
-    const amountUnits = PrecisionMath.parseToUnits(amount, 2);
-    if (amountUnits <= 0n) {
-      return res.status(400).json({ error: "Nominal deposit harus lebih dari 0" });
-    }
-    const txId = crypto11.randomUUID();
-    const idempotencyKey = `dep-idr-${txId}`;
-    LedgerService.deposit(user.id, "IDR", amountUnits, txId, idempotencyKey);
-    const fiatTx = {
-      id: txId,
-      userId: user.id,
-      type: "DEPOSIT",
-      method: `${bankCode.toUpperCase()}_VA`,
-      amount: amountUnits.toString(),
-      status: "COMPLETED",
-      accountNumber: `VA-${bankCode}-${user.id.slice(0, 6)}`,
-      accountHolderName: user.email,
-      idempotencyKey,
-      createdAt: Date.now()
-    };
-    db.fiatTransactions.set(fiatTx.id, fiatTx);
-    res.json({
-      success: true,
-      message: `Deposit ${PrecisionMath.formatIDRDisplay(amountUnits)} via ${bankCode} berhasil masuk ke saldo IDR Anda!`,
-      transaction: fiatTx
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-walletRouter.post("/idr/withdraw", requireAuth, (req, res) => {
-  try {
-    const user = req.user;
-    const { bankName, accountNumber, accountHolderName, amount } = req.body;
-    if (!bankName || !accountNumber || !accountHolderName || !amount) {
-      return res.status(400).json({ error: "Seluruh data penarikan wajib diisi lengkap" });
-    }
-    const kyc = db.kyc.get(user.id);
-    if (!kyc || kyc.status !== "approved") {
-      return res.status(403).json({ error: "Penarikan dana memerlukan akun KYC yang telah terverifikasi" });
-    }
-    const cleanHolder = accountHolderName.trim().toLowerCase();
-    const cleanKyc = kyc.fullName.trim().toLowerCase();
-    if (cleanHolder !== cleanKyc) {
-      return res.status(400).json({
-        error: `Nama pemilik rekening bank (${accountHolderName}) TIDAK COCOK dengan nama KYC Anda (${kyc.fullName}). Penarikan ke rekening pihak ketiga dilarang keras demi kepatuhan regulasi.`
-      });
-    }
-    const amountUnits = PrecisionMath.parseToUnits(amount, 2);
-    const userAcc = db.createOrGetAccount(user.id, "IDR");
-    const avail = BigInt(userAcc.balanceAvailable);
-    if (avail < amountUnits) {
-      return res.status(400).json({ error: "Saldo IDR yang tersedia tidak mencukupi" });
-    }
-    LedgerService.lockBalance(user.id, "IDR", amountUnits);
-    const txId = crypto11.randomUUID();
-    const idempotencyKey = `wd-idr-${txId}`;
-    const isLarge = amountUnits > 1000000000n;
-    const status = isLarge ? "PENDING" : "COMPLETED";
-    if (!isLarge) {
-      const locked = BigInt(userAcc.balanceLocked);
-      userAcc.balanceLocked = (locked - amountUnits).toString();
-      userAcc.version += 1;
-      userAcc.updatedAt = Date.now();
-    }
-    const fiatTx = {
-      id: txId,
-      userId: user.id,
-      type: "WITHDRAW",
-      method: "BANK_TRANSFER",
-      amount: amountUnits.toString(),
-      status,
-      accountNumber,
-      accountHolderName: kyc.fullName,
-      idempotencyKey,
-      createdAt: Date.now()
-    };
-    db.fiatTransactions.set(fiatTx.id, fiatTx);
-    res.json({
-      success: true,
-      message: isLarge ? "Permintaan penarikan nominal besar telah masuk antrean persetujuan tim kepatuhan DIMONEX" : "Penarikan IDR berhasil diproses ke rekening bank Anda",
-      transaction: fiatTx
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-walletRouter.get("/supported-assets", (req, res) => {
-  const currencies = db.getAllCurrencies();
-  const assetsList = currencies.map((curr) => {
-    const clean = curr.toUpperCase();
-    const isFiat = clean === "IDR";
-    const decimals = getCurrencyDecimals(clean);
-    const networks = getCurrencyNetworks(clean);
-    let name = clean;
-    for (const a of db.assets.values()) {
-      if (a.symbol.toUpperCase() === clean) {
-        name = a.name;
-        break;
-      }
-    }
-    if (name === clean) {
-      if (clean === "BTC") name = "Bitcoin";
-      else if (clean === "ETH") name = "Ethereum";
-      else if (clean === "USDT") name = "Tether USD";
-      else if (clean === "SOL") name = "Solana";
-      else if (clean === "TON") name = "The Open Network";
-      else if (clean === "DOGE") name = "Dogecoin";
-      else if (clean === "IDR") name = "Indonesian Rupiah";
-    }
-    let presets = [
-      { label: `1 ${clean}`, value: "1" },
-      { label: `5 ${clean}`, value: "5" },
-      { label: `10 ${clean}`, value: "10" },
-      { label: `50 ${clean}`, value: "50" }
-    ];
-    if (clean === "IDR") {
-      presets = [
-        { label: "Rp 5 Juta", value: "5000000" },
-        { label: "Rp 10 Juta", value: "10000000" },
-        { label: "Rp 50 Juta", value: "50000000" },
-        { label: "Rp 100 Juta", value: "100000000" }
-      ];
-    } else if (clean === "BTC") {
-      presets = [
-        { label: "0.01 BTC", value: "0.01" },
-        { label: "0.05 BTC", value: "0.05" },
-        { label: "0.1 BTC", value: "0.1" },
-        { label: "0.5 BTC", value: "0.5" }
-      ];
-    } else if (clean === "ETH") {
-      presets = [
-        { label: "0.2 ETH", value: "0.2" },
-        { label: "0.5 ETH", value: "0.5" },
-        { label: "1.0 ETH", value: "1.0" },
-        { label: "2.0 ETH", value: "2.0" }
-      ];
-    } else if (clean === "USDT") {
-      presets = [
-        { label: "100 USDT", value: "100" },
-        { label: "500 USDT", value: "500" },
-        { label: "1,000 USDT", value: "1000" },
-        { label: "5,000 USDT", value: "5000" }
-      ];
-    } else if (clean === "SOL") {
-      presets = [
-        { label: "2 SOL", value: "2" },
-        { label: "5 SOL", value: "5" },
-        { label: "10 SOL", value: "10" },
-        { label: "25 SOL", value: "25" }
-      ];
-    } else if (clean === "TON") {
-      presets = [
-        { label: "10 TON", value: "10" },
-        { label: "50 TON", value: "50" },
-        { label: "100 TON", value: "100" },
-        { label: "500 TON", value: "500" }
-      ];
-    } else if (clean === "DOGE") {
-      presets = [
-        { label: "500 DOGE", value: "500" },
-        { label: "1,000 DOGE", value: "1000" },
-        { label: "5,000 DOGE", value: "5000" },
-        { label: "10,000 DOGE", value: "10000" }
-      ];
-    }
-    return {
-      symbol: clean,
-      name,
-      isFiat,
-      decimals,
-      networks,
-      presets,
-      status: "ACTIVE",
-      depositEnabled: true,
-      withdrawalEnabled: true
-    };
-  });
-  res.json(assetsList);
-});
-function getCurrencyDecimals(currency) {
-  const clean = currency.toUpperCase();
-  if (clean === "IDR") return 2;
-  if (clean === "USDT" || clean === "USDC") return 6;
-  for (const asset of db.assets.values()) {
-    if (asset.symbol.toUpperCase() === clean) return asset.decimals;
-  }
-  for (const pair of db.tradingPairs.values()) {
-    if (pair.baseCurrency.toUpperCase() === clean) return pair.baseDecimals;
-    if (pair.quoteCurrency.toUpperCase() === clean) return pair.quoteDecimals;
-  }
-  return 8;
-}
-function getCurrencyNetworks(currency) {
-  const clean = currency.toUpperCase();
-  if (clean === "IDR") {
-    return [
-      { id: "VA_BCA", name: "BCA Virtual Account", fee: "Rp 0", minDeposit: "Rp 50.000", confirmations: 1 },
-      { id: "VA_MANDIRI", name: "Mandiri Virtual Account", fee: "Rp 0", minDeposit: "Rp 50.000", confirmations: 1 },
-      { id: "VA_BRI", name: "BRI Virtual Account", fee: "Rp 0", minDeposit: "Rp 50.000", confirmations: 1 }
-    ];
-  }
-  if (clean === "USDT") {
-    return [
-      { id: "TRC20", name: "Tron (TRC20)", fee: "1.00 USDT", minDeposit: "10.00 USDT", confirmations: 1 },
-      { id: "ERC20", name: "Ethereum (ERC20)", fee: "3.50 USDT", minDeposit: "20.00 USDT", confirmations: 12 },
-      { id: "ARBITRUM", name: "Arbitrum One (L2)", fee: "0.20 USDT", minDeposit: "5.00 USDT", confirmations: 20 },
-      { id: "SOLANA", name: "Solana (SPL)", fee: "0.50 USDT", minDeposit: "5.00 USDT", confirmations: 32 }
-    ];
-  }
-  if (clean === "BTC") {
-    return [
-      { id: "BITCOIN", name: "Bitcoin (Native SegWit)", fee: "0.0001 BTC", minDeposit: "0.0005 BTC", confirmations: 2 },
-      { id: "LIGHTNING", name: "Lightning Network", fee: "0.00001 BTC", minDeposit: "0.0001 BTC", confirmations: 1 },
-      { id: "BEP20", name: "BNB Smart Chain (BEP20)", fee: "0.00005 BTC", minDeposit: "0.0002 BTC", confirmations: 15 }
-    ];
-  }
-  if (clean === "ETH") {
-    return [
-      { id: "ERC20", name: "Ethereum (ERC20)", fee: "0.0015 ETH", minDeposit: "0.005 ETH", confirmations: 12 },
-      { id: "ARBITRUM", name: "Arbitrum One (L2)", fee: "0.0001 ETH", minDeposit: "0.001 ETH", confirmations: 20 },
-      { id: "OPTIMISM", name: "OP Mainnet", fee: "0.0001 ETH", minDeposit: "0.001 ETH", confirmations: 20 }
-    ];
-  }
-  if (clean === "SOL") {
-    return [
-      { id: "SOLANA", name: "Solana (SPL)", fee: "0.005 SOL", minDeposit: "0.01 SOL", confirmations: 32 }
-    ];
-  }
-  if (clean === "TON") {
-    return [
-      { id: "TON", name: "The Open Network (TON)", fee: "0.05 TON", minDeposit: "0.1 TON", confirmations: 12 }
-    ];
-  }
-  if (clean === "DOGE") {
-    return [
-      { id: "DOGECOIN", name: "Dogecoin Network", fee: "2.0 DOGE", minDeposit: "5.0 DOGE", confirmations: 10 }
-    ];
-  }
-  return [
-    { id: `${clean}_MAINNET`, name: `${clean} Native Network`, fee: `0.01 ${clean}`, minDeposit: `0.1 ${clean}`, confirmations: 12 },
-    { id: "ERC20", name: "Ethereum (ERC20)", fee: `0.05 ${clean}`, minDeposit: `0.5 ${clean}`, confirmations: 12 }
-  ];
-}
-function generateDeterministicCryptoAddress(userId, currency, network) {
-  const clean = currency.toUpperCase();
-  const userHash = crypto11.createHash("sha256").update(userId + clean + (network || "")).digest("hex");
-  if (clean === "BTC") {
-    return { address: `bc1q${userHash.slice(0, 38)}`, chain: "Bitcoin Native SegWit" };
-  }
-  if (clean === "ETH" || clean === "USDT" && network === "ERC20" || network === "ERC20" || network === "ARBITRUM" || network === "OPTIMISM") {
-    return { address: `0x${userHash.slice(0, 40)}`, chain: "Ethereum (ERC-20)" };
-  }
-  if (clean === "USDT" || network === "TRC20" || clean === "TRX") {
-    return { address: `T${userHash.slice(0, 33).toUpperCase()}`, chain: "TRON (TRC-20)" };
-  }
-  if (clean === "SOL" || network === "SOLANA") {
-    return { address: `${userHash.slice(0, 32)}sol`, chain: "Solana (SPL)" };
-  }
-  if (clean === "TON") {
-    return { address: `EQD${userHash.slice(0, 40)}`, chain: "The Open Network (TON)" };
-  }
-  if (clean === "DOGE") {
-    return { address: `D${userHash.slice(0, 33)}`, chain: "Dogecoin Network" };
-  }
-  return { address: `0x${userHash.slice(0, 40)}`, chain: `${clean} Mainnet` };
-}
-walletRouter.get("/crypto/deposit-address/:currency", requireAuth, (req, res) => {
-  const user = req.user;
-  const currency = req.params.currency.toUpperCase();
-  const network = req.query.network || "";
-  const { address, chain } = generateDeterministicCryptoAddress(user.id, currency, network);
-  const minDeposits = {
-    BTC: "0.0001 BTC",
-    ETH: "0.005 ETH",
-    USDT: "10.00 USDT",
-    SOL: "0.05 SOL",
-    TON: "0.1 TON",
-    DOGE: "5.0 DOGE"
-  };
-  const confirmations = {
-    BTC: 3,
-    ETH: 12,
-    USDT: 20,
-    SOL: 32,
-    TON: 12,
-    DOGE: 10
-  };
-  res.json({
-    currency,
-    chain,
-    address,
-    minDeposit: minDeposits[currency] || `0.1 ${currency}`,
-    confirmationsRequired: confirmations[currency] || 12
-  });
-});
-walletRouter.post("/crypto/simulate-deposit-block", requireAuth, (req, res) => {
-  try {
-    const user = req.user;
-    const { currency, amount, network } = req.body;
-    if (!currency || !amount) {
-      return res.status(400).json({ error: "Mata uang kripto dan nominal wajib diisi" });
-    }
-    const cleanCurr = currency.toUpperCase();
-    const decimals = getCurrencyDecimals(cleanCurr);
-    const amountUnits = PrecisionMath.parseToUnits(amount, decimals);
-    if (amountUnits <= 0n) {
-      return res.status(400).json({ error: "Nominal deposit harus lebih dari 0" });
-    }
-    const txHash = "0x" + crypto11.randomBytes(32).toString("hex");
-    const txId = crypto11.randomUUID();
-    LedgerService.deposit(user.id, cleanCurr, amountUnits, txId, `dep-crypto-${txId}`);
-    const { address, chain } = generateDeterministicCryptoAddress(user.id, cleanCurr, network);
-    const cryptoTx = {
-      id: txId,
-      userId: user.id,
-      type: "DEPOSIT",
-      currency: cleanCurr,
-      chain,
-      address,
-      amount: amountUnits.toString(),
-      txHash,
-      status: "COMPLETED",
-      confirmations: 12,
-      requiredConfirmations: 12,
-      createdAt: Date.now()
-    };
-    db.cryptoTransactions.set(cryptoTx.id, cryptoTx);
-    res.json({
-      success: true,
-      message: `Deposit ${amount} ${cleanCurr} berhasil dikonfirmasi di blockchain (12/12 blok)!`,
-      transaction: cryptoTx
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-walletRouter.post("/crypto/withdraw", requireAuth, (req, res) => {
-  try {
-    const user = req.user;
-    const { currency, address, amount, network } = req.body;
-    if (!currency || !address || !amount) {
-      return res.status(400).json({ error: "Mata uang, alamat penarikan, dan nominal wajib diisi" });
-    }
-    const cleanCurr = currency.toUpperCase();
-    const decimals = getCurrencyDecimals(cleanCurr);
-    const amountUnits = PrecisionMath.parseToUnits(amount, decimals);
-    if (amountUnits <= 0n) {
-      return res.status(400).json({ error: "Nominal penarikan harus lebih dari 0" });
-    }
-    const userAcc = db.createOrGetAccount(user.id, cleanCurr);
-    const avail = BigInt(userAcc.balanceAvailable);
-    if (avail < amountUnits) {
-      return res.status(400).json({ error: `Saldo ${cleanCurr} tidak mencukupi untuk penarikan ini` });
-    }
-    LedgerService.lockBalance(user.id, cleanCurr, amountUnits);
-    const txId = crypto11.randomUUID();
-    const { chain } = generateDeterministicCryptoAddress(user.id, cleanCurr, network);
-    const cryptoTx = {
-      id: txId,
-      userId: user.id,
-      type: "WITHDRAW",
-      currency: cleanCurr,
-      chain,
-      address,
-      amount: amountUnits.toString(),
-      txHash: "0x" + crypto11.randomBytes(32).toString("hex"),
-      status: "PENDING",
-      // Cold wallet approval queue
-      confirmations: 0,
-      requiredConfirmations: 12,
-      createdAt: Date.now()
-    };
-    db.cryptoTransactions.set(cryptoTx.id, cryptoTx);
-    res.json({
-      success: true,
-      message: `Permintaan penarikan ${amount} ${cleanCurr} telah masuk antrean persetujuan penarikan cold wallet`,
-      transaction: cryptoTx
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-walletRouter.get("/transactions", requireAuth, (req, res) => {
-  const user = req.user;
-  const fiatTxs = Array.from(db.fiatTransactions.values()).filter((tx) => tx.userId === user.id);
-  const cryptoTxs = Array.from(db.cryptoTransactions.values()).filter((tx) => tx.userId === user.id);
-  const formattedTxs = [
-    ...fiatTxs.map((tx) => ({
-      id: tx.id,
-      type: tx.type === "DEPOSIT" ? "DEPOSIT" : "WITHDRAW",
-      asset: "IDR",
-      amount: PrecisionMath.formatIDRDisplay(BigInt(tx.amount)),
-      rawAmount: tx.amount,
-      status: tx.status,
-      time: new Date(tx.createdAt).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" }),
-      timestamp: tx.createdAt,
-      txid: tx.accountNumber || tx.idempotencyKey || tx.id,
-      method: tx.method
-    })),
-    ...cryptoTxs.map((tx) => ({
-      id: tx.id,
-      type: tx.type === "DEPOSIT" ? "DEPOSIT" : "WITHDRAW",
-      asset: tx.currency,
-      amount: PrecisionMath.formatCryptoDisplay(BigInt(tx.amount), tx.currency),
-      rawAmount: tx.amount,
-      status: tx.status,
-      time: new Date(tx.createdAt).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" }),
-      timestamp: tx.createdAt,
-      txid: tx.txHash ? `${tx.txHash.slice(0, 8)}...${tx.txHash.slice(-6)}` : tx.id,
-      method: tx.chain
-    }))
-  ].sort((a, b) => b.timestamp - a.timestamp);
-  res.json(formattedTxs);
-});
-walletRouter.get("/diagnostics", requireAuth, (req, res) => {
-  try {
-    const user = req.user;
-    const currencies = ["IDR", "BTC", "ETH", "USDT", "SOL"];
-    const accounts = db.getUserAccounts(user.id);
-    const userOpenOrders = Array.from(db.orders.values()).filter(
-      (o) => o.userId === user.id && (o.status === "NEW" || o.status === "PARTIALLY_FILLED")
-    );
-    const userBots = Array.from(db.botInstances.values()).filter(
-      (b) => b.ownerUserId === user.id || b.accountId === user.id
-    );
-    const engineLockedPerCurrency = {
-      IDR: 0n,
-      BTC: 0n,
-      ETH: 0n,
-      USDT: 0n,
-      SOL: 0n
-    };
-    userOpenOrders.forEach((o) => {
-      const curr = o.lockedCurrency;
-      if (curr && engineLockedPerCurrency[curr] !== void 0) {
-        engineLockedPerCurrency[curr] += BigInt(o.lockedAmount || "0");
-      }
-    });
-    let totalDriftCount = 0;
-    const currencyDiagnostics = currencies.map((curr) => {
-      const acc = accounts.find((a) => a.currency === curr) || db.createOrGetAccount(user.id, curr);
-      const ledgerAvail = BigInt(acc.balanceAvailable);
-      const ledgerLocked = BigInt(acc.balanceLocked);
-      const ledgerTotal = ledgerAvail + ledgerLocked;
-      const engineLocked = engineLockedPerCurrency[curr] || 0n;
-      const drift = ledgerLocked - engineLocked;
-      const isSynced = drift === 0n;
-      if (!isSynced) totalDriftCount++;
-      const decimals = curr === "IDR" ? 2 : curr === "USDT" ? 6 : 8;
-      return {
-        currency: curr,
-        ledgerAvailable: PrecisionMath.formatFromUnits(ledgerAvail, decimals),
-        ledgerLocked: PrecisionMath.formatFromUnits(ledgerLocked, decimals),
-        ledgerTotal: PrecisionMath.formatFromUnits(ledgerTotal, decimals),
-        engineLocked: PrecisionMath.formatFromUnits(engineLocked, decimals),
-        drift: PrecisionMath.formatFromUnits(drift, decimals),
-        rawLedgerAvailable: ledgerAvail.toString(),
-        rawLedgerLocked: ledgerLocked.toString(),
-        rawEngineLocked: engineLocked.toString(),
-        rawDrift: drift.toString(),
-        isSynced
-      };
-    });
-    const userAuditEntries = db.auditLogs.filter((l) => l.actorId === user.id).slice(-10).map((l) => ({
-      id: l.id,
-      action: l.action,
-      resource: l.resource,
-      timestamp: l.createdAt,
-      formattedTime: new Date(l.createdAt).toLocaleTimeString("id-ID"),
-      status: "LOGGED",
-      details: l.details
-    }));
-    res.json({
-      timestamp: Date.now(),
-      status: totalDriftCount === 0 ? "SYNCHRONIZED" : "DRIFT_DETECTED",
-      totalDriftCount,
-      currencies: currencyDiagnostics,
-      openOrders: userOpenOrders.map((o) => ({
-        id: o.id,
-        pairId: o.pairId,
-        side: o.side,
-        type: o.orderType,
-        price: o.price,
-        quantity: o.quantity,
-        lockedAmount: o.lockedAmount,
-        lockedCurrency: o.lockedCurrency,
-        status: o.status,
-        createdAt: o.createdAt
-      })),
-      activeBots: userBots.map((b) => ({
-        id: b.id,
-        name: b.name,
-        strategy: b.botType,
-        pairId: b.pairId,
-        status: b.status,
-        allocatedBalance: b.depthLiquidityConfig?.maximum_total_bid_value_idr || "0",
-        activeOrdersCount: b.depthLiquidityConfig?.activeOrderIds?.length || 0,
-        tradesCount: b.stats?.totalTrades || 0,
-        realizedPnl: b.stats?.executedVolume || "0"
-      })),
-      recentAuditLogs: userAuditEntries
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-walletRouter.post("/diagnostics/reconcile", requireAuth, (req, res) => {
-  try {
-    const user = req.user;
-    const currencies = ["IDR", "BTC", "ETH", "USDT", "SOL"];
-    const accounts = db.getUserAccounts(user.id);
-    const userOpenOrders = Array.from(db.orders.values()).filter(
-      (o) => o.userId === user.id && (o.status === "NEW" || o.status === "PARTIALLY_FILLED")
-    );
-    const engineLockedPerCurrency = {
-      IDR: 0n,
-      BTC: 0n,
-      ETH: 0n,
-      USDT: 0n,
-      SOL: 0n
-    };
-    userOpenOrders.forEach((o) => {
-      const curr = o.lockedCurrency;
-      if (curr && engineLockedPerCurrency[curr] !== void 0) {
-        engineLockedPerCurrency[curr] += BigInt(o.lockedAmount || "0");
-      }
-    });
-    let reconciledCount = 0;
-    currencies.forEach((curr) => {
-      const acc = accounts.find((a) => a.currency === curr);
-      if (!acc) return;
-      const currentLocked = BigInt(acc.balanceLocked);
-      const trueEngineLocked = engineLockedPerCurrency[curr] || 0n;
-      if (currentLocked !== trueEngineLocked) {
-        const drift = currentLocked - trueEngineLocked;
-        const currentAvail = BigInt(acc.balanceAvailable);
-        acc.balanceAvailable = (currentAvail + drift).toString();
-        acc.balanceLocked = trueEngineLocked.toString();
-        acc.version += 1;
-        acc.updatedAt = Date.now();
-        reconciledCount++;
-      }
-    });
-    db.scheduleSave();
-    res.json({
-      success: true,
-      message: reconciledCount > 0 ? `Berhasil merekonsiliasi ${reconciledCount} akun mata uang dengan buku order engine.` : "Seluruh saldo ledger sudah 100% sinkron dengan buku order engine.",
-      reconciledCount
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-walletRouter.get("/pnl-analytics", requireAuth, (req, res) => {
-  try {
-    const user = req.user;
-    const requestedMonth = req.query.month || (/* @__PURE__ */ new Date()).toLocaleDateString("sv-SE", { timeZone: "Asia/Jakarta" }).slice(0, 7);
-    const requestedCurrency = (req.query.currency || "IDR").toUpperCase();
-    let userTrades = db.trades.filter((t) => t.makerUserId === user.id || t.takerUserId === user.id);
-    if (userTrades.length === 0) {
-      const now = Date.now();
-      const testCounterparty = "usr-admin-0000-0000-000000000001";
-      const samplePairs = [
-        { id: "BTC-IDR", baseDec: 8, basePrice: 145000000000n, qtyBase: 12000000n },
-        // 0.12 BTC
-        { id: "ETH-IDR", baseDec: 8, basePrice: 4850000000n, qtyBase: 100000000n },
-        // 1.00 ETH
-        { id: "USDT-IDR", baseDec: 6, basePrice: 1645000n, qtyBase: 250000000n },
-        // 250 USDT
-        { id: "SOL-IDR", baseDec: 8, basePrice: 285000000n, qtyBase: 400000000n }
-        // 4.0 SOL
-      ];
-      for (let dayOffset = 25; dayOffset >= 0; dayOffset--) {
-        const dayBase = now - dayOffset * 864e5;
-        if (dayOffset === 18 || dayOffset === 11 || dayOffset === 4) continue;
-        const numTrades = 2 + dayOffset % 2;
-        const isProfitDay = dayOffset % 4 !== 3;
-        for (let tIdx = 0; tIdx < numTrades; tIdx++) {
-          const p = samplePairs[(dayOffset + tIdx) % samplePairs.length];
-          const tradeTime = dayBase + tIdx * 9e6 + 18e6;
-          const varBps = isProfitDay ? BigInt(18 + (dayOffset * 7 + tIdx * 11) % 40) : -BigInt(14 + (dayOffset * 5 + tIdx * 9) % 30);
-          const execPrice = p.basePrice + p.basePrice * varBps / 10000n;
-          const qty = p.qtyBase + BigInt((dayOffset * 4 + tIdx * 5) % 35) * p.qtyBase / 100n;
-          const quoteVol = PrecisionMath.calculateQuoteAmount(qty, p.baseDec, execPrice);
-          const makerFee = PrecisionMath.calculateFee(quoteVol, 10);
-          const takerFee = PrecisionMath.calculateFee(quoteVol, 20);
-          const isBuy = tIdx % 2 === 0;
-          const seededTrade = {
-            id: `usr-seed-${user.id.slice(0, 8)}-${dayOffset}-${tIdx}-${crypto11.randomUUID().slice(0, 6)}`,
-            pairId: p.id,
-            makerOrderId: `usr-ord-m-${dayOffset}-${tIdx}`,
-            takerOrderId: `usr-ord-t-${dayOffset}-${tIdx}`,
-            makerUserId: isBuy ? testCounterparty : user.id,
-            takerUserId: isBuy ? user.id : testCounterparty,
-            price: execPrice.toString(),
-            quantity: qty.toString(),
-            quoteVolume: quoteVol.toString(),
-            makerFee: makerFee.toString(),
-            takerFee: takerFee.toString(),
-            takerSide: isBuy ? "BUY" : "SELL",
-            createdAt: tradeTime
-          };
-          db.trades.push(seededTrade);
-        }
-      }
-      db.scheduleSave();
-      userTrades = db.trades.filter((t) => t.makerUserId === user.id || t.takerUserId === user.id);
-    }
-    userTrades.sort((a, b) => a.createdAt - b.createdAt);
-    const usdtPair = db.tradingPairs.get("USDT-IDR");
-    const usdtRate = usdtPair && BigInt(usdtPair.lastPrice) > 0n ? Number(BigInt(usdtPair.lastPrice)) / 100 : 16450;
-    const positions = /* @__PURE__ */ new Map();
-    const dailyMap = /* @__PURE__ */ new Map();
-    let totalRealizedPnlIdr = 0;
-    let totalRealizedPnlUsdt = 0;
-    let grossProfitIdr = 0;
-    let grossLossIdr = 0;
-    let totalTradesCount = 0;
-    let totalWinsCount = 0;
-    let totalLossCount = 0;
-    let totalVolumeIdr = 0;
-    let totalVolumeUsdt = 0;
-    let totalFeesIdr = 0;
-    let totalFeesUsdt = 0;
-    for (const t of userTrades) {
-      const isUserBuyer = t.takerUserId === user.id && t.takerSide === "BUY" || t.makerUserId === user.id && t.takerSide === "SELL";
-      const isTaker = t.takerUserId === user.id;
-      const pair = db.tradingPairs.get(t.pairId);
-      const quoteCurr = pair?.quoteCurrency || (t.pairId.endsWith("-USDT") ? "USDT" : "IDR");
-      const baseCurr = pair?.baseCurrency || t.pairId.split("-")[0];
-      const baseDec = pair?.baseDecimals || 8;
-      const quoteDec = pair?.quoteDecimals || (quoteCurr === "IDR" ? 2 : 6);
-      const priceUnits = BigInt(t.price);
-      const qtyUnits = BigInt(t.quantity);
-      const quoteVolUnits = BigInt(t.quoteVolume);
-      const feeUnits = isTaker ? BigInt(t.takerFee) : BigInt(t.makerFee);
-      const qtyNum = Number(qtyUnits) / 10 ** baseDec;
-      const quoteVolNum = Number(quoteVolUnits) / 10 ** quoteDec;
-      const feeNum = Number(feeUnits) / 10 ** quoteDec;
-      const valIdr = quoteCurr === "IDR" ? quoteVolNum : quoteVolNum * usdtRate;
-      const valUsdt = quoteCurr === "USDT" ? quoteVolNum : quoteVolNum / usdtRate;
-      const feeIdr = quoteCurr === "IDR" ? feeNum : feeNum * usdtRate;
-      const feeUsdt = quoteCurr === "USDT" ? feeNum : feeNum / usdtRate;
-      let tradePnlIdr = 0;
-      let tradePnlUsdt = 0;
-      const pos = positions.get(baseCurr) || { qty: 0, costIdr: 0, costUsdt: 0, totalBoughtQty: 0, totalSoldQty: 0 };
-      if (isUserBuyer) {
-        pos.qty += qtyNum;
-        pos.totalBoughtQty += qtyNum;
-        pos.costIdr += valIdr + feeIdr;
-        pos.costUsdt += valUsdt + feeUsdt;
-        positions.set(baseCurr, pos);
-      } else {
-        pos.totalSoldQty += qtyNum;
-        if (pos.qty > 0) {
-          const ratio = Math.min(1, qtyNum / pos.qty);
-          const soldCostIdr = pos.costIdr * ratio;
-          const soldCostUsdt = pos.costUsdt * ratio;
-          tradePnlIdr = valIdr - feeIdr - soldCostIdr;
-          tradePnlUsdt = valUsdt - feeUsdt - soldCostUsdt;
-          pos.qty = Math.max(0, pos.qty - qtyNum);
-          pos.costIdr = Math.max(0, pos.costIdr - soldCostIdr);
-          pos.costUsdt = Math.max(0, pos.costUsdt - soldCostUsdt);
-          positions.set(baseCurr, pos);
-        } else {
-          const benchmarkCostIdr = valIdr * 0.982;
-          const benchmarkCostUsdt = valUsdt * 0.982;
-          tradePnlIdr = valIdr - feeIdr - benchmarkCostIdr;
-          tradePnlUsdt = valUsdt - feeUsdt - benchmarkCostUsdt;
-        }
-        totalRealizedPnlIdr += tradePnlIdr;
-        totalRealizedPnlUsdt += tradePnlUsdt;
-        if (tradePnlIdr > 0) {
-          grossProfitIdr += tradePnlIdr;
-          totalWinsCount++;
-        } else if (tradePnlIdr < 0) {
-          grossLossIdr += Math.abs(tradePnlIdr);
-          totalLossCount++;
-        }
-      }
-      totalTradesCount++;
-      totalVolumeIdr += valIdr;
-      totalVolumeUsdt += valUsdt;
-      totalFeesIdr += feeIdr;
-      totalFeesUsdt += feeUsdt;
-      const dateKey = new Date(t.createdAt).toLocaleDateString("sv-SE", { timeZone: "Asia/Jakarta" });
-      let bucket = dailyMap.get(dateKey);
-      if (!bucket) {
-        bucket = {
-          date: dateKey,
-          timestamp: t.createdAt,
-          pnlIdr: 0,
-          pnlUsdt: 0,
-          volumeIdr: 0,
-          volumeUsdt: 0,
-          feesIdr: 0,
-          feesUsdt: 0,
-          tradesCount: 0,
-          winCount: 0,
-          lossCount: 0,
-          returnPct: 0,
-          trades: []
-        };
-        dailyMap.set(dateKey, bucket);
-      }
-      bucket.pnlIdr += tradePnlIdr;
-      bucket.pnlUsdt += tradePnlUsdt;
-      bucket.volumeIdr += valIdr;
-      bucket.volumeUsdt += valUsdt;
-      bucket.feesIdr += feeIdr;
-      bucket.feesUsdt += feeUsdt;
-      bucket.tradesCount++;
-      if (tradePnlIdr > 0) bucket.winCount++;
-      if (tradePnlIdr < 0) bucket.lossCount++;
-      const formattedPrice = quoteCurr === "IDR" ? PrecisionMath.formatIDRDisplay(priceUnits) : `${PrecisionMath.formatFromUnits(priceUnits, quoteDec)} USDT`;
-      const formattedQty = `${PrecisionMath.formatFromUnits(qtyUnits, baseDec)} ${baseCurr}`;
-      const formattedQuoteVol = quoteCurr === "IDR" ? PrecisionMath.formatIDRDisplay(quoteVolUnits) : `${PrecisionMath.formatFromUnits(quoteVolUnits, quoteDec)} USDT`;
-      bucket.trades.push({
-        id: t.id,
-        pairId: t.pairId,
-        side: isUserBuyer ? "BUY" : "SELL",
-        price: formattedPrice,
-        rawPrice: t.price,
-        quantity: formattedQty,
-        rawQuantity: t.quantity,
-        quoteVolume: formattedQuoteVol,
-        rawQuoteVolume: t.quoteVolume,
-        pnlIdr: Math.round(tradePnlIdr),
-        pnlUsdt: Number(tradePnlUsdt.toFixed(2)),
-        feeIdr: Math.round(feeIdr),
-        feeUsdt: Number(feeUsdt.toFixed(2)),
-        time: new Date(t.createdAt).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }),
-        timestamp: t.createdAt
-      });
-    }
-    const userAccounts = db.getUserAccounts(user.id);
-    let totalUnrealizedPnlIdr = 0;
-    let totalUnrealizedPnlUsdt = 0;
-    let totalPortfolioEstIdr = 0;
-    const assetBreakdown = [];
-    userAccounts.forEach((acc) => {
-      const cleanCurr = acc.currency.toUpperCase();
-      const availUnits = BigInt(acc.balanceAvailable);
-      const lockedUnits = BigInt(acc.balanceLocked);
-      const totalUnits = availUnits + lockedUnits;
-      const dec = getCurrencyDecimals(cleanCurr);
-      const holding = Number(totalUnits) / 10 ** dec;
-      if (cleanCurr === "IDR") {
-        totalPortfolioEstIdr += holding;
-        return;
-      }
-      const pair = db.tradingPairs.get(`${cleanCurr}-IDR`);
-      let curPriceIdr = 0;
-      if (pair && BigInt(pair.lastPrice) > 0n) {
-        curPriceIdr = Number(BigInt(pair.lastPrice)) / 100;
-      } else {
-        const benchmarks = {
-          BTC: 145e7,
-          ETH: 485e5,
-          SOL: 285e4,
-          USDT: 16450,
-          TON: 85e3,
-          DOGE: 5500
-        };
-        curPriceIdr = benchmarks[cleanCurr] || 5e4;
-      }
-      const curPriceUsdt = curPriceIdr / usdtRate;
-      const assetValIdr = holding * curPriceIdr;
-      totalPortfolioEstIdr += assetValIdr;
-      const pos = positions.get(cleanCurr);
-      const avgCostIdr = pos && pos.qty > 0 ? pos.costIdr / pos.qty : curPriceIdr * 0.98;
-      const avgCostUsdt = pos && pos.qty > 0 ? pos.costUsdt / pos.qty : curPriceUsdt * 0.98;
-      const unPnlIdr = holding > 0 ? (curPriceIdr - avgCostIdr) * holding : 0;
-      const unPnlUsdt = holding > 0 ? (curPriceUsdt - avgCostUsdt) * holding : 0;
-      const returnPct = avgCostIdr > 0 ? (curPriceIdr - avgCostIdr) / avgCostIdr * 100 : 0;
-      totalUnrealizedPnlIdr += unPnlIdr;
-      totalUnrealizedPnlUsdt += unPnlUsdt;
-      if (holding > 0 || pos && (pos.totalBoughtQty > 0 || pos.totalSoldQty > 0)) {
-        assetBreakdown.push({
-          symbol: cleanCurr,
-          holding: Number(holding.toFixed(dec > 4 ? 6 : dec)),
-          avgBuyPriceIdr: Math.round(avgCostIdr),
-          currentPriceIdr: Math.round(curPriceIdr),
-          avgBuyPriceUsdt: Number(avgCostUsdt.toFixed(2)),
-          currentPriceUsdt: Number(curPriceUsdt.toFixed(2)),
-          unrealizedPnlIdr: Math.round(unPnlIdr),
-          unrealizedPnlUsdt: Number(unPnlUsdt.toFixed(2)),
-          returnPct: Number(returnPct.toFixed(2)),
-          totalBought: Number((pos?.totalBoughtQty || 0).toFixed(4)),
-          totalSold: Number((pos?.totalSoldQty || 0).toFixed(4))
-        });
-      }
-    });
-    const baseVal = totalPortfolioEstIdr > 0 ? totalPortfolioEstIdr : 1e8;
-    dailyMap.forEach((b) => {
-      b.returnPct = Number((b.pnlIdr / baseVal * 100).toFixed(2));
-      b.pnlIdr = Math.round(b.pnlIdr);
-      b.pnlUsdt = Number(b.pnlUsdt.toFixed(2));
-      b.volumeIdr = Math.round(b.volumeIdr);
-      b.volumeUsdt = Number(b.volumeUsdt.toFixed(2));
-      b.feesIdr = Math.round(b.feesIdr);
-      b.feesUsdt = Number(b.feesUsdt.toFixed(2));
-    });
-    const sortedDays = Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date));
-    let cumIdr = 0;
-    let cumUsdt = 0;
-    const cumulativeSeries = sortedDays.map((d) => {
-      cumIdr += d.pnlIdr;
-      cumUsdt += d.pnlUsdt;
-      return {
-        date: d.date,
-        timestamp: d.timestamp,
-        dailyPnlIdr: d.pnlIdr,
-        dailyPnlUsdt: d.pnlUsdt,
-        cumulativePnlIdr: cumIdr,
-        cumulativePnlUsdt: Number(cumUsdt.toFixed(2)),
-        returnPct: d.returnPct
-      };
-    });
-    let bestDay = null;
-    let worstDay = null;
-    let winningDaysCount = 0;
-    let losingDaysCount = 0;
-    let breakevenDaysCount = 0;
-    sortedDays.forEach((d) => {
-      if (d.pnlIdr > 0) winningDaysCount++;
-      else if (d.pnlIdr < 0) losingDaysCount++;
-      else breakevenDaysCount++;
-      if (!bestDay || d.pnlIdr > bestDay.pnlIdr) bestDay = d;
-      if (!worstDay || d.pnlIdr < worstDay.pnlIdr) worstDay = d;
-    });
-    const todayKey = (/* @__PURE__ */ new Date()).toLocaleDateString("sv-SE", { timeZone: "Asia/Jakarta" });
-    const todayBucket = dailyMap.get(todayKey);
-    const todayPnlIdr = todayBucket ? todayBucket.pnlIdr : 0;
-    const todayPnlUsdt = todayBucket ? todayBucket.pnlUsdt : 0;
-    const todayPnlPercent = todayBucket ? todayBucket.returnPct : 0;
-    const totalDays = sortedDays.length || 1;
-    const winRateDaysPct = Number((winningDaysCount / totalDays * 100).toFixed(1));
-    const winRateTradesPct = totalTradesCount > 0 ? Number((totalWinsCount / totalTradesCount * 100).toFixed(1)) : 0;
-    const profitFactor = grossLossIdr > 0 ? Number((grossProfitIdr / grossLossIdr).toFixed(2)) : grossProfitIdr > 0 ? 9.99 : 1;
-    const netPnlIdr = Math.round(totalRealizedPnlIdr + totalUnrealizedPnlIdr);
-    const netPnlUsdt = Number((totalRealizedPnlUsdt + totalUnrealizedPnlUsdt).toFixed(2));
-    const calendarData = {};
-    dailyMap.forEach((val, key) => {
-      calendarData[key] = val;
-    });
-    res.json({
-      summary: {
-        totalRealizedPnlIdr: Math.round(totalRealizedPnlIdr),
-        totalRealizedPnlUsdt: Number(totalRealizedPnlUsdt.toFixed(2)),
-        totalUnrealizedPnlIdr: Math.round(totalUnrealizedPnlIdr),
-        totalUnrealizedPnlUsdt: Number(totalUnrealizedPnlUsdt.toFixed(2)),
-        netPnlIdr,
-        netPnlUsdt,
-        todayPnlIdr,
-        todayPnlUsdt,
-        todayPnlPercent,
-        winRateDaysPct,
-        winRateTradesPct,
-        profitFactor,
-        totalTradingDays: sortedDays.length,
-        winningDaysCount,
-        losingDaysCount,
-        breakevenDaysCount,
-        totalTrades: totalTradesCount,
-        totalVolumeIdr: Math.round(totalVolumeIdr),
-        totalVolumeUsdt: Number(totalVolumeUsdt.toFixed(2)),
-        totalFeesIdr: Math.round(totalFeesIdr),
-        totalFeesUsdt: Number(totalFeesUsdt.toFixed(2)),
-        bestDay: bestDay ? { date: bestDay.date, pnlIdr: bestDay.pnlIdr, pnlUsdt: bestDay.pnlUsdt, returnPct: bestDay.returnPct } : null,
-        worstDay: worstDay ? { date: worstDay.date, pnlIdr: worstDay.pnlIdr, pnlUsdt: worstDay.pnlUsdt, returnPct: worstDay.returnPct } : null,
-        totalPortfolioEstIdr: Math.round(totalPortfolioEstIdr),
-        usdtRate: Math.round(usdtRate)
-      },
-      cumulativeSeries,
-      calendarData,
-      assetBreakdown,
-      requestedMonth,
-      timezone: "Asia/Jakarta (WIB)"
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// server/routes/apiKeys.ts
-import { Router as Router5 } from "express";
-import crypto12 from "crypto";
-init_database();
-var apiKeyRouter = Router5();
-var requireHmacAuth = (req, res, next) => {
-  const apiKey = req.headers["x-dimonex-apikey"];
-  const signature = req.headers["x-dimonex-signature"];
-  const timestamp = req.headers["x-dimonex-timestamp"];
-  if (!apiKey || !signature || !timestamp) {
-    return res.status(401).json({ error: "Header autentikasi HMAC tidak lengkap (X-DIMONEX-APIKEY, X-DIMONEX-SIGNATURE, X-DIMONEX-TIMESTAMP)" });
-  }
-  const now = Date.now();
-  const requestTime = parseInt(timestamp, 10);
-  if (isNaN(requestTime) || Math.abs(now - requestTime) > 3e4) {
-    return res.status(401).json({ error: "Permintaan kedaluwarsa atau perbedaan waktu jam (timestamp drift > 30s)" });
-  }
-  let foundKey;
-  for (const k of db.apiKeys.values()) {
-    if (k.keyId === apiKey && k.isActive) {
-      foundKey = k;
-      break;
-    }
-  }
-  if (!foundKey) {
-    return res.status(401).json({ error: "API Key tidak valid atau telah dinonaktifkan" });
-  }
-  if (foundKey.ipWhitelist) {
-    const clientIp = req.ip || req.socket.remoteAddress || "";
-    const allowedIps = foundKey.ipWhitelist.split(",").map((s) => s.trim());
-    if (!allowedIps.includes(clientIp) && !allowedIps.includes("*")) {
-      return res.status(403).json({ error: `Alamat IP ${clientIp} tidak terdaftar di IP whitelist kunci ini` });
-    }
-  }
-  const bodyStr = req.body ? JSON.stringify(req.body) : "";
-  const message = `${req.method}${req.originalUrl}${timestamp}${bodyStr}`;
-  const computedSig = crypto12.createHmac("sha256", foundKey.secretHash).update(message).digest("hex");
-  if (computedSig !== signature) {
-    return res.status(401).json({ error: "Tanda tangan digital HMAC-SHA256 tidak cocok" });
-  }
-  const user = db.users.get(foundKey.userId);
-  if (!user || user.status !== "active") {
-    return res.status(403).json({ error: "Akun pemilik API Key ini tidak aktif" });
-  }
-  req.user = user;
-  req.apiKey = foundKey;
-  next();
-};
-apiKeyRouter.post("/create", requireAuth, (req, res) => {
-  try {
-    const user = req.user;
-    const { label, permissions, ipWhitelist } = req.body;
-    const keyId = "dmx_live_" + crypto12.randomBytes(16).toString("hex");
-    const secretKey = crypto12.randomBytes(32).toString("hex");
-    const newKey = {
-      id: crypto12.randomUUID(),
-      userId: user.id,
-      keyId,
-      secretHash: secretKey,
-      label: label || "Trading Bot Key",
-      permissions: permissions || ["read", "trade"],
-      ipWhitelist: ipWhitelist || "",
-      isActive: true,
-      createdAt: Date.now()
-    };
-    db.apiKeys.set(newKey.id, newKey);
-    res.json({
-      success: true,
-      apiKey: keyId,
-      apiSecret: secretKey,
-      // CRITICAL: displayed once
-      label: newKey.label,
-      permissions: newKey.permissions,
-      message: "Simpan API Secret Anda sekarang. Secret tidak akan pernah ditampilkan kembali demi keamanan!"
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-apiKeyRouter.get("/list", requireAuth, (req, res) => {
-  const user = req.user;
-  const userKeys = Array.from(db.apiKeys.values()).filter((k) => k.userId === user.id).map((k) => ({
-    id: k.id,
-    keyId: k.keyId,
-    label: k.label,
-    permissions: k.permissions,
-    ipWhitelist: k.ipWhitelist,
-    isActive: k.isActive,
-    createdAt: k.createdAt
-  }));
-  res.json(userKeys);
-});
-apiKeyRouter.post("/revoke", requireAuth, (req, res) => {
-  const user = req.user;
-  const { id } = req.body;
-  const key = db.apiKeys.get(id);
-  if (!key || key.userId !== user.id) {
-    return res.status(404).json({ error: "Kunci API tidak ditemukan" });
-  }
-  db.apiKeys.delete(id);
-  res.json({ success: true, message: "Kunci API berhasil dicabut" });
-});
-
-// server/routes/admin.ts
-import { Router as Router6 } from "express";
-import crypto13 from "crypto";
-init_database();
-init_PrecisionMath();
-init_PriceAggregatorService();
-var adminRouter = Router6();
-adminRouter.get("/users", requireAdmin, (req, res) => {
-  const usersList = Array.from(db.users.values()).map((u) => {
-    const kyc = db.kyc.get(u.id);
-    return {
-      id: u.id,
-      email: u.email,
-      role: u.role,
-      status: u.status,
-      isTotpEnabled: u.isTotpEnabled,
-      kycStatus: kyc ? kyc.status : "unverified",
-      kycTier: kyc ? kyc.tierLevel : 0,
-      fullName: kyc ? kyc.fullName : "-",
-      createdAt: u.createdAt
-    };
-  });
-  res.json(usersList);
-});
-adminRouter.post("/kyc/review", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { userId, action, rejectionReason, tierLevel } = req.body;
-    const kyc = db.kyc.get(userId);
-    if (!kyc) return res.status(404).json({ error: "Data KYC tidak ditemukan" });
-    if (action === "APPROVE") {
-      kyc.status = "approved";
-      kyc.tierLevel = tierLevel || 2;
-      kyc.reviewedBy = adminUser.id;
-      kyc.reviewedAt = Date.now();
-      kyc.rejectionReason = void 0;
-    } else {
-      kyc.status = "rejected";
-      kyc.rejectionReason = rejectionReason || "Dokumen identitas tidak terbaca dengan jelas";
-      kyc.reviewedBy = adminUser.id;
-      kyc.reviewedAt = Date.now();
-    }
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser.id,
-      action: `KYC_${action}`,
-      resource: `user:${userId}`,
-      details: `KYC marked as ${kyc.status} by admin ${adminUser.email}`,
-      createdAt: Date.now()
-    });
-    res.json({ success: true, kyc });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.post("/pairs/toggle-halt", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { pairId, isHalted } = req.body;
-    const pair = db.tradingPairs.get(pairId);
-    if (!pair) return res.status(404).json({ error: "Pair tidak ditemukan" });
-    pair.isHalted = Boolean(isHalted);
-    db.tradingPairs.set(pairId, pair);
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser.id,
-      action: isHalted ? "TRADING_HALTED" : "TRADING_RESUMED",
-      resource: `pair:${pairId}`,
-      details: `Trading pair ${pairId} halted status changed to: ${isHalted}`,
-      createdAt: Date.now()
-    });
-    res.json({
-      success: true,
-      message: `Trading pair ${pairId} status: ${isHalted ? "DIHENTIKAN SEMENTARA (HALTED)" : "BERJALAN NORMAL"}`,
-      pair
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.post("/pairs/update-fees", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { pairId, makerFeeBps, takerFeeBps } = req.body;
-    const pair = db.tradingPairs.get(pairId);
-    if (!pair) return res.status(404).json({ error: "Pair tidak ditemukan" });
-    if (makerFeeBps !== void 0) pair.makerFeeBps = Number(makerFeeBps);
-    if (takerFeeBps !== void 0) pair.takerFeeBps = Number(takerFeeBps);
-    db.tradingPairs.set(pairId, pair);
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser.id,
-      action: "FEES_UPDATED",
-      resource: `pair:${pairId}`,
-      details: `Fees updated: Maker ${pair.makerFeeBps} bps (${pair.makerFeeBps / 100}%), Taker ${pair.takerFeeBps} bps (${pair.takerFeeBps / 100}%)`,
-      createdAt: Date.now()
-    });
-    res.json({
-      success: true,
-      message: `Biaya transaksi ${pairId} berhasil diperbarui: Maker ${pair.makerFeeBps / 100}%, Taker ${pair.takerFeeBps / 100}%`,
-      pair
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.post("/pairs/update-config", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const {
-      pairId,
-      minOrderSize,
-      maxOrderSize,
-      minOrderTokens,
-      maxOrderTokens,
-      makerFeeBps,
-      takerFeeBps,
-      isHalted,
-      lastPrice,
-      isDelisted,
-      delistScheduledAt,
-      delistReason
-    } = req.body;
-    if (!pairId) return res.status(400).json({ error: "ID Trading pair wajib ditentukan" });
-    const pair = db.tradingPairs.get(pairId);
-    if (!pair) return res.status(404).json({ error: `Trading pair ${pairId} tidak ditemukan` });
-    const baseDecimals = pair.baseDecimals || 8;
-    let updatedMin = pair.minOrderSize;
-    let updatedMax = pair.maxOrderSize;
-    if (minOrderTokens !== void 0 && minOrderTokens !== null && String(minOrderTokens).trim() !== "") {
-      updatedMin = PrecisionMath.parseToUnits(String(minOrderTokens), baseDecimals).toString();
-    } else if (minOrderSize !== void 0 && minOrderSize !== null && String(minOrderSize).trim() !== "") {
-      updatedMin = String(minOrderSize).trim();
-    }
-    if (maxOrderTokens !== void 0 && maxOrderTokens !== null && String(maxOrderTokens).trim() !== "") {
-      updatedMax = PrecisionMath.parseToUnits(String(maxOrderTokens), baseDecimals).toString();
-    } else if (maxOrderSize !== void 0 && maxOrderSize !== null && String(maxOrderSize).trim() !== "") {
-      updatedMax = String(maxOrderSize).trim();
-    }
-    if (BigInt(updatedMin) <= 0n) {
-      return res.status(400).json({ error: "Kuantitas minimum order harus lebih besar dari 0" });
-    }
-    if (BigInt(updatedMax) < BigInt(updatedMin)) {
-      return res.status(400).json({ error: "Kuantitas maksimum order tidak boleh lebih kecil dari kuantitas minimum" });
-    }
-    pair.minOrderSize = updatedMin;
-    pair.maxOrderSize = updatedMax;
-    if (makerFeeBps !== void 0 && makerFeeBps !== null) pair.makerFeeBps = Number(makerFeeBps);
-    if (takerFeeBps !== void 0 && takerFeeBps !== null) pair.takerFeeBps = Number(takerFeeBps);
-    if (isHalted !== void 0 && isHalted !== null) pair.isHalted = Boolean(isHalted);
-    if (lastPrice !== void 0 && lastPrice !== null && String(lastPrice).trim() !== "") {
-      pair.lastPrice = String(lastPrice).trim();
-    }
-    db.tradingPairs.set(pairId, pair);
-    const market = db.markets.get(pairId);
-    if (market) {
-      market.minQuantity = updatedMin;
-      if (makerFeeBps !== void 0) market.makerFeeBps = Number(makerFeeBps);
-      if (takerFeeBps !== void 0) market.takerFeeBps = Number(takerFeeBps);
-      db.markets.set(pairId, market);
-    }
-    const humanMin = PrecisionMath.formatFromUnits(BigInt(updatedMin), baseDecimals);
-    const humanMax = PrecisionMath.formatFromUnits(BigInt(updatedMax), baseDecimals);
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser.id,
-      action: "PAIR_CONFIG_UPDATED",
-      resource: `pair:${pairId}`,
-      details: `Token limits for ${pairId} updated: Min ${humanMin} ${pair.baseCurrency} (${updatedMin} units), Max ${humanMax} ${pair.baseCurrency} (${updatedMax} units) by ${adminUser.email}`,
-      createdAt: Date.now()
-    });
-    let lifecycleNote = "";
-    if (typeof isDelisted === "boolean") {
-      if (isDelisted && !pair.isDelisted) {
-        const resDelist = executeDelistMarket(
-          pairId,
-          adminUser.id,
-          adminUser.email,
-          delistReason || pair.delistReason || "Manual delisting oleh admin"
-        );
-        lifecycleNote = ` \xB7 Market di-DELISTING (${resDelist.cancelledOrdersCount} order dibatalkan & direfund, ${resDelist.stoppedBotsCount} bot dihentikan).`;
-      } else if (!isDelisted && pair.isDelisted) {
-        relistMarket(pairId, adminUser.id, adminUser.email);
-        if (isHalted !== void 0 && isHalted !== null) {
-          const refreshed = db.tradingPairs.get(pairId);
-          if (refreshed) {
-            refreshed.isHalted = Boolean(isHalted);
-            db.tradingPairs.set(pairId, refreshed);
-          }
-        }
-        lifecycleNote = " \xB7 Market diaktifkan kembali (Relisted).";
-      }
-    }
-    const currentPairAfterToggle = db.tradingPairs.get(pairId) || pair;
-    if (!currentPairAfterToggle.isDelisted && delistScheduledAt !== void 0) {
-      if (delistScheduledAt === null || delistScheduledAt === "" || Number(delistScheduledAt) === 0) {
-        if (currentPairAfterToggle.delistScheduledAt) {
-          cancelScheduledDelistMarket(pairId, adminUser.id, adminUser.email);
-          lifecycleNote += " \xB7 Jadwal delisting dibatalkan.";
-        }
-      } else {
-        const parsedTs = Number(delistScheduledAt);
-        if (!Number.isFinite(parsedTs) || parsedTs <= Date.now() + 1e4) {
-          return res.status(400).json({ error: "Waktu jadwal delisting harus berada di masa depan (minimal 10 detik dari sekarang)." });
-        }
-        if (currentPairAfterToggle.delistScheduledAt !== parsedTs || delistReason !== void 0 && delistReason !== currentPairAfterToggle.delistReason) {
-          scheduleDelistMarket(
-            pairId,
-            parsedTs,
-            adminUser.id,
-            adminUser.email,
-            delistReason || currentPairAfterToggle.delistReason || "Delisting terjadwal oleh admin"
-          );
-          lifecycleNote += ` \xB7 Delisting dijadwalkan pada ${new Date(parsedTs).toLocaleString("id-ID")}.`;
-        }
-      }
-    }
-    db.saveToDisk();
-    const finalPair = db.tradingPairs.get(pairId) || pair;
-    res.json({
-      success: true,
-      message: `Konfigurasi ${pairId} berhasil diperbarui: Min ${humanMin} ${finalPair.baseCurrency}, Max ${humanMax} ${finalPair.baseCurrency}${lifecycleNote}`,
-      pair: finalPair,
-      humanLimits: {
-        minTokens: humanMin,
-        maxTokens: humanMax,
-        baseDecimals
-      }
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.get("/withdrawals/pending", requireAdmin, (req, res) => {
-  const pendingFiat = Array.from(db.fiatTransactions.values()).filter((t) => t.type === "WITHDRAW" && t.status === "PENDING");
-  const pendingCrypto = Array.from(db.cryptoTransactions.values()).filter((t) => t.type === "WITHDRAW" && t.status === "PENDING");
-  res.json({
-    fiat: pendingFiat,
-    crypto: pendingCrypto
-  });
-});
-adminRouter.post("/withdrawals/approve", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { txId, txType } = req.body;
-    if (txType === "FIAT") {
-      const tx = db.fiatTransactions.get(txId);
-      if (!tx || tx.status !== "PENDING") return res.status(404).json({ error: "Transaksi tidak ditemukan atau sudah diproses" });
-      const userAcc = db.createOrGetAccount(tx.userId, "IDR");
-      const locked = BigInt(userAcc.balanceLocked);
-      const amountUnits = BigInt(tx.amount);
-      userAcc.balanceLocked = (locked >= amountUnits ? locked - amountUnits : 0n).toString();
-      userAcc.version += 1;
-      userAcc.updatedAt = Date.now();
-      tx.status = "COMPLETED";
-      db.fiatTransactions.set(txId, tx);
-    } else {
-      const tx = db.cryptoTransactions.get(txId);
-      if (!tx || tx.status !== "PENDING") return res.status(404).json({ error: "Transaksi kripto tidak ditemukan atau sudah diproses" });
-      const userAcc = db.createOrGetAccount(tx.userId, tx.currency);
-      const locked = BigInt(userAcc.balanceLocked);
-      const amountUnits = BigInt(tx.amount);
-      userAcc.balanceLocked = (locked >= amountUnits ? locked - amountUnits : 0n).toString();
-      userAcc.version += 1;
-      userAcc.updatedAt = Date.now();
-      tx.status = "COMPLETED";
-      tx.confirmations = 12;
-      db.cryptoTransactions.set(txId, tx);
-    }
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser.id,
-      action: "WITHDRAWAL_APPROVED",
-      resource: `tx:${txId}`,
-      details: `Withdrawal approved by admin ${adminUser.email}`,
-      createdAt: Date.now()
-    });
-    db.saveToDisk();
-    res.json({ success: true, message: "Penarikan dana berhasil disetujui dan diproses!" });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.post("/withdrawals/reject", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { txId, txType, reason } = req.body;
-    if (txType === "FIAT") {
-      const tx = db.fiatTransactions.get(txId);
-      if (!tx || tx.status !== "PENDING") return res.status(404).json({ error: "Transaksi tidak ditemukan atau sudah diproses" });
-      const userAcc = db.createOrGetAccount(tx.userId, "IDR");
-      const locked = BigInt(userAcc.balanceLocked);
-      const available = BigInt(userAcc.balanceAvailable);
-      const amountUnits = BigInt(tx.amount);
-      userAcc.balanceLocked = (locked >= amountUnits ? locked - amountUnits : 0n).toString();
-      userAcc.balanceAvailable = (available + amountUnits).toString();
-      userAcc.version += 1;
-      userAcc.updatedAt = Date.now();
-      tx.status = "REJECTED";
-      db.fiatTransactions.set(txId, tx);
-    } else {
-      const tx = db.cryptoTransactions.get(txId);
-      if (!tx || tx.status !== "PENDING") return res.status(404).json({ error: "Transaksi kripto tidak ditemukan atau sudah diproses" });
-      const userAcc = db.createOrGetAccount(tx.userId, tx.currency);
-      const locked = BigInt(userAcc.balanceLocked);
-      const available = BigInt(userAcc.balanceAvailable);
-      const amountUnits = BigInt(tx.amount);
-      userAcc.balanceLocked = (locked >= amountUnits ? locked - amountUnits : 0n).toString();
-      userAcc.balanceAvailable = (available + amountUnits).toString();
-      userAcc.version += 1;
-      userAcc.updatedAt = Date.now();
-      tx.status = "REJECTED";
-      db.cryptoTransactions.set(txId, tx);
-    }
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser.id,
-      action: "WITHDRAWAL_REJECTED",
-      resource: `tx:${txId}`,
-      details: `Withdrawal rejected by admin ${adminUser.email}. Reason: ${reason || "Pemeriksaan kepatuhan"}. Saldo dikembalikan ke akun pengguna.`,
-      createdAt: Date.now()
-    });
-    db.saveToDisk();
-    res.json({ success: true, message: "Penarikan dana ditolak dan saldo berhasil dikembalikan ke akun pengguna." });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.get("/stats", requireAdmin, (req, res) => {
-  try {
-    const totalUsers = db.users.size;
-    const totalPairs = db.tradingPairs.size;
-    const totalOrders = db.orders.size;
-    const totalTrades = db.trades.length;
-    const totalBots = db.botInstances.size;
-    const activeBots2 = Array.from(db.botInstances.values()).filter((b) => b.status === "RUNNING").length;
-    const openOrdersCount = Array.from(db.orders.values()).filter((o) => o.status === "NEW" || o.status === "PARTIALLY_FILLED").length;
-    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1e3;
-    let volume24hIdr = 0n;
-    for (const trade of db.trades.values()) {
-      if (trade.createdAt >= oneDayAgo) {
-        if (trade.pairId.endsWith("-IDR")) {
-          volume24hIdr += BigInt(trade.price) * BigInt(trade.quantity) / 100000000n;
-        } else {
-          volume24hIdr += BigInt(trade.price) * BigInt(trade.quantity) * 16350n / 100000000n;
-        }
-      }
-    }
-    const liabilitiesByCurrency = {};
-    for (const acc of db.ledgerAccounts.values()) {
-      if (!liabilitiesByCurrency[acc.currency]) {
-        liabilitiesByCurrency[acc.currency] = { available: "0", locked: "0", total: "0" };
-      }
-      const cur = liabilitiesByCurrency[acc.currency];
-      const av = BigInt(cur.available) + BigInt(acc.balanceAvailable);
-      const lk = BigInt(cur.locked) + BigInt(acc.balanceLocked);
-      cur.available = av.toString();
-      cur.locked = lk.toString();
-      cur.total = (av + lk).toString();
-    }
-    res.json({
-      totalUsers,
-      totalPairs,
-      totalOrders,
-      totalTrades,
-      totalBots,
-      activeBots: activeBots2,
-      openOrdersCount,
-      volume24hIdr: volume24hIdr.toString(),
-      uptimeSeconds: Math.floor(process.uptime()),
-      memoryUsage: process.memoryUsage(),
-      liabilitiesByCurrency,
-      serverTime: Date.now()
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-adminRouter.post("/users/role", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { userId, role } = req.body;
-    const validRoles = ["USER", "MM", "COMPLIANCE", "ADMIN", "SUPERADMIN"];
-    const targetRole = String(role || "").toUpperCase();
-    if (!validRoles.includes(targetRole)) {
-      return res.status(400).json({ error: `Role tidak valid. Pilihan: ${validRoles.join(", ")}` });
-    }
-    const targetUser = db.users.get(userId);
-    if (!targetUser) return res.status(404).json({ error: "Pengguna tidak ditemukan" });
-    const oldRole = targetUser.role;
-    targetUser.role = targetRole;
-    targetUser.updatedAt = Date.now();
-    db.users.set(userId, targetUser);
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser.id,
-      action: "USER_ROLE_CHANGED",
-      resource: `user:${userId}`,
-      details: `User role changed from ${oldRole} to ${targetRole} by admin ${adminUser.email}`,
-      createdAt: Date.now()
-    });
-    db.saveToDisk();
-    res.json({ success: true, message: `Role pengguna berhasil diubah menjadi ${targetRole}`, user: targetUser });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.post("/users/reset-2fa", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { userId, reason } = req.body;
-    const targetUser = db.users.get(userId);
-    if (!targetUser) return res.status(404).json({ error: "Pengguna tidak ditemukan" });
-    targetUser.isTotpEnabled = false;
-    targetUser.totpSecret = void 0;
-    targetUser.updatedAt = Date.now();
-    db.users.set(userId, targetUser);
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser.id,
-      action: "USER_2FA_RESET",
-      resource: `user:${userId}`,
-      details: `2FA TOTP disabled by admin ${adminUser.email}. Alasan: ${reason || "Permintaan pemulihan akun"}`,
-      createdAt: Date.now()
-    });
-    db.saveToDisk();
-    res.json({ success: true, message: `2FA TOTP untuk ${targetUser.email} berhasil di-reset.` });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.post("/pairs/create", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const {
-      baseCurrency,
-      quoteCurrency,
-      baseDecimals = 8,
-      quoteDecimals = 2,
-      initialPrice = "100000000",
-      minOrderTokens,
-      maxOrderTokens,
-      minOrderSize,
-      maxOrderSize,
-      makerFeeBps = 10,
-      takerFeeBps = 20
-    } = req.body;
-    if (!baseCurrency || !quoteCurrency) {
-      return res.status(400).json({ error: "Base currency dan Quote currency wajib diisi" });
-    }
-    const pairId = `${baseCurrency.trim().toUpperCase()}-${quoteCurrency.trim().toUpperCase()}`;
-    if (db.tradingPairs.has(pairId)) {
-      return res.status(400).json({ error: `Trading pair ${pairId} sudah ada di exchange!` });
-    }
-    const bDec = Number(baseDecimals);
-    const oneToken = 10n ** BigInt(bDec);
-    let minUnits = "100000000";
-    let maxUnits = (10000000n * (oneToken > 0n ? oneToken : 1n)).toString();
-    if (minOrderTokens !== void 0 && minOrderTokens !== null && String(minOrderTokens).trim() !== "") {
-      minUnits = PrecisionMath.parseToUnits(String(minOrderTokens), bDec).toString();
-    } else if (minOrderSize) {
-      minUnits = String(minOrderSize).trim();
-    }
-    if (maxOrderTokens !== void 0 && maxOrderTokens !== null && String(maxOrderTokens).trim() !== "") {
-      maxUnits = PrecisionMath.parseToUnits(String(maxOrderTokens), bDec).toString();
-    } else if (maxOrderSize) {
-      maxUnits = String(maxOrderSize).trim();
-    }
-    const newPair = {
-      id: pairId,
-      baseCurrency: baseCurrency.trim().toUpperCase(),
-      quoteCurrency: quoteCurrency.trim().toUpperCase(),
-      baseDecimals: bDec,
-      quoteDecimals: Number(quoteDecimals),
-      minOrderSize: minUnits,
-      maxOrderSize: maxUnits,
-      lastPrice: String(initialPrice),
-      priceChange24h: "+0.00%",
-      priceChangePercent24h: "0.00",
-      high24h: String(initialPrice),
-      low24h: String(initialPrice),
-      volume24h: "0",
-      makerFeeBps: Number(makerFeeBps),
-      takerFeeBps: Number(takerFeeBps),
-      isHalted: false,
-      isNewListing: true,
-      createdAt: Date.now()
-    };
-    db.tradingPairs.set(pairId, newPair);
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser.id,
-      action: "PAIR_CREATED",
-      resource: `pair:${pairId}`,
-      details: `New trading pair ${pairId} registered by admin ${adminUser.email}`,
-      createdAt: Date.now()
-    });
-    db.saveToDisk();
-    res.json({ success: true, message: `Pasangan perdagangan ${pairId} berhasil dibuat dan diaktifkan!`, pair: newPair });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.get("/bots/all", requireAdmin, (req, res) => {
-  try {
-    const botsList = Array.from(db.botInstances.values()).map((b) => {
-      const owner = db.users.get(b.ownerUserId || b.accountId);
-      return {
-        id: b.id,
-        name: b.name,
-        botType: b.botType,
-        pairId: b.pairId,
-        environment: b.environment,
-        status: b.status,
-        ownerEmail: owner ? owner.email : "Unknown",
-        ownerUserId: b.ownerUserId,
-        activeOrdersCount: b.depthLiquidityConfig?.activeOrderIds?.length || b.movementDepthConfig?.activeOrderIds?.length || (b.priceFollowerConfig?.activeBuyOrderId ? 1 : 0) + (b.priceFollowerConfig?.activeSellOrderId ? 1 : 0) || 0,
-        stats: b.stats,
-        lastHeartbeat: b.lastHeartbeat,
-        createdAt: b.createdAt
-      };
-    });
-    res.json(botsList);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-adminRouter.post("/bots/emergency-stop", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { botId } = req.body;
-    let stoppedCount = 0;
-    if (botId) {
-      const b = db.botInstances.get(botId);
-      if (b && b.status === "RUNNING") {
-        b.status = "STOPPED";
-        b.updatedAt = Date.now();
-        stoppedCount++;
-      }
-    } else {
-      for (const b of db.botInstances.values()) {
-        if (b.status === "RUNNING") {
-          b.status = "STOPPED";
-          b.updatedAt = Date.now();
-          stoppedCount++;
-        }
-      }
-    }
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser.id,
-      action: "BOTS_EMERGENCY_STOP",
-      resource: botId ? `bot:${botId}` : "bots:all",
-      details: `Emergency stop triggered by admin ${adminUser.email}. Total bots stopped: ${stoppedCount}`,
-      createdAt: Date.now()
-    });
-    db.saveToDisk();
-    res.json({ success: true, message: `Emergency stop berhasil: ${stoppedCount} bot dihentikan seketika.` });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.post("/ledger/adjust-balance", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { userId, currency, amountUnits, direction, reason } = req.body;
-    if (!userId || !currency || !amountUnits || !direction) {
-      return res.status(400).json({ error: "Parameter tidak lengkap (userId, currency, amountUnits, direction wajib diisi)" });
-    }
-    const units = BigInt(amountUnits);
-    if (units <= 0n) return res.status(400).json({ error: "Jumlah penyesuaian harus lebih besar dari 0" });
-    const userAcc = db.createOrGetAccount(userId, currency);
-    const treasuryAcc = db.createOrGetAccount("usr-sys-treasury-reserve-000001", currency);
-    const userAvail = BigInt(userAcc.balanceAvailable);
-    const treasuryAvail = BigInt(treasuryAcc.balanceAvailable);
-    if (direction === "CREDIT") {
-      userAcc.balanceAvailable = (userAvail + units).toString();
-      treasuryAcc.balanceAvailable = (treasuryAvail >= units ? treasuryAvail - units : 0n).toString();
-    } else {
-      if (userAvail < units) {
-        return res.status(400).json({ error: `Saldo pengguna tidak mencukupi untuk didebit sebesar ${units.toString()} units.` });
-      }
-      userAcc.balanceAvailable = (userAvail - units).toString();
-      treasuryAcc.balanceAvailable = (treasuryAvail + units).toString();
-    }
-    userAcc.version += 1;
-    userAcc.updatedAt = Date.now();
-    treasuryAcc.version += 1;
-    treasuryAcc.updatedAt = Date.now();
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser.id,
-      action: "LEDGER_ADJUSTMENT",
-      resource: `account:${userAcc.id}`,
-      details: `Balance adjustment: ${direction} ${units.toString()} units of ${currency} for user ${userId}. Reason: ${reason || "Koreksi administratif bursa"}. Double-entry balanced via Treasury reserve.`,
-      createdAt: Date.now()
-    });
-    db.saveToDisk();
-    res.json({
-      success: true,
-      message: `Penyesuaian saldo ${direction} sebesar ${units.toString()} ${currency} berhasil dicatat dalam buku besar.`,
-      newBalance: userAcc.balanceAvailable
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-var defaultEarnPools = [
-  { id: "pool-idr-flex", asset: "IDR", apy: 6.5, durationDays: 0, status: "ACTIVE", minStake: "10000000", totalStaked: "25000000000" },
-  { id: "pool-btc-30", asset: "BTC", apy: 4.2, durationDays: 30, status: "ACTIVE", minStake: "100000", totalStaked: "1250000000" },
-  { id: "pool-eth-60", asset: "ETH", apy: 5.8, durationDays: 60, status: "ACTIVE", minStake: "1000000", totalStaked: "4800000000" },
-  { id: "pool-usdt-90", asset: "USDT", apy: 11.5, durationDays: 90, status: "ACTIVE", minStake: "1000000", totalStaked: "150000000000" }
-];
-adminRouter.get("/earn/pools", requireAdmin, (req, res) => {
-  res.json(defaultEarnPools);
-});
-adminRouter.post("/earn/pools/update", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { poolId, apy, status } = req.body;
-    const pool = defaultEarnPools.find((p) => p.id === poolId);
-    if (!pool) return res.status(404).json({ error: "Staking pool tidak ditemukan" });
-    if (apy !== void 0) pool.apy = Number(apy);
-    if (status !== void 0) pool.status = status;
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser.id,
-      action: "EARN_POOL_UPDATED",
-      resource: `pool:${poolId}`,
-      details: `Staking pool ${poolId} updated: APY ${pool.apy}%, Status ${pool.status} by admin ${adminUser.email}`,
-      createdAt: Date.now()
-    });
-    res.json({ success: true, message: `Staking pool ${poolId} berhasil diperbarui!`, pool });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-var defaultMasters = [
-  { id: "trader-apex", name: "ApexQuant Master", asset: "BTC/IDR", roi30d: 48.2, winRate: 78.5, maxDrawdown: 6.2, followers: 412, profitShareBps: 1e3, status: "APPROVED" },
-  { id: "trader-crypto-king", name: "CryptoKing ID", asset: "ETH/IDR", roi30d: 32.8, winRate: 71, maxDrawdown: 8.5, followers: 289, profitShareBps: 1200, status: "APPROVED" },
-  { id: "trader-scalper-pro", name: "ScalperPro 24/7", asset: "SOL/IDR", roi30d: 64.5, winRate: 65.4, maxDrawdown: 12.1, followers: 580, profitShareBps: 1500, status: "APPROVED" }
-];
-adminRouter.get("/copy-trading/masters", requireAdmin, (req, res) => {
-  res.json(defaultMasters);
-});
-adminRouter.post("/copy-trading/masters/update", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { masterId, status, profitShareBps } = req.body;
-    const master = defaultMasters.find((m) => m.id === masterId);
-    if (!master) return res.status(404).json({ error: "Master trader tidak ditemukan" });
-    if (status !== void 0) master.status = status;
-    if (profitShareBps !== void 0) master.profitShareBps = Number(profitShareBps);
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser.id,
-      action: "COPY_MASTER_UPDATED",
-      resource: `master:${masterId}`,
-      details: `Master trader ${masterId} updated: Status ${master.status}, Profit Share ${master.profitShareBps / 100}% by admin ${adminUser.email}`,
-      createdAt: Date.now()
-    });
-    res.json({ success: true, message: `Master trader ${masterId} berhasil diperbarui!`, master });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-var defaultVipTiers = [
-  { tier: 0, minVolumeIdr: "0", makerFeeBps: 10, takerFeeBps: 20 },
-  { tier: 1, minVolumeIdr: "100000000", makerFeeBps: 8, takerFeeBps: 18 },
-  { tier: 2, minVolumeIdr: "500000000", makerFeeBps: 6, takerFeeBps: 15 },
-  { tier: 3, minVolumeIdr: "2000000000", makerFeeBps: 4, takerFeeBps: 12 },
-  { tier: 4, minVolumeIdr: "10000000000", makerFeeBps: 2, takerFeeBps: 8 },
-  { tier: 5, minVolumeIdr: "50000000000", makerFeeBps: 0, takerFeeBps: 5 }
-];
-adminRouter.get("/vip-tiers", requireAdmin, (req, res) => {
-  res.json(defaultVipTiers);
-});
-adminRouter.post("/vip-tiers/update", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { tier, makerFeeBps, takerFeeBps } = req.body;
-    const t = defaultVipTiers.find((x) => x.tier === Number(tier));
-    if (!t) return res.status(404).json({ error: "VIP Tier tidak ditemukan" });
-    if (makerFeeBps !== void 0) t.makerFeeBps = Number(makerFeeBps);
-    if (takerFeeBps !== void 0) t.takerFeeBps = Number(takerFeeBps);
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser.id,
-      action: "VIP_TIER_UPDATED",
-      resource: `vip:tier_${tier}`,
-      details: `VIP Tier ${tier} fees updated: Maker ${t.makerFeeBps} bps, Taker ${t.takerFeeBps} bps by admin ${adminUser.email}`,
-      createdAt: Date.now()
-    });
-    res.json({ success: true, message: `VIP Tier ${tier} berhasil diperbarui!`, tier: t });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.get("/audit-logs", requireAdmin, (req, res) => {
-  res.json(db.auditLogs.slice(-200).reverse());
-});
-adminRouter.get("/external-ws/whitelist", requireAdmin, (req, res) => {
-  try {
-    const items = Array.from(db.externalWsWhitelist.values()).map((entry) => {
-      const snap = priceAggregatorService.getSymbolSnapshot(entry.symbol, "AGGREGATED");
-      return {
-        ...entry,
-        binancePrice: snap.binancePrice,
-        bybitPrice: snap.bybitPrice,
-        binanceFresh: snap.binanceFresh,
-        bybitFresh: snap.bybitFresh
-      };
-    });
-    res.json({
-      success: true,
-      items,
-      feedStatus: {
-        binance: {
-          status: priceAggregatorService.binance.getConnectionStatus(),
-          subscribedCount: priceAggregatorService.binance.getSubscribedSymbols().length,
-          subscribedSymbols: priceAggregatorService.binance.getSubscribedSymbols()
-        },
-        bybit: {
-          status: priceAggregatorService.bybit.getConnectionStatus(),
-          subscribedCount: priceAggregatorService.bybit.getSubscribedSymbols().length,
-          subscribedSymbols: priceAggregatorService.bybit.getSubscribedSymbols()
-        }
-      }
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-adminRouter.get("/external-ws/catalog", requireAdmin, async (req, res) => {
-  try {
-    const q = String(req.query.q || "").trim().toUpperCase();
-    const providerFilter = String(req.query.provider || "ALL").toUpperCase();
-    const force = req.query.refresh === "1";
-    const catalog = await priceAggregatorService.fetchAvailableCatalog(force);
-    let filtered = catalog.items;
-    if (providerFilter === "BINANCE") {
-      filtered = filtered.filter((i) => i.providers.includes("binance"));
-    } else if (providerFilter === "BYBIT") {
-      filtered = filtered.filter((i) => i.providers.includes("bybit"));
-    }
-    if (q) {
-      filtered = filtered.filter(
-        (i) => i.symbol.includes(q) || i.baseAsset.includes(q) || i.quoteAsset.includes(q)
-      );
-    }
-    const whitelistedSet = new Set(Array.from(db.externalWsWhitelist.keys()));
-    const limited = filtered.slice(0, 60).map((item) => ({
-      ...item,
-      isWhitelisted: whitelistedSet.has(item.symbol)
-    }));
-    res.json({
-      success: true,
-      source: catalog.source,
-      fetchedAt: catalog.fetchedAt,
-      totalMatches: filtered.length,
-      items: limited
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-adminRouter.post("/external-ws/whitelist/add", requireAdmin, async (req, res) => {
-  try {
-    const adminUser = req.user;
-    const rawSymbol = String(req.body?.symbol || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-    if (!rawSymbol || rawSymbol.length < 4) {
-      return res.status(400).json({ error: "Simbol pair tidak valid (contoh: SOLUSDT, PEPEUSDT, ETHBTC)." });
-    }
-    const providersInput = Array.isArray(req.body?.providers) && req.body.providers.length > 0 ? req.body.providers.filter((p) => p === "binance" || p === "bybit") : ["binance", "bybit"];
-    const providers = providersInput.length > 0 ? providersInput : ["binance", "bybit"];
-    const parsed = parseExternalPairSymbol(rawSymbol);
-    const label = req.body?.label ? String(req.body.label).trim() : `${parsed.baseAsset} / ${parsed.quoteAsset}`;
-    const entry = {
-      symbol: rawSymbol,
-      baseAsset: parsed.baseAsset,
-      quoteAsset: parsed.quoteAsset,
-      label,
-      providers,
-      enabled: true,
-      addedBy: adminUser?.email || "ADMIN",
-      addedAt: Date.now()
-    };
-    db.externalWsWhitelist.set(rawSymbol, entry);
-    db.saveToDisk();
-    await priceAggregatorService.seedSymbolFromCatalog(rawSymbol, providers);
-    priceAggregatorService.syncWhitelistSymbols(
-      db.getEnabledExternalWsSymbols("binance"),
-      db.getEnabledExternalWsSymbols("bybit")
-    );
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser?.id || "ADMIN",
-      action: "EXTERNAL_WS_WHITELIST_ADDED",
-      resource: `ws_pair:${rawSymbol}`,
-      details: `Pair ${rawSymbol} (${providers.join(", ")}) ditambahkan ke whitelist WebSocket oleh ${adminUser?.email}`,
-      createdAt: Date.now()
-    });
-    db.scheduleSave();
-    res.json({
-      success: true,
-      message: `Pair ${rawSymbol} ditambahkan ke whitelist & stream WebSocket Binance/Bybit disinkronkan.`,
-      entry
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.post("/external-ws/whitelist/toggle", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const rawSymbol = String(req.body?.symbol || "").trim().toUpperCase();
-    const entry = db.externalWsWhitelist.get(rawSymbol);
-    if (!entry) {
-      return res.status(404).json({ error: `Pair ${rawSymbol} tidak ditemukan di whitelist.` });
-    }
-    entry.enabled = req.body?.enabled !== void 0 ? Boolean(req.body.enabled) : !entry.enabled;
-    if (Array.isArray(req.body?.providers) && req.body.providers.length > 0) {
-      const validProvs = req.body.providers.filter((p) => p === "binance" || p === "bybit");
-      if (validProvs.length > 0) entry.providers = validProvs;
-    }
-    db.externalWsWhitelist.set(rawSymbol, entry);
-    db.saveToDisk();
-    priceAggregatorService.syncWhitelistSymbols(
-      db.getEnabledExternalWsSymbols("binance"),
-      db.getEnabledExternalWsSymbols("bybit")
-    );
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser?.id || "ADMIN",
-      action: "EXTERNAL_WS_WHITELIST_TOGGLED",
-      resource: `ws_pair:${rawSymbol}`,
-      details: `Pair ${rawSymbol} diubah status=${entry.enabled ? "ENABLED" : "DISABLED"} oleh ${adminUser?.email}`,
-      createdAt: Date.now()
-    });
-    db.scheduleSave();
-    res.json({
-      success: true,
-      message: `Pair ${rawSymbol} sekarang ${entry.enabled ? "AKTIF" : "NONAKTIF"} di WebSocket feed.`,
-      entry
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.post("/external-ws/whitelist/remove", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const rawSymbol = String(req.body?.symbol || "").trim().toUpperCase();
-    if (!db.externalWsWhitelist.has(rawSymbol)) {
-      return res.status(404).json({ error: `Pair ${rawSymbol} tidak ditemukan di whitelist.` });
-    }
-    db.externalWsWhitelist.delete(rawSymbol);
-    db.saveToDisk();
-    priceAggregatorService.syncWhitelistSymbols(
-      db.getEnabledExternalWsSymbols("binance"),
-      db.getEnabledExternalWsSymbols("bybit")
-    );
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser?.id || "ADMIN",
-      action: "EXTERNAL_WS_WHITELIST_REMOVED",
-      resource: `ws_pair:${rawSymbol}`,
-      details: `Pair ${rawSymbol} dihapus dari whitelist WebSocket oleh ${adminUser?.email}`,
-      createdAt: Date.now()
-    });
-    db.scheduleSave();
-    res.json({
-      success: true,
-      message: `Pair ${rawSymbol} dihapus dari whitelist & di-unsubscribe dari WebSocket.`
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-function validateAndSanitizeLogoUrl(rawLogo) {
-  if (rawLogo === void 0) return void 0;
-  const trimmed = String(rawLogo || "").trim();
-  if (!trimmed) return "";
-  if (trimmed.length > 512e3) {
-    throw new Error("Ukuran logo terlalu besar (maksimal 500 KB). Kompres atau pilih gambar yang lebih kecil.");
-  }
-  if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) {
-    if (trimmed.length > 2048) {
-      throw new Error("URL logo terlalu panjang (maksimal 2048 karakter).");
-    }
-    return trimmed;
-  }
-  const dataUriMatch = trimmed.match(/^data:image\/(png|jpeg|jpg|webp|gif|svg\+xml);base64,([A-Za-z0-9+/=]+)$/i);
-  if (dataUriMatch) {
-    const mimeSubtype = dataUriMatch[1].toLowerCase();
-    if (mimeSubtype === "svg+xml") {
-      const decodedSvg = Buffer.from(dataUriMatch[2], "base64").toString("utf8");
-      if (/<script[\s>]|on[a-z]+\s*=|javascript:/i.test(decodedSvg)) {
-        throw new Error("File SVG tidak diizinkan mengandung script atau event handler.");
-      }
-    }
-    return trimmed;
-  }
-  throw new Error("Format logo tidak valid. Gunakan upload PNG/JPG/WebP/SVG atau URL https://");
-}
-function validateOptionalHttpUrl(rawUrl, fieldName) {
-  if (rawUrl === void 0) return void 0;
-  const trimmed = String(rawUrl || "").trim();
-  if (!trimmed) return "";
-  if (!/^https?:\/\//i.test(trimmed)) {
-    throw new Error(`${fieldName} harus diawali dengan https:// atau http://`);
-  }
-  if (trimmed.length > 1024) {
-    throw new Error(`${fieldName} terlalu panjang.`);
-  }
-  return trimmed;
-}
-function serializeAdminAsset(asset) {
-  const linkedPairs = Array.from(db.tradingPairs.values()).filter(
-    (p) => p.baseCurrency.toUpperCase() === asset.symbol.toUpperCase() || p.quoteCurrency.toUpperCase() === asset.symbol.toUpperCase()
-  ).map((p) => p.id);
-  return {
-    ...asset,
-    logoUrl: asset.logoUrl || "",
-    category: asset.category || (asset.network === "FIAT" ? "Fiat" : asset.assetType === "NATIVE" ? "Layer 1" : "Token"),
-    contractAddress: asset.contractAddress || "",
-    description: asset.description || "",
-    websiteUrl: asset.websiteUrl || "",
-    explorerUrl: asset.explorerUrl || "",
-    linkedPairs
-  };
-}
-adminRouter.get("/assets", requireAdmin, (req, res) => {
-  try {
-    const assets = db.ensureAssetsForTradingPairs().map(serializeAdminAsset).sort((a, b) => a.symbol.localeCompare(b.symbol));
-    res.json({
-      success: true,
-      count: assets.length,
-      assets
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-adminRouter.post("/assets", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const rawSymbol = String(req.body?.symbol || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-    const rawName = String(req.body?.name || "").trim();
-    if (!rawSymbol || rawSymbol.length < 2 || rawSymbol.length > 15) {
-      return res.status(400).json({ error: "Simbol aset harus 2\u201315 karakter alfanumerik (contoh: BTC, SOL, PEPE)." });
-    }
-    if (!rawName || rawName.length < 2 || rawName.length > 80) {
-      return res.status(400).json({ error: "Nama lengkap aset harus 2\u201380 karakter." });
-    }
-    const existing = Array.from(db.assets.values()).find(
-      (a) => a.symbol.toUpperCase() === rawSymbol
-    );
-    if (existing) {
-      return res.status(409).json({ error: `Aset dengan simbol ${rawSymbol} sudah terdaftar. Gunakan menu Edit Aset.` });
-    }
-    const decimals = Number(req.body?.decimals ?? 8);
-    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
-      return res.status(400).json({ error: "Desimal aset harus berupa bilangan bulat antara 0 sampai 18." });
-    }
-    const assetType = req.body?.assetType === "NATIVE" ? "NATIVE" : "TOKEN";
-    const allowedStatuses = ["PENDING", "ACTIVE", "SUSPENDED", "RETIRED"];
-    const status = allowedStatuses.includes(req.body?.status) ? req.body.status : "ACTIVE";
-    const network = String(req.body?.network || rawSymbol).trim().toUpperCase() || rawSymbol;
-    const logoUrl = validateAndSanitizeLogoUrl(req.body?.logoUrl) || "";
-    const websiteUrl = validateOptionalHttpUrl(req.body?.websiteUrl, "Website URL") || "";
-    const explorerUrl = validateOptionalHttpUrl(req.body?.explorerUrl, "Explorer URL") || "";
-    const category = String(req.body?.category || (assetType === "NATIVE" ? "Layer 1" : "Token")).trim().slice(0, 40);
-    const description = String(req.body?.description || "").trim().slice(0, 1e3);
-    const contractAddress = String(req.body?.contractAddress || "").trim().slice(0, 160);
-    const now = Date.now();
-    const newAsset = {
-      id: `ast-${rawSymbol.toLowerCase()}-${crypto13.randomUUID().slice(0, 8)}`,
-      symbol: rawSymbol,
-      name: rawName,
-      logoUrl,
-      assetType,
-      category,
-      decimals,
-      network,
-      contractAddress: contractAddress || void 0,
-      description: description || void 0,
-      websiteUrl: websiteUrl || void 0,
-      explorerUrl: explorerUrl || void 0,
-      status,
-      depositEnabled: req.body?.depositEnabled !== void 0 ? Boolean(req.body.depositEnabled) : true,
-      withdrawalEnabled: req.body?.withdrawalEnabled !== void 0 ? Boolean(req.body.withdrawalEnabled) : true,
-      createdAt: now,
-      updatedAt: now
-    };
-    db.assets.set(newAsset.id, newAsset);
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser?.id || "ADMIN",
-      action: "ASSET_CREATED",
-      resource: `asset:${newAsset.symbol}`,
-      details: `Aset baru ${newAsset.symbol} (${newAsset.name}, ${newAsset.decimals} desimal, network=${newAsset.network}, customLogo=${Boolean(logoUrl)}) ditambahkan oleh ${adminUser?.email}`,
-      createdAt: now
-    });
-    db.saveToDisk();
-    const serializedList = Array.from(db.assets.values()).map(serializeAdminAsset);
-    marketWsService.broadcastAssetsUpdated(serializedList);
-    res.status(201).json({
-      success: true,
-      message: `Aset ${newAsset.symbol} (${newAsset.name}) berhasil ditambahkan.`,
-      asset: serializeAdminAsset(newAsset)
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.put("/assets/:id", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const assetId = req.params.id;
-    const asset = db.assets.get(assetId) || Array.from(db.assets.values()).find((a) => a.symbol.toUpperCase() === assetId.toUpperCase());
-    if (!asset) {
-      return res.status(404).json({ error: `Aset ${assetId} tidak ditemukan.` });
-    }
-    const changes = [];
-    if (req.body?.name !== void 0) {
-      const nextName = String(req.body.name).trim();
-      if (nextName.length < 2 || nextName.length > 80) {
-        return res.status(400).json({ error: "Nama aset harus 2\u201380 karakter." });
-      }
-      if (nextName !== asset.name) {
-        changes.push(`name: "${asset.name}" -> "${nextName}"`);
-        asset.name = nextName;
-      }
-    }
-    if (req.body?.logoUrl !== void 0) {
-      const sanitizedLogo = validateAndSanitizeLogoUrl(req.body.logoUrl) || "";
-      if (sanitizedLogo !== (asset.logoUrl || "")) {
-        changes.push(`logoUrl: ${sanitizedLogo ? "UPDATED" : "CLEARED"}`);
-        asset.logoUrl = sanitizedLogo || void 0;
-      }
-    }
-    if (req.body?.assetType !== void 0) {
-      const nextType = req.body.assetType === "NATIVE" ? "NATIVE" : "TOKEN";
-      if (nextType !== asset.assetType) {
-        changes.push(`assetType: ${asset.assetType} -> ${nextType}`);
-        asset.assetType = nextType;
-      }
-    }
-    if (req.body?.category !== void 0) {
-      const nextCategory = String(req.body.category || "").trim().slice(0, 40);
-      if (nextCategory !== (asset.category || "")) {
-        changes.push(`category: "${asset.category || ""}" -> "${nextCategory}"`);
-        asset.category = nextCategory || void 0;
-      }
-    }
-    if (req.body?.network !== void 0) {
-      const nextNetwork = String(req.body.network || "").trim().toUpperCase().slice(0, 40);
-      if (!nextNetwork) {
-        return res.status(400).json({ error: "Jaringan (network) tidak boleh kosong." });
-      }
-      if (nextNetwork !== asset.network) {
-        changes.push(`network: ${asset.network} -> ${nextNetwork}`);
-        asset.network = nextNetwork;
-      }
-    }
-    if (req.body?.contractAddress !== void 0) {
-      const nextContract = String(req.body.contractAddress || "").trim().slice(0, 160);
-      if (nextContract !== (asset.contractAddress || "")) {
-        changes.push(`contractAddress updated`);
-        asset.contractAddress = nextContract || void 0;
-      }
-    }
-    if (req.body?.description !== void 0) {
-      const nextDesc = String(req.body.description || "").trim().slice(0, 1e3);
-      if (nextDesc !== (asset.description || "")) {
-        changes.push(`description updated`);
-        asset.description = nextDesc || void 0;
-      }
-    }
-    if (req.body?.websiteUrl !== void 0) {
-      const nextWeb = validateOptionalHttpUrl(req.body.websiteUrl, "Website URL") || "";
-      if (nextWeb !== (asset.websiteUrl || "")) {
-        changes.push(`websiteUrl updated`);
-        asset.websiteUrl = nextWeb || void 0;
-      }
-    }
-    if (req.body?.explorerUrl !== void 0) {
-      const nextExplorer = validateOptionalHttpUrl(req.body.explorerUrl, "Explorer URL") || "";
-      if (nextExplorer !== (asset.explorerUrl || "")) {
-        changes.push(`explorerUrl updated`);
-        asset.explorerUrl = nextExplorer || void 0;
-      }
-    }
-    const syncedPairs = [];
-    if (req.body?.decimals !== void 0) {
-      const nextDecimals = Number(req.body.decimals);
-      if (!Number.isInteger(nextDecimals) || nextDecimals < 0 || nextDecimals > 18) {
-        return res.status(400).json({ error: "Desimal aset harus berupa bilangan bulat antara 0 sampai 18." });
-      }
-      if (nextDecimals !== asset.decimals) {
-        changes.push(`decimals: ${asset.decimals} -> ${nextDecimals}`);
-        asset.decimals = nextDecimals;
-        for (const pair of db.tradingPairs.values()) {
-          let pairChanged = false;
-          if (pair.baseCurrency.toUpperCase() === asset.symbol.toUpperCase()) {
-            pair.baseDecimals = nextDecimals;
-            pairChanged = true;
-          }
-          if (pair.quoteCurrency.toUpperCase() === asset.symbol.toUpperCase()) {
-            pair.quoteDecimals = nextDecimals;
-            pairChanged = true;
-          }
-          if (pairChanged) {
-            syncedPairs.push(pair.id);
-          }
-        }
-      }
-    }
-    if (req.body?.status !== void 0) {
-      const allowedStatuses = ["PENDING", "ACTIVE", "SUSPENDED", "RETIRED"];
-      if (!allowedStatuses.includes(req.body.status)) {
-        return res.status(400).json({ error: "Status aset tidak valid." });
-      }
-      if (req.body.status !== asset.status) {
-        changes.push(`status: ${asset.status} -> ${req.body.status}`);
-        asset.status = req.body.status;
-      }
-    }
-    if (req.body?.depositEnabled !== void 0) {
-      const nextDep = Boolean(req.body.depositEnabled);
-      if (nextDep !== asset.depositEnabled) {
-        changes.push(`depositEnabled: ${asset.depositEnabled} -> ${nextDep}`);
-        asset.depositEnabled = nextDep;
-      }
-    }
-    if (req.body?.withdrawalEnabled !== void 0) {
-      const nextWd = Boolean(req.body.withdrawalEnabled);
-      if (nextWd !== asset.withdrawalEnabled) {
-        changes.push(`withdrawalEnabled: ${asset.withdrawalEnabled} -> ${nextWd}`);
-        asset.withdrawalEnabled = nextWd;
-      }
-    }
-    asset.updatedAt = Date.now();
-    db.assets.set(asset.id, asset);
-    db.auditLogs.push({
-      id: crypto13.randomUUID(),
-      actorId: adminUser?.id || "ADMIN",
-      action: "ASSET_UPDATED",
-      resource: `asset:${asset.symbol}`,
-      details: `Aset ${asset.symbol} diperbarui oleh ${adminUser?.email}: ${changes.length > 0 ? changes.join("; ") : "no field changes"}${syncedPairs.length > 0 ? ` | Synced pairs: ${syncedPairs.join(", ")}` : ""}`,
-      createdAt: Date.now()
-    });
-    db.saveToDisk();
-    const serializedList = Array.from(db.assets.values()).map(serializeAdminAsset);
-    marketWsService.broadcastAssetsUpdated(serializedList);
-    res.json({
-      success: true,
-      message: `Aset ${asset.symbol} (${asset.name}) berhasil diperbarui${syncedPairs.length > 0 ? ` & disinkronkan ke ${syncedPairs.length} pair` : ""}.`,
-      asset: serializeAdminAsset(asset),
-      syncedPairs
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.post("/pairs/delist-schedule", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { pairId, delistScheduledAt, reason } = req.body;
-    if (!pairId || !delistScheduledAt) {
-      return res.status(400).json({ error: "pairId dan delistScheduledAt wajib diisi." });
-    }
-    const pair = scheduleDelistMarket(
-      String(pairId),
-      Number(delistScheduledAt),
-      adminUser?.id || "ADMIN",
-      adminUser?.email,
-      reason
-    );
-    res.json({
-      success: true,
-      message: `Delisting ${pair.id} dijadwalkan pada ${new Date(pair.delistScheduledAt || 0).toLocaleString("id-ID")}. Countdown timer delisting kini tampil di Market Chart.`,
-      pair
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.post("/pairs/delist-cancel", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { pairId } = req.body;
-    if (!pairId) return res.status(400).json({ error: "pairId wajib diisi." });
-    const pair = cancelScheduledDelistMarket(String(pairId), adminUser?.id || "ADMIN", adminUser?.email);
-    res.json({
-      success: true,
-      message: `Jadwal delisting untuk ${pair.id} berhasil dibatalkan.`,
-      pair
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.post("/pairs/delist-now", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { pairId, reason } = req.body;
-    if (!pairId) return res.status(400).json({ error: "pairId wajib diisi." });
-    const result = executeDelistMarket(
-      String(pairId),
-      adminUser?.id || "ADMIN",
-      adminUser?.email,
-      reason
-    );
-    res.json({
-      success: true,
-      message: `Market ${result.pair.id} berhasil di-DELISTING. ${result.cancelledOrdersCount} order terbuka dibatalkan & direfund otomatis, ${result.stoppedBotsCount} bot dihentikan.`,
-      ...result
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-adminRouter.post("/pairs/relist", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { pairId } = req.body;
-    if (!pairId) return res.status(400).json({ error: "pairId wajib diisi." });
-    const pair = relistMarket(String(pairId), adminUser?.id || "ADMIN", adminUser?.email);
-    res.json({
-      success: true,
-      message: `Market ${pair.id} berhasil diaktifkan kembali (Relisted).`,
-      pair
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-// server/routes/listing.ts
-import { Router as Router7 } from "express";
-init_database();
-
-// server/services/listing/ListingService.ts
-init_database();
 import crypto14 from "crypto";
-var ListingService = class {
-  /**
-   * Validate network-specific contract address format
-   */
-  static validateContractAddress(network, contractAddress) {
-    if (!contractAddress) return;
-    const net = network.toUpperCase();
-    if (net.includes("ETHEREUM") || net.includes("ERC20") || net.includes("BSC") || net.includes("BEP20") || net.includes("POLYGON") || net.includes("ARBITRUM")) {
-      if (!/^0x[a-fA-F0-9]{40}$/.test(contractAddress)) {
-        throw new Error(`Alamat kontrak EVM tidak valid untuk jaringan ${network}: harus diawali 0x diikuti 40 digit heksadesimal`);
-      }
-    } else if (net.includes("SOLANA") || net.includes("SPL")) {
-      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(contractAddress)) {
-        throw new Error(`Alamat mint Solana tidak valid: harus 32-44 karakter Base58`);
-      }
-    } else if (net.includes("TRON") || net.includes("TRC20")) {
-      if (!/^T[a-km-zA-HJ-NP-Z1-9]{33}$/.test(contractAddress)) {
-        throw new Error(`Alamat kontrak TRON TRC-20 tidak valid: harus diawali huruf T dengan panjang 34 karakter Base58`);
-      }
-    }
-  }
-  /**
-   * Register a new Asset in the catalog
-   */
-  static createAsset(input, actorId, securityMeta) {
-    const normalizedSymbol = input.symbol.trim().toUpperCase();
-    if (!/^[A-Z0-9]{2,12}$/.test(normalizedSymbol)) {
-      throw new Error(`Format simbol aset tidak valid: ${input.symbol}. Harus 2-12 karakter alfanumerik huruf besar.`);
-    }
-    for (const a of db.assets.values()) {
-      if (a.symbol === normalizedSymbol) {
-        throw new Error(`Aset dengan simbol ${normalizedSymbol} sudah terdaftar di bursa.`);
-      }
-    }
-    if (!input.name || input.name.trim().length < 2) {
-      throw new Error("Nama aset wajib diisi (minimal 2 karakter).");
-    }
-    const decimals = Number(input.decimals);
-    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
-      throw new Error("Presisi desimal aset harus berupa integer antara 0 dan 18.");
-    }
-    if (!input.network || input.network.trim().length < 2) {
-      throw new Error("Jaringan aset (network) wajib ditentukan.");
-    }
-    if (input.assetType === "TOKEN" && !input.contractAddress) {
-      throw new Error(`Aset bertipe TOKEN pada jaringan ${input.network} wajib menyertakan contractAddress.`);
-    }
-    this.validateContractAddress(input.network, input.contractAddress);
-    const assetId = crypto14.randomUUID();
-    const now = Date.now();
-    const asset = {
-      id: assetId,
-      symbol: normalizedSymbol,
-      name: input.name.trim(),
-      assetType: input.assetType,
-      decimals,
-      network: input.network.trim().toUpperCase(),
-      contractAddress: input.contractAddress ? input.contractAddress.trim() : void 0,
-      status: "PENDING",
-      depositEnabled: input.depositEnabled !== void 0 ? Boolean(input.depositEnabled) : true,
-      withdrawalEnabled: input.withdrawalEnabled !== void 0 ? Boolean(input.withdrawalEnabled) : true,
-      depositOpenedAt: input.depositOpenedAt,
-      withdrawalOpenedAt: input.withdrawalOpenedAt,
-      createdAt: now,
-      updatedAt: now
-    };
-    db.assets.set(assetId, asset);
-    db.scheduleSave();
-    ListingAuditService.recordEvent({
-      aggregateId: assetId,
-      eventType: "ASSET_CREATED",
-      actorId,
-      aggregateVersion: 1,
-      payload: {
-        symbol: asset.symbol,
-        name: asset.name,
-        decimals: asset.decimals,
-        network: asset.network,
-        contractAddress: asset.contractAddress,
-        assetType: asset.assetType
-      },
-      reason: `Asset ${asset.symbol} created by admin`,
-      securityMetadata: securityMeta
-    });
-    return asset;
-  }
-  /**
-   * Helper to retrieve or validate Quote Asset (Default is IDR)
-   */
-  static getQuoteAsset(quoteAssetIdOrSymbol) {
-    if (quoteAssetIdOrSymbol) {
-      const customQuote = db.assets.get(quoteAssetIdOrSymbol);
-      if (customQuote) return customQuote;
-      const targetSym = quoteAssetIdOrSymbol.trim().toUpperCase();
-      for (const a of db.assets.values()) {
-        if (a.symbol === targetSym) return a;
-      }
-      throw new Error(`Quote asset tidak ditemukan: ${quoteAssetIdOrSymbol}`);
-    }
-    for (const a of db.assets.values()) {
-      if (a.symbol === "IDR") return a;
-    }
-    const idrAsset = {
-      id: "ast-idr-0000-0000-000000000001",
-      symbol: "IDR",
-      name: "Indonesian Rupiah",
-      assetType: "NATIVE",
-      decimals: 2,
-      network: "FIAT",
-      status: "ACTIVE",
-      depositEnabled: true,
-      withdrawalEnabled: true,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
-    db.assets.set(idrAsset.id, idrAsset);
-    return idrAsset;
-  }
-  /**
-   * Validate exact BigInt financial parameters
-   */
-  static validateFinancialParameters(params) {
-    const quoteUnitLabel = params.quoteSymbol === "IDR" ? "sen IDR" : `unit ${params.quoteSymbol || "quote"}`;
-    try {
-      const tick = BigInt(params.tickSize);
-      if (tick <= 0n) throw new Error("Tick size harus berupa integer positif lebih besar dari 0");
-    } catch {
-      throw new Error(`Nilai tickSize tidak valid: ${params.tickSize}. Wajib berupa string integer eksak (${quoteUnitLabel}).`);
-    }
-    try {
-      const lot = BigInt(params.lotSize);
-      if (lot <= 0n) throw new Error("Lot size harus berupa integer positif lebih besar dari 0");
-    } catch {
-      throw new Error(`Nilai lotSize tidak valid: ${params.lotSize}. Wajib berupa string integer eksak.`);
-    }
-    try {
-      const minQty = BigInt(params.minQuantity);
-      if (minQty <= 0n) throw new Error("Min quantity harus berupa integer positif lebih besar dari 0");
-      const lot = BigInt(params.lotSize);
-      if (minQty < lot) throw new Error(`Min quantity (${minQty}) tidak boleh lebih kecil dari lot size (${lot})`);
-    } catch (err) {
-      throw new Error(err.message || `Nilai minQuantity tidak valid: ${params.minQuantity}`);
-    }
-    try {
-      const minNotional = BigInt(params.minNotional);
-      if (minNotional <= 0n) throw new Error(`Min notional harus berupa integer positif lebih besar dari 0 ${quoteUnitLabel}`);
-    } catch {
-      throw new Error(`Nilai minNotional tidak valid: ${params.minNotional}. Wajib berupa string integer ${quoteUnitLabel}.`);
-    }
-    if (params.makerFeeBps !== void 0) {
-      if (!Number.isInteger(params.makerFeeBps) || params.makerFeeBps < 0 || params.makerFeeBps > 1e3) {
-        throw new Error("Maker fee harus berupa integer antara 0 dan 1000 basis poin (maks 10.00%)");
-      }
-    }
-    if (params.takerFeeBps !== void 0) {
-      if (!Number.isInteger(params.takerFeeBps) || params.takerFeeBps < 0 || params.takerFeeBps > 1e3) {
-        throw new Error("Taker fee harus berupa integer antara 0 dan 1000 basis poin (maks 10.00%)");
-      }
-    }
-  }
-  /**
-   * 1. MAKER: Create Draft Listing Request
-   */
-  static createListingRequest(input, makerAdminId, securityMeta) {
-    const baseAsset = db.assets.get(input.assetId);
-    if (!baseAsset) {
-      throw new Error(`Aset dasar tidak ditemukan: ${input.assetId}`);
-    }
-    const quoteAsset = this.getQuoteAsset(input.quoteAssetId);
-    const existingListing = Array.from(db.listingRequests.values()).find(
-      (l) => l.assetId === baseAsset.id && l.quoteAssetId === quoteAsset.id && l.status !== "CANCELLED" && l.status !== "REJECTED"
-    );
-    if (existingListing) {
-      throw new Error(`Listing untuk pasangan ${baseAsset.symbol}/${quoteAsset.symbol} sudah ada (Status: ${existingListing.status})`);
-    }
-    this.validateFinancialParameters({ ...input, quoteSymbol: quoteAsset.symbol });
-    const listingId = crypto14.randomUUID();
-    const now = Date.now();
-    const listing = {
-      id: listingId,
-      assetId: baseAsset.id,
-      quoteAssetId: quoteAsset.id,
-      status: "DRAFT",
-      tickSize: input.tickSize,
-      lotSize: input.lotSize,
-      minQuantity: input.minQuantity,
-      maxQuantity: input.maxQuantity,
-      minNotional: input.minNotional,
-      makerFeeBps: input.makerFeeBps !== void 0 ? input.makerFeeBps : 10,
-      takerFeeBps: input.takerFeeBps !== void 0 ? input.takerFeeBps : 20,
-      scheduledAt: input.scheduledAt,
-      depositOpenedAt: input.depositOpenedAt,
-      withdrawalOpenedAt: input.withdrawalOpenedAt,
-      depositEnabled: input.depositEnabled !== void 0 ? input.depositEnabled : true,
-      withdrawalEnabled: input.withdrawalEnabled !== void 0 ? input.withdrawalEnabled : true,
-      marketMakerAccountId: input.marketMakerAccountId || "usr-mm-0000-0000-000000000001",
-      projectOwnerAccountId: input.projectOwnerAccountId,
-      initialLiquidityBase: input.initialLiquidityBase,
-      initialLiquidityQuoteIdr: input.initialLiquidityQuoteIdr,
-      createdBy: makerAdminId,
-      version: 1,
-      createdAt: now,
-      updatedAt: now
-    };
-    db.listingRequests.set(listingId, listing);
-    db.scheduleSave();
-    ListingAuditService.recordEvent({
-      aggregateId: listingId,
-      eventType: "LISTING_CREATED",
-      actorId: makerAdminId,
-      aggregateVersion: 1,
-      payload: {
-        symbol: `${baseAsset.symbol}-${quoteAsset.symbol}`,
-        tickSize: listing.tickSize,
-        lotSize: listing.lotSize,
-        minQuantity: listing.minQuantity,
-        minNotional: listing.minNotional,
-        makerFeeBps: listing.makerFeeBps,
-        takerFeeBps: listing.takerFeeBps,
-        status: listing.status
-      },
-      reason: "Draft listing created by Maker Admin",
-      securityMetadata: securityMeta
-    });
-    return listing;
-  }
-  /**
-   * 2. Update Draft or Pending Listing Request
-   * If sensitive parameters change, increments version and invalidates any previous approval.
-   */
-  static updateListingRequest(id, input, actorId, securityMeta) {
-    const listing = db.listingRequests.get(id);
-    if (!listing) throw new Error(`Listing request tidak ditemukan: ${id}`);
-    if (listing.status !== "DRAFT" && listing.status !== "PENDING_REVIEW" && listing.status !== "APPROVED") {
-      throw new Error(`Listing request dalam status ${listing.status} tidak dapat diubah (Hanya DRAFT, PENDING_REVIEW, atau APPROVED sebelum aktif).`);
-    }
-    if (listing.status === "APPROVED") {
-      listing.status = "DRAFT";
-    }
-    if (input.tickSize || input.lotSize || input.minQuantity || input.minNotional || input.makerFeeBps !== void 0 || input.takerFeeBps !== void 0) {
-      const quoteAsset = db.assets.get(listing.quoteAssetId);
-      this.validateFinancialParameters({
-        tickSize: input.tickSize || listing.tickSize,
-        lotSize: input.lotSize || listing.lotSize,
-        minQuantity: input.minQuantity || listing.minQuantity,
-        minNotional: input.minNotional || listing.minNotional,
-        makerFeeBps: input.makerFeeBps !== void 0 ? input.makerFeeBps : listing.makerFeeBps,
-        takerFeeBps: input.takerFeeBps !== void 0 ? input.takerFeeBps : listing.takerFeeBps,
-        quoteSymbol: quoteAsset?.symbol
-      });
-    }
-    const previousVersion = listing.version;
-    const newVersion = previousVersion + 1;
-    if (input.tickSize) listing.tickSize = input.tickSize;
-    if (input.lotSize) listing.lotSize = input.lotSize;
-    if (input.minQuantity) listing.minQuantity = input.minQuantity;
-    if (input.minNotional) listing.minNotional = input.minNotional;
-    if (input.makerFeeBps !== void 0) listing.makerFeeBps = input.makerFeeBps;
-    if (input.takerFeeBps !== void 0) listing.takerFeeBps = input.takerFeeBps;
-    if (input.scheduledAt !== void 0) listing.scheduledAt = input.scheduledAt;
-    if (input.depositOpenedAt !== void 0) listing.depositOpenedAt = input.depositOpenedAt;
-    if (input.withdrawalOpenedAt !== void 0) listing.withdrawalOpenedAt = input.withdrawalOpenedAt;
-    if (input.depositEnabled !== void 0) listing.depositEnabled = input.depositEnabled;
-    if (input.withdrawalEnabled !== void 0) listing.withdrawalEnabled = input.withdrawalEnabled;
-    if (input.marketMakerAccountId !== void 0) listing.marketMakerAccountId = input.marketMakerAccountId;
-    if (input.projectOwnerAccountId !== void 0) listing.projectOwnerAccountId = input.projectOwnerAccountId;
-    if (input.initialLiquidityBase !== void 0) listing.initialLiquidityBase = input.initialLiquidityBase;
-    if (input.initialLiquidityQuoteIdr !== void 0) listing.initialLiquidityQuoteIdr = input.initialLiquidityQuoteIdr;
-    listing.version = newVersion;
-    listing.updatedAt = Date.now();
-    db.listingApprovals.delete(listing.id);
-    db.listingRequests.set(id, listing);
-    db.scheduleSave();
-    ListingAuditService.recordEvent({
-      aggregateId: id,
-      eventType: "LISTING_UPDATED",
-      actorId,
-      aggregateVersion: newVersion,
-      payload: {
-        previousVersion,
-        newVersion,
-        updatedFields: input
-      },
-      reason: "Listing parameters updated by Admin, previous approvals invalidated",
-      securityMetadata: securityMeta
-    });
-    return listing;
-  }
-  /**
-   * 3. Submit Listing Request for Review
-   * Transitions DRAFT -> PENDING_REVIEW
-   */
-  static submitForReview(id, actorId, securityMeta) {
-    const listing = db.listingRequests.get(id);
-    if (!listing) throw new Error(`Listing request tidak ditemukan: ${id}`);
-    if (listing.status !== "DRAFT") {
-      throw new Error(`Hanya listing berstatus DRAFT yang dapat diajukan untuk review (Status saat ini: ${listing.status})`);
-    }
-    listing.status = "PENDING_REVIEW";
-    listing.updatedAt = Date.now();
-    db.listingRequests.set(id, listing);
-    db.scheduleSave();
-    ListingAuditService.recordEvent({
-      aggregateId: id,
-      eventType: "LISTING_SUBMITTED",
-      actorId,
-      aggregateVersion: listing.version,
-      payload: {
-        status: listing.status
-      },
-      reason: "Submitted for Maker-Checker review",
-      securityMetadata: securityMeta
-    });
-    return listing;
-  }
-  /**
-   * 4. CHECKER: Approve Listing Request
-   * Strictly enforces Maker-Checker: reviewerId !== createdBy!
-   */
-  static approveListing(id, reviewerId, reason, securityMeta) {
-    const listing = db.listingRequests.get(id);
-    if (!listing) throw new Error(`Listing request tidak ditemukan: ${id}`);
-    if (listing.status !== "PENDING_REVIEW") {
-      throw new Error(`Hanya listing berstatus PENDING_REVIEW yang dapat disetujui (Status saat ini: ${listing.status})`);
-    }
-    if (listing.createdBy === reviewerId) {
-      throw new Error("Pelanggaran Maker-Checker: Pembuat listing (Maker) tidak diperbolehkan menyetujui (Approve) listing buatannya sendiri.");
-    }
-    if (!reason || reason.trim().length < 5) {
-      throw new Error("Alasan persetujuan (approval reason) wajib diisi dengan jelas minimal 5 karakter.");
-    }
-    const existingApproval = db.listingApprovals.get(listing.id);
-    if (existingApproval && existingApproval.configVersion === listing.version && existingApproval.decision === "APPROVED") {
-      throw new Error(`Listing versi ${listing.version} sudah memiliki persetujuan aktif.`);
-    }
-    const approvalId = crypto14.randomUUID();
-    const approval = {
-      id: approvalId,
-      listingRequestId: listing.id,
-      reviewerId,
-      decision: "APPROVED",
-      reason: reason.trim(),
-      configVersion: listing.version,
-      reviewedAt: Date.now()
-    };
-    db.listingApprovals.set(listing.id, approval);
-    const hasFutureSchedule = Boolean(listing.scheduledAt && listing.scheduledAt > Date.now() + 5e3);
-    listing.status = hasFutureSchedule ? "SCHEDULED" : "APPROVED";
-    listing.updatedAt = Date.now();
-    db.listingRequests.set(listing.id, listing);
-    if (hasFutureSchedule) {
-      ensureScheduledPairEntry(listing);
-      marketWsService.broadcastTickerSnapshot();
-    }
-    db.saveToDisk();
-    ListingAuditService.recordEvent({
-      aggregateId: listing.id,
-      eventType: "LISTING_APPROVED",
-      actorId: reviewerId,
-      aggregateVersion: listing.version,
-      payload: {
-        approvalId,
-        decision: "APPROVED",
-        configVersion: approval.configVersion,
-        reason: approval.reason,
-        makerId: listing.createdBy,
-        checkerId: reviewerId
-      },
-      reason: `Listing approved by Checker Admin: ${reason}`,
-      securityMetadata: securityMeta
-    });
-    return approval;
-  }
-  /**
-   * 5. CHECKER: Reject Listing Request
-   * Strictly enforces Maker-Checker: reviewerId !== createdBy!
-   */
-  static rejectListing(id, reviewerId, reason, securityMeta) {
-    const listing = db.listingRequests.get(id);
-    if (!listing) throw new Error(`Listing request tidak ditemukan: ${id}`);
-    if (listing.status !== "PENDING_REVIEW") {
-      throw new Error(`Hanya listing berstatus PENDING_REVIEW yang dapat ditolak (Status saat ini: ${listing.status})`);
-    }
-    if (listing.createdBy === reviewerId) {
-      throw new Error("Pelanggaran Maker-Checker: Pembuat listing (Maker) tidak diperbolehkan menolak/memutuskan listing buatannya sendiri.");
-    }
-    if (!reason || reason.trim().length < 5) {
-      throw new Error("Alasan penolakan (rejection reason) wajib diisi minimal 5 karakter.");
-    }
-    const approvalId = crypto14.randomUUID();
-    const approval = {
-      id: approvalId,
-      listingRequestId: listing.id,
-      reviewerId,
-      decision: "REJECTED",
-      reason: reason.trim(),
-      configVersion: listing.version,
-      reviewedAt: Date.now()
-    };
-    db.listingApprovals.set(listing.id, approval);
-    listing.status = "REJECTED";
-    listing.updatedAt = Date.now();
-    db.listingRequests.set(listing.id, listing);
-    db.scheduleSave();
-    ListingAuditService.recordEvent({
-      aggregateId: listing.id,
-      eventType: "LISTING_REJECTED",
-      actorId: reviewerId,
-      aggregateVersion: listing.version,
-      payload: {
-        approvalId,
-        decision: "REJECTED",
-        configVersion: approval.configVersion,
-        reason: approval.reason,
-        makerId: listing.createdBy,
-        checkerId: reviewerId
-      },
-      reason: `Listing rejected by Checker Admin: ${reason}`,
-      securityMetadata: securityMeta
-    });
-    return approval;
-  }
-  /**
-   * 6. Schedule Listing Request (supports initial scheduling on APPROVED and rescheduling on SCHEDULED)
-   */
-  static scheduleListing(id, scheduledAt, actorId, securityMeta) {
-    const listing = db.listingRequests.get(id);
-    if (!listing) throw new Error(`Listing request tidak ditemukan: ${id}`);
-    if (listing.status !== "APPROVED" && listing.status !== "SCHEDULED") {
-      throw new Error(`Hanya listing berstatus APPROVED atau SCHEDULED yang dapat dijadwalkan (Status saat ini: ${listing.status})`);
-    }
-    if (!scheduledAt || !Number.isFinite(scheduledAt) || scheduledAt <= Date.now() + 5e3) {
-      throw new Error("Waktu jadwal (scheduledAt) harus berupa waktu masa depan (minimal 5 detik dari sekarang).");
-    }
-    listing.status = "SCHEDULED";
-    listing.scheduledAt = Math.floor(scheduledAt);
-    listing.updatedAt = Date.now();
-    db.listingRequests.set(listing.id, listing);
-    ensureScheduledPairEntry(listing);
-    db.saveToDisk();
-    marketWsService.broadcastTickerSnapshot();
-    ListingAuditService.recordEvent({
-      aggregateId: listing.id,
-      eventType: "LISTING_SCHEDULED",
-      actorId,
-      aggregateVersion: listing.version,
-      payload: {
-        scheduledAt: listing.scheduledAt
-      },
-      reason: `Listing scheduled for activation at ${new Date(listing.scheduledAt).toISOString()}`,
-      securityMetadata: securityMeta
-    });
-    return listing;
-  }
-  /**
-   * 6b. Cancel Scheduled Listing (reverts SCHEDULED -> APPROVED)
-   */
-  static cancelScheduleListing(id, actorId, securityMeta) {
-    const listing = db.listingRequests.get(id);
-    if (!listing) throw new Error(`Listing request tidak ditemukan: ${id}`);
-    if (listing.status !== "SCHEDULED") {
-      throw new Error(`Hanya listing berstatus SCHEDULED yang dapat dibatalkan jadwalnya (Status saat ini: ${listing.status})`);
-    }
-    const baseAsset = db.assets.get(listing.assetId);
-    const quoteAsset = db.assets.get(listing.quoteAssetId);
-    const pairId = baseAsset && quoteAsset ? `${baseAsset.symbol}-${quoteAsset.symbol}` : null;
-    listing.status = "APPROVED";
-    listing.scheduledAt = void 0;
-    listing.updatedAt = Date.now();
-    db.listingRequests.set(listing.id, listing);
-    if (pairId) {
-      const existingPair = db.tradingPairs.get(pairId);
-      if (existingPair && !existingPair.isActive && !db.markets.has(pairId)) {
-        db.tradingPairs.delete(pairId);
-      } else if (existingPair) {
-        existingPair.scheduledAt = void 0;
-        db.tradingPairs.set(pairId, existingPair);
-      }
-    }
-    db.saveToDisk();
-    marketWsService.broadcastTickerSnapshot();
-    ListingAuditService.recordEvent({
-      aggregateId: listing.id,
-      eventType: "LISTING_UPDATED",
-      actorId,
-      aggregateVersion: listing.version,
-      payload: { status: "APPROVED", scheduledAt: null },
-      reason: "Scheduled listing launch time cancelled by Admin",
-      securityMetadata: securityMeta
-    });
-    return listing;
-  }
-  /**
-   * 7. Idempotent Market Activation
-   */
-  static async activateListing(id, actorId, idempotencyKey, securityMeta) {
-    return ListingActivationService.activateMarket(id, actorId, idempotencyKey, securityMeta);
-  }
-  /**
-   * 8. Suspend Market Trading
-   */
-  static suspendMarket(id, actorId, reason, securityMeta) {
-    const listing = db.listingRequests.get(id);
-    let market;
-    if (listing) {
-      market = Array.from(db.markets.values()).find((m) => m.listingRequestId === listing.id);
-    } else {
-      market = db.markets.get(id);
-    }
-    if (!market) {
-      throw new Error(`Market tidak ditemukan untuk ID ${id}`);
-    }
-    market.status = "HALTED";
-    market.updatedAt = Date.now();
-    db.markets.set(market.id, market);
-    const pair = db.tradingPairs.get(market.id);
-    if (pair) {
-      pair.isHalted = true;
-      db.tradingPairs.set(pair.id, pair);
-    }
-    if (listing) {
-      listing.status = "SUSPENDED";
-      listing.updatedAt = Date.now();
-      db.listingRequests.set(listing.id, listing);
-    }
-    db.scheduleSave();
-    ListingAuditService.recordEvent({
-      aggregateId: listing ? listing.id : market.id,
-      eventType: "MARKET_SUSPENDED",
-      actorId,
-      aggregateVersion: market.version,
-      payload: {
-        marketId: market.id,
-        symbol: market.symbol,
-        reason
-      },
-      reason: `Market suspended: ${reason}`,
-      securityMetadata: securityMeta
-    });
-    marketWsService.broadcast({
-      type: "MARKET_STATUS_CHANGED",
-      data: {
-        symbol: market.symbol,
-        status: "HALTED",
-        isHalted: true
-      }
-    });
-    return market;
-  }
-  /**
-   * 9. Resume Market Trading
-   */
-  static resumeMarket(id, actorId, reason, securityMeta) {
-    const listing = db.listingRequests.get(id);
-    let market;
-    if (listing) {
-      market = Array.from(db.markets.values()).find((m) => m.listingRequestId === listing.id);
-    } else {
-      market = db.markets.get(id);
-    }
-    if (!market) throw new Error(`Market tidak ditemukan untuk ID ${id}`);
-    market.status = "ACTIVE";
-    market.updatedAt = Date.now();
-    db.markets.set(market.id, market);
-    const pair = db.tradingPairs.get(market.id);
-    if (pair) {
-      pair.isHalted = false;
-      pair.isActive = true;
-      db.tradingPairs.set(pair.id, pair);
-    }
-    if (listing) {
-      listing.status = "ACTIVE";
-      listing.updatedAt = Date.now();
-      db.listingRequests.set(listing.id, listing);
-    }
-    db.scheduleSave();
-    ListingAuditService.recordEvent({
-      aggregateId: listing ? listing.id : market.id,
-      eventType: "MARKET_RESUMED",
-      actorId,
-      aggregateVersion: market.version,
-      payload: {
-        marketId: market.id,
-        symbol: market.symbol,
-        reason
-      },
-      reason: `Market resumed: ${reason}`,
-      securityMetadata: securityMeta
-    });
-    marketWsService.broadcast({
-      type: "MARKET_STATUS_CHANGED",
-      data: {
-        symbol: market.symbol,
-        status: "ACTIVE",
-        isHalted: false
-      }
-    });
-    return market;
-  }
-};
-
-// server/services/listingService.ts
-init_database();
-import crypto15 from "crypto";
-init_PrecisionMath();
-var ListingService2 = class {
-  /**
-   * 1. CREATE Listing Request (Maker Action)
-   */
-  static createListingRequest(input, makerAdminId, securityMeta) {
-    if (!makerAdminId) {
-      throw new Error("Maker identity (makerAdminId) wajib disertakan untuk membuat listing.");
-    }
-    return ListingService.createListingRequest(input, makerAdminId, securityMeta);
-  }
-  /**
-   * 2. GET Listing Request by ID
-   */
-  static getListingRequestById(id) {
-    const listing = db.listingRequests.get(id);
-    if (!listing) return null;
-    const approval = db.listingApprovals.get(id);
-    const asset = db.assets.get(listing.assetId);
-    const quoteAsset = db.assets.get(listing.quoteAssetId);
-    return {
-      ...listing,
-      approval,
-      asset,
-      quoteAsset
-    };
-  }
-  /**
-   * 3. LIST Listing Requests with optional filter
-   */
-  static listListingRequests(filter) {
-    const all = Array.from(db.listingRequests.values());
-    const filtered = all.filter((l) => {
-      if (filter?.status && l.status !== filter.status) return false;
-      if (filter?.assetId && l.assetId !== filter.assetId) return false;
-      return true;
-    });
-    return filtered.map((l) => {
-      const approval = db.listingApprovals.get(l.id);
-      const asset = db.assets.get(l.assetId);
-      const quoteAsset = db.assets.get(l.quoteAssetId);
-      return {
-        ...l,
-        approval,
-        assetSymbol: asset ? asset.symbol : "UNKNOWN",
-        quoteSymbol: quoteAsset ? quoteAsset.symbol : "IDR"
-      };
-    });
-  }
-  /**
-   * 4. UPDATE Listing Request
-   * Sensitive parameter changes increment version and invalidate any previous approvals!
-   */
-  static updateListingRequest(id, input, actorId, securityMeta) {
-    return ListingService.updateListingRequest(id, input, actorId, securityMeta);
-  }
-  /**
-   * 5. DELETE / CANCEL Listing Request
-   */
-  static deleteListingRequest(id, actorId, reason, securityMeta) {
-    const listing = db.listingRequests.get(id);
-    if (!listing) {
-      throw new Error(`Listing request tidak ditemukan: ${id}`);
-    }
-    if (listing.status === "ACTIVE") {
-      throw new Error("Listing request yang sudah ACTIVE tidak dapat dihapus.");
-    }
-    listing.status = "CANCELLED";
-    listing.updatedAt = Date.now();
-    db.listingRequests.set(id, listing);
-    db.scheduleSave();
-    ListingAuditService.recordEvent({
-      aggregateId: id,
-      eventType: "LISTING_REJECTED",
-      actorId,
-      aggregateVersion: listing.version,
-      payload: { status: "CANCELLED" },
-      reason: reason || "Listing request cancelled by admin",
-      securityMetadata: securityMeta
-    });
-    return true;
-  }
-  /**
-   * 6. SUBMIT for Review (Maker submits DRAFT -> PENDING_REVIEW)
-   */
-  static submitForReview(id, actorId, securityMeta) {
-    return ListingService.submitForReview(id, actorId, securityMeta);
-  }
-  /**
-   * 7. APPROVE Listing Request (Checker Action)
-   * Strictly enforces Maker-Checker: reviewerId !== createdBy!
-   */
-  static approveListingRequest(id, checkerAdminId, reason, securityMeta) {
-    if (!checkerAdminId) {
-      throw new Error("Checker identity (checkerAdminId) wajib disertakan untuk approval.");
-    }
-    return ListingService.approveListing(id, checkerAdminId, reason, securityMeta);
-  }
-  /**
-   * 8. REJECT Listing Request (Checker Action)
-   * Strictly enforces Maker-Checker: reviewerId !== createdBy!
-   */
-  static rejectListingRequest(id, checkerAdminId, reason, securityMeta) {
-    if (!checkerAdminId) {
-      throw new Error("Checker identity (checkerAdminId) wajib disertakan untuk penolakan.");
-    }
-    return ListingService.rejectListing(id, checkerAdminId, reason, securityMeta);
-  }
-  /**
-   * 9. VALIDATE ENGINE READINESS
-   * Inspects matching engine state, order book clean status, ticker uniqueness, and asset registries.
-   */
-  static validateEngineReadiness(listingRequestId) {
-    const listing = db.listingRequests.get(listingRequestId);
-    if (!listing) {
-      throw new Error(`Listing request tidak ditemukan: ${listingRequestId}`);
-    }
-    const baseAsset = db.assets.get(listing.assetId);
-    const quoteAsset = db.assets.get(listing.quoteAssetId);
-    const baseAssetRegistered = !!baseAsset;
-    const quoteAssetRegistered = !!quoteAsset;
-    const marketSymbol = baseAsset && quoteAsset ? `${baseAsset.symbol}-${quoteAsset.symbol}` : "UNKNOWN";
-    const existingMarket = Array.from(db.markets.values()).find((m) => m.symbol === marketSymbol && m.status === "ACTIVE");
-    const existingTradingPair = Array.from(db.tradingPairs.values()).find((p) => p.id === marketSymbol && p.isActive);
-    const pairSymbolUnique = !existingMarket && !existingTradingPair;
-    let matchingEngineResponsive = false;
-    try {
-      matchingEngineResponsive = typeof matchingEngine.getOrderBook === "function";
-    } catch {
-      matchingEngineResponsive = false;
-    }
-    let orderBookZeroState = true;
-    try {
-      const book = matchingEngine.getOrderBook(marketSymbol);
-      if (book) {
-        orderBookZeroState = book.bids.length === 0 && book.asks.length === 0;
-      }
-    } catch {
-      orderBookZeroState = true;
-    }
-    const ledgerAccountsInitialized = baseAssetRegistered && quoteAssetRegistered;
-    const isReady = matchingEngineResponsive && orderBookZeroState && pairSymbolUnique && baseAssetRegistered && quoteAssetRegistered && ledgerAccountsInitialized;
-    let details = "Semua pemeriksaan kesiapan engine memenuhi syarat.";
-    if (!isReady) {
-      const failures = [];
-      if (!matchingEngineResponsive) failures.push("Matching engine tidak responsif");
-      if (!orderBookZeroState) failures.push("Order book tidak dalam status nol (terdapat order menggantung)");
-      if (!pairSymbolUnique) failures.push(`Simbol pasar ${marketSymbol} sudah aktif di bursa`);
-      if (!baseAssetRegistered) failures.push("Aset dasar belum terdaftar");
-      if (!quoteAssetRegistered) failures.push("Quote asset belum terdaftar");
-      details = `Engine belum siap: ${failures.join(", ")}`;
-    }
-    return {
-      isReady,
-      checks: {
-        matchingEngineResponsive,
-        orderBookZeroState,
-        pairSymbolUnique,
-        baseAssetRegistered,
-        quoteAssetRegistered,
-        ledgerAccountsInitialized
-      },
-      details
-    };
-  }
-  /**
-   * 10. IDEMPOTENT MARKET ACTIVATION ORCHESTRATOR
-   * Validates engine readiness before executing status updates to ACTIVE.
-   * Dispatches transactional outbox event for guaranteed delivery.
-   */
-  static async activateListingMarket(listingRequestId, actorId, idempotencyKey, securityMeta) {
-    const readiness = this.validateEngineReadiness(listingRequestId);
-    if (!readiness.isReady) {
-      throw new Error(`Aktivasi pasar gagal pra-verifikasi: ${readiness.details}`);
-    }
-    return await ListingActivationService.activateMarket(
-      listingRequestId,
-      actorId,
-      idempotencyKey,
-      securityMeta
-    );
-  }
-  /**
-   * 11. PUBLIC TOKEN LISTING APPLICATION (Project Portal)
-   * Allows external crypto projects and token issuers to submit listing proposals.
-   */
-  static submitPublicListingApplication(input, ipAddress) {
-    const symbol = input.tokenSymbol.trim().toUpperCase();
-    if (!/^[A-Z0-9]{2,12}$/.test(symbol)) {
-      throw new Error("Format simbol token harus 2-12 karakter alfanumerik huruf besar.");
-    }
-    ListingService.validateContractAddress(input.network, input.contractAddress);
-    const applicationId = `REQ-${Date.now().toString(36).toUpperCase()}-${crypto15.randomBytes(3).toString("hex").toUpperCase()}`;
-    const now = Date.now();
-    let asset = Array.from(db.assets.values()).find((a) => a.symbol === symbol);
-    if (!asset) {
-      const assetId = crypto15.randomUUID();
-      asset = {
-        id: assetId,
-        symbol,
-        name: input.tokenName.trim(),
-        assetType: "TOKEN",
-        decimals: input.decimals || 18,
-        network: input.network.toUpperCase(),
-        contractAddress: input.contractAddress.trim(),
-        status: "PENDING",
-        depositEnabled: false,
-        withdrawalEnabled: false,
-        createdAt: now,
-        updatedAt: now
-      };
-      db.assets.set(assetId, asset);
-    }
-    const isUsdtQuote = (input.quoteCurrency || "").toUpperCase() === "USDT";
-    const quoteAsset = ListingService.getQuoteAsset(isUsdtQuote ? "USDT" : "IDR");
-    const listingId = crypto15.randomUUID();
-    const tickSize = isUsdtQuote ? "10000" : "100";
-    const baseLotDefault = asset.decimals >= 2 ? (10n ** BigInt(asset.decimals - 2)).toString() : "1";
-    const lotSize = baseLotDefault;
-    const minQuantity = baseLotDefault;
-    const minNotional = isUsdtQuote ? "5000000" : "1000000";
-    let parsedInitialLiquidityQuote;
-    if (input.initialLiquidityCommitmentIdr) {
-      try {
-        const cleanedCommitment = String(input.initialLiquidityCommitmentIdr).trim().replace(/,/g, "");
-        if (cleanedCommitment) {
-          parsedInitialLiquidityQuote = PrecisionMath.parseToUnits(cleanedCommitment, quoteAsset.decimals).toString();
-        }
-      } catch {
-        parsedInitialLiquidityQuote = void 0;
-      }
-    }
-    const listing = {
-      id: listingId,
-      assetId: asset.id,
-      quoteAssetId: quoteAsset.id,
-      status: "PENDING_REVIEW",
-      // Automatically queued for Maker review
-      tickSize,
-      lotSize,
-      minQuantity,
-      minNotional,
-      makerFeeBps: 10,
-      takerFeeBps: 20,
-      depositOpenedAt: input.depositOpenedAt,
-      withdrawalOpenedAt: input.withdrawalOpenedAt,
-      depositEnabled: input.depositEnabled !== void 0 ? input.depositEnabled : true,
-      withdrawalEnabled: input.withdrawalEnabled !== void 0 ? input.withdrawalEnabled : true,
-      marketMakerAccountId: "usr-mm-0000-0000-000000000001",
-      projectOwnerAccountId: input.projectOwnerAccountId,
-      initialLiquidityQuoteIdr: parsedInitialLiquidityQuote,
-      createdBy: `portal:${input.contactEmail}`,
-      version: 1,
-      createdAt: now,
-      updatedAt: now
-    };
-    db.listingRequests.set(listingId, listing);
-    db.scheduleSave();
-    ListingAuditService.recordEvent({
-      aggregateId: listingId,
-      eventType: "LISTING_SUBMITTED",
-      actorId: `applicant:${input.contactEmail}`,
-      aggregateVersion: 1,
-      payload: {
-        applicationId,
-        tokenName: input.tokenName,
-        tokenSymbol: symbol,
-        network: input.network,
-        contractAddress: input.contractAddress,
-        decimals: input.decimals,
-        website: input.projectWebsite,
-        contact: input.contactEmail
-      },
-      reason: "Public token listing application received via DIMONEX Portal",
-      securityMetadata: { ip: ipAddress, userAgent: "PUBLIC_PORTAL" }
-    });
-    return {
-      applicationId,
-      tokenSymbol: symbol,
-      status: "SUBMITTED",
-      createdAt: now,
-      trackingMessage: `Pengajuan listing untuk ${symbol} berhasil disimpan. Tim DIMONEX Listing Committee akan mereview dalam 1-3 hari kerja.`
-    };
-  }
-};
-var listingService = ListingService2;
-
-// server/routes/listing.ts
-var listingRouter = Router7();
-function extractSecurityMeta(req) {
-  const user = req.user;
-  return {
-    ip: req.ip || req.socket.remoteAddress || "127.0.0.1",
-    userAgent: req.headers["user-agent"] || "unknown",
-    authRole: user ? user.role : "UNKNOWN",
-    sessionHash: req.token ? req.token.slice(-12) : void 0
-  };
-}
-listingRouter.post("/apply", (req, res) => {
-  try {
-    const {
-      tokenName,
-      tokenSymbol,
-      network,
-      contractAddress,
-      decimals,
-      projectWebsite,
-      whitepaperUrl,
-      contactEmail,
-      telegramHandle,
-      quoteCurrency,
-      expectedInitialPriceIdr,
-      initialLiquidityCommitmentIdr,
-      description,
-      projectOwnerAccountId,
-      depositOpenedAt,
-      withdrawalOpenedAt,
-      depositEnabled,
-      withdrawalEnabled
-    } = req.body;
-    if (!tokenName || !tokenSymbol || !network || !contactEmail) {
-      return res.status(400).json({
-        error: "Nama token, simbol, jaringan, dan email kontak wajib diisi.",
-        code: "MISSING_FIELDS"
-      });
-    }
-    const clientIp = req.ip || req.socket.remoteAddress || "127.0.0.1";
-    const result = listingService.submitPublicListingApplication({
-      tokenName,
-      tokenSymbol,
-      network,
-      contractAddress: contractAddress || "",
-      decimals: Number(decimals) || 18,
-      projectWebsite: projectWebsite || "",
-      whitepaperUrl,
-      contactEmail,
-      telegramHandle,
-      quoteCurrency: quoteCurrency === "USDT" ? "USDT" : "IDR",
-      expectedInitialPriceIdr: expectedInitialPriceIdr || "1000",
-      initialLiquidityCommitmentIdr: initialLiquidityCommitmentIdr || "10000000",
-      description: description || "",
-      projectOwnerAccountId,
-      depositOpenedAt: depositOpenedAt ? Number(depositOpenedAt) : void 0,
-      withdrawalOpenedAt: withdrawalOpenedAt ? Number(withdrawalOpenedAt) : void 0,
-      depositEnabled: depositEnabled !== void 0 ? Boolean(depositEnabled) : true,
-      withdrawalEnabled: withdrawalEnabled !== void 0 ? Boolean(withdrawalEnabled) : true
-    }, clientIp);
-    res.status(201).json({ success: true, data: result });
-  } catch (err) {
-    res.status(400).json({ error: err.message, code: "APPLICATION_REJECTED" });
-  }
-});
-listingRouter.get("/track/:id", (req, res) => {
-  try {
-    const query = req.params.id.trim().toUpperCase();
-    const allListings = Array.from(db.listingRequests.values());
-    const match = allListings.find((l) => {
-      const asset2 = db.assets.get(l.assetId);
-      return l.id === query || asset2 && asset2.symbol === query || l.createdBy && l.createdBy.toUpperCase().includes(query);
-    });
-    if (!match) {
-      return res.status(404).json({
-        error: `Pengajuan listing tidak ditemukan untuk ID atau Simbol "${query}"`,
-        code: "APPLICATION_NOT_FOUND"
-      });
-    }
-    const asset = db.assets.get(match.assetId);
-    const quote = db.assets.get(match.quoteAssetId);
-    const approval = db.listingApprovals.get(match.id);
-    const market = Array.from(db.markets.values()).find((m) => m.listingRequestId === match.id);
-    const mmUser = match.marketMakerAccountId ? db.users.get(match.marketMakerAccountId) : db.users.get("usr-mm-0000-0000-000000000001");
-    const projectUser = match.projectOwnerAccountId ? db.users.get(match.projectOwnerAccountId) : null;
-    const isDepositOpen = asset?.depositEnabled ?? match.depositEnabled ?? true;
-    const isWithdrawOpen = asset?.withdrawalEnabled ?? match.withdrawalEnabled ?? true;
-    let stage = 1;
-    let stageName = "Compliance Pre-Screening";
-    if (match.status === "PENDING_REVIEW") {
-      stage = 2;
-      stageName = "Maker Review & Risk Assessment";
-    } else if (match.status === "APPROVED" || match.status === "SCHEDULED") {
-      stage = 3;
-      stageName = "Checker Approval & Engine Readiness";
-    } else if (match.status === "ACTIVE") {
-      stage = 4;
-      stageName = "Market Live on Spot Exchange";
-    } else if (match.status === "REJECTED") {
-      stage = 0;
-      stageName = "Rejected by Review Committee";
-    }
-    res.json({
-      success: true,
-      data: {
-        id: match.id,
-        tokenName: asset ? asset.name : "Unknown",
-        tokenSymbol: asset ? asset.symbol : "UNKNOWN",
-        network: asset ? asset.network : "Unknown",
-        status: match.status,
-        stage,
-        stageName,
-        createdAt: match.createdAt,
-        updatedAt: match.updatedAt,
-        pair: `${asset?.symbol || "TOKEN"}/${quote?.symbol || "IDR"}`,
-        approvalReason: approval?.reason,
-        marketActive: market?.status === "ACTIVE",
-        depositStatus: isDepositOpen ? "OPEN" : "CLOSED",
-        withdrawalStatus: isWithdrawOpen ? "OPEN" : "CLOSED",
-        depositOpenedAt: match.depositOpenedAt || asset?.depositOpenedAt,
-        withdrawalOpenedAt: match.withdrawalOpenedAt || asset?.withdrawalOpenedAt,
-        marketMakerAccountId: match.marketMakerAccountId || "usr-mm-0000-0000-000000000001",
-        marketMakerEmail: mmUser ? mmUser.email : "mm@dimonex.id",
-        projectOwnerAccountId: match.projectOwnerAccountId || null,
-        projectOwnerEmail: projectUser ? projectUser.email : match.createdBy.startsWith("portal:") ? match.createdBy.replace("portal:", "") : "-"
-      }
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
-  }
-});
-listingRouter.get("/public-list", (req, res) => {
-  const assets = Array.from(db.assets.values()).map((a) => {
-    const assetMarkets = Array.from(db.markets.values()).filter((m) => m.baseAssetId === a.id);
-    const activeMarket = assetMarkets.find((m) => m.status === "ACTIVE") || assetMarkets[0];
-    const listing = Array.from(db.listingRequests.values()).find((l) => l.assetId === a.id && l.status !== "CANCELLED" && l.status !== "REJECTED") || Array.from(db.listingRequests.values()).find((l) => l.assetId === a.id);
-    const listingQuote = listing ? db.assets.get(listing.quoteAssetId) : void 0;
-    const fallbackMarketSymbol = listingQuote ? `${a.symbol}-${listingQuote.symbol}` : `${a.symbol}-IDR`;
-    const activeMarketSymbols = assetMarkets.filter((m) => m.status === "ACTIVE").map((m) => m.symbol);
-    return {
-      id: a.id,
-      symbol: a.symbol,
-      name: a.name,
-      assetType: a.assetType,
-      network: a.network,
-      contractAddress: a.contractAddress,
-      decimals: a.decimals,
-      status: a.status,
-      depositEnabled: a.depositEnabled,
-      withdrawalEnabled: a.withdrawalEnabled,
-      depositOpenedAt: a.depositOpenedAt || listing?.depositOpenedAt,
-      withdrawalOpenedAt: a.withdrawalOpenedAt || listing?.withdrawalOpenedAt,
-      hasActiveMarket: activeMarket ? activeMarket.status === "ACTIVE" : false,
-      marketSymbol: activeMarket ? activeMarket.symbol : fallbackMarketSymbol,
-      activeMarketSymbols,
-      marketMakerAccountId: listing?.marketMakerAccountId,
-      projectOwnerAccountId: listing?.projectOwnerAccountId
-    };
-  });
-  res.json({ success: true, assets });
-});
-listingRouter.get("/assets/list", requireAdmin, (req, res) => {
-  const assets = Array.from(db.assets.values());
-  res.json({ success: true, assets });
-});
-listingRouter.post("/assets", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { symbol, name, assetType, decimals, network, contractAddress, depositEnabled, withdrawalEnabled } = req.body;
-    const asset = ListingService.createAsset({
-      symbol,
-      name,
-      assetType,
-      decimals,
-      network,
-      contractAddress,
-      depositEnabled,
-      withdrawalEnabled
-    }, adminUser.id, extractSecurityMeta(req));
-    res.status(201).json({ success: true, asset });
-  } catch (err) {
-    res.status(400).json({ error: err.message, code: "INVALID_ASSET_DATA" });
-  }
-});
-listingRouter.get("/", requireAdmin, (req, res) => {
-  try {
-    const { status, search, page = "1", limit = "20" } = req.query;
-    const pageNum = Math.max(1, parseInt(page, 10) || 1);
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
-    let listings = Array.from(db.listingRequests.values());
-    if (status) {
-      listings = listings.filter((l) => l.status === status.toUpperCase());
-    }
-    if (search) {
-      const q = search.toUpperCase();
-      listings = listings.filter((l) => {
-        const baseAsset = db.assets.get(l.assetId);
-        const quoteAsset = db.assets.get(l.quoteAssetId);
-        return baseAsset && baseAsset.symbol.includes(q) || quoteAsset && quoteAsset.symbol.includes(q) || l.id.includes(search);
-      });
-    }
-    listings.sort((a, b) => b.createdAt - a.createdAt);
-    const totalCount = listings.length;
-    const startIndex = (pageNum - 1) * limitNum;
-    const paginated = listings.slice(startIndex, startIndex + limitNum);
-    const enriched = paginated.map((l) => {
-      const baseAsset = db.assets.get(l.assetId);
-      const quoteAsset = db.assets.get(l.quoteAssetId);
-      const approval = db.listingApprovals.get(l.id);
-      const market = Array.from(db.markets.values()).find((m) => m.listingRequestId === l.id);
-      const creator = db.users.get(l.createdBy);
-      const reviewer = approval ? db.users.get(approval.reviewerId) : null;
-      const mmUser = l.marketMakerAccountId ? db.users.get(l.marketMakerAccountId) : db.users.get("usr-mm-0000-0000-000000000001");
-      const projectUser = l.projectOwnerAccountId ? db.users.get(l.projectOwnerAccountId) : null;
-      const isDepositOpen = baseAsset?.depositEnabled ?? l.depositEnabled ?? true;
-      const isWithdrawOpen = baseAsset?.withdrawalEnabled ?? l.withdrawalEnabled ?? true;
-      return {
-        ...l,
-        baseAsset,
-        quoteAsset,
-        symbol: baseAsset && quoteAsset ? `${baseAsset.symbol}-${quoteAsset.symbol}` : l.id,
-        approval: approval ? {
-          ...approval,
-          reviewerEmail: reviewer ? reviewer.email : "Unknown"
-        } : null,
-        market: market || null,
-        creatorEmail: creator ? creator.email : l.createdBy.startsWith("portal:") ? l.createdBy.replace("portal:", "") : "Unknown",
-        marketMakerEmail: mmUser ? mmUser.email : "mm@dimonex.id",
-        marketMakerAccountId: l.marketMakerAccountId || "usr-mm-0000-0000-000000000001",
-        projectOwnerEmail: projectUser ? projectUser.email : l.createdBy.startsWith("portal:") ? l.createdBy.replace("portal:", "") : "-",
-        projectOwnerAccountId: l.projectOwnerAccountId || null,
-        depositStatus: isDepositOpen ? "OPEN" : "CLOSED",
-        withdrawalStatus: isWithdrawOpen ? "OPEN" : "CLOSED",
-        depositOpenedAt: l.depositOpenedAt || baseAsset?.depositOpenedAt,
-        withdrawalOpenedAt: l.withdrawalOpenedAt || baseAsset?.withdrawalOpenedAt
-      };
-    });
-    res.json({
-      success: true,
-      data: enriched,
-      pagination: {
-        page: pageNum,
-        limit: limitNum,
-        totalItems: totalCount,
-        totalPages: Math.ceil(totalCount / limitNum)
-      }
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
-  }
-});
-listingRouter.get("/:id", requireAdmin, (req, res) => {
-  try {
-    const { id } = req.params;
-    const listing = db.listingRequests.get(id);
-    if (!listing) {
-      return res.status(404).json({ error: `Listing request tidak ditemukan: ${id}`, code: "NOT_FOUND" });
-    }
-    const baseAsset = db.assets.get(listing.assetId);
-    const quoteAsset = db.assets.get(listing.quoteAssetId);
-    const approval = db.listingApprovals.get(listing.id);
-    const market = Array.from(db.markets.values()).find((m) => m.listingRequestId === listing.id);
-    const creator = db.users.get(listing.createdBy);
-    const reviewer = approval ? db.users.get(approval.reviewerId) : null;
-    const auditEvents = ListingAuditService.getEventsForAggregate(listing.id);
-    res.json({
-      success: true,
-      listing: {
-        ...listing,
-        baseAsset,
-        quoteAsset,
-        symbol: baseAsset && quoteAsset ? `${baseAsset.symbol}-${quoteAsset.symbol}` : listing.id,
-        approval: approval ? {
-          ...approval,
-          reviewerEmail: reviewer ? reviewer.email : "Unknown"
-        } : null,
-        market,
-        creatorEmail: creator ? creator.email : "Unknown",
-        auditEvents
-      }
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
-  }
-});
-listingRouter.get("/accounts/eligible", requireAdmin, (req, res) => {
-  const accounts = Array.from(db.users.values()).map((u) => {
-    const kyc = db.kyc.get(u.id);
-    return {
-      id: u.id,
-      email: u.email,
-      role: u.role,
-      fullName: kyc?.fullName || u.email.split("@")[0],
-      isMM: u.role === "MM" || u.id === "usr-mm-0000-0000-000000000001"
-    };
-  });
-  res.json({ success: true, accounts });
-});
-listingRouter.post("/", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const {
-      assetId,
-      quoteAssetId,
-      tickSize,
-      lotSize,
-      minQuantity,
-      maxQuantity,
-      minNotional,
-      makerFeeBps,
-      takerFeeBps,
-      scheduledAt,
-      depositOpenedAt,
-      withdrawalOpenedAt,
-      depositEnabled,
-      withdrawalEnabled,
-      marketMakerAccountId,
-      projectOwnerAccountId,
-      initialLiquidityBase,
-      initialLiquidityQuoteIdr
-    } = req.body;
-    const listing = ListingService.createListingRequest({
-      assetId,
-      quoteAssetId,
-      tickSize,
-      lotSize,
-      minQuantity,
-      maxQuantity,
-      minNotional,
-      makerFeeBps,
-      takerFeeBps,
-      scheduledAt,
-      depositOpenedAt,
-      withdrawalOpenedAt,
-      depositEnabled,
-      withdrawalEnabled,
-      marketMakerAccountId,
-      projectOwnerAccountId,
-      initialLiquidityBase,
-      initialLiquidityQuoteIdr
-    }, adminUser.id, extractSecurityMeta(req));
-    res.status(201).json({ success: true, listing });
-  } catch (err) {
-    res.status(400).json({ error: err.message, code: "LISTING_VALIDATION_ERROR" });
-  }
-});
-listingRouter.post("/:id/toggle-deposit", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { id } = req.params;
-    const { enabled, openedAt } = req.body;
-    const listing = db.listingRequests.get(id);
-    if (!listing) return res.status(404).json({ error: "Listing tidak ditemukan" });
-    const baseAsset = db.assets.get(listing.assetId);
-    const newEnabled = enabled !== void 0 ? Boolean(enabled) : !(listing.depositEnabled ?? true);
-    listing.depositEnabled = newEnabled;
-    if (openedAt !== void 0) listing.depositOpenedAt = openedAt;
-    else if (newEnabled && !listing.depositOpenedAt) listing.depositOpenedAt = Date.now();
-    listing.updatedAt = Date.now();
-    if (baseAsset) {
-      baseAsset.depositEnabled = newEnabled;
-      baseAsset.depositOpenedAt = listing.depositOpenedAt;
-      baseAsset.updatedAt = Date.now();
-      db.assets.set(baseAsset.id, baseAsset);
-    }
-    db.scheduleSave();
-    ListingAuditService.recordEvent({
-      aggregateId: listing.id,
-      eventType: "LISTING_UPDATED",
-      actorId: adminUser.id,
-      aggregateVersion: listing.version,
-      payload: { depositEnabled: newEnabled, depositOpenedAt: listing.depositOpenedAt },
-      reason: `Deposit status changed to ${newEnabled ? "OPEN" : "CLOSED"} by admin`,
-      securityMetadata: extractSecurityMeta(req)
-    });
-    res.json({ success: true, depositEnabled: newEnabled, depositOpenedAt: listing.depositOpenedAt });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-listingRouter.post("/:id/toggle-withdraw", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { id } = req.params;
-    const { enabled, openedAt } = req.body;
-    const listing = db.listingRequests.get(id);
-    if (!listing) return res.status(404).json({ error: "Listing tidak ditemukan" });
-    const baseAsset = db.assets.get(listing.assetId);
-    const newEnabled = enabled !== void 0 ? Boolean(enabled) : !(listing.withdrawalEnabled ?? true);
-    listing.withdrawalEnabled = newEnabled;
-    if (openedAt !== void 0) listing.withdrawalOpenedAt = openedAt;
-    else if (newEnabled && !listing.withdrawalOpenedAt) listing.withdrawalOpenedAt = Date.now();
-    listing.updatedAt = Date.now();
-    if (baseAsset) {
-      baseAsset.withdrawalEnabled = newEnabled;
-      baseAsset.withdrawalOpenedAt = listing.withdrawalOpenedAt;
-      baseAsset.updatedAt = Date.now();
-      db.assets.set(baseAsset.id, baseAsset);
-    }
-    db.scheduleSave();
-    ListingAuditService.recordEvent({
-      aggregateId: listing.id,
-      eventType: "LISTING_UPDATED",
-      actorId: adminUser.id,
-      aggregateVersion: listing.version,
-      payload: { withdrawalEnabled: newEnabled, withdrawalOpenedAt: listing.withdrawalOpenedAt },
-      reason: `Withdrawal status changed to ${newEnabled ? "OPEN" : "CLOSED"} by admin`,
-      securityMetadata: extractSecurityMeta(req)
-    });
-    res.json({ success: true, withdrawalEnabled: newEnabled, withdrawalOpenedAt: listing.withdrawalOpenedAt });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-listingRouter.patch("/:id", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { id } = req.params;
-    const updated = ListingService.updateListingRequest(id, req.body, adminUser.id, extractSecurityMeta(req));
-    res.json({ success: true, listing: updated });
-  } catch (err) {
-    res.status(400).json({ error: err.message, code: "UPDATE_FAILED" });
-  }
-});
-listingRouter.post("/:id/submit", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { id } = req.params;
-    const submitted = ListingService.submitForReview(id, adminUser.id, extractSecurityMeta(req));
-    res.json({ success: true, listing: submitted });
-  } catch (err) {
-    res.status(400).json({ error: err.message, code: "SUBMIT_FAILED" });
-  }
-});
-listingRouter.post("/:id/approve", requireAdmin, (req, res) => {
-  try {
-    const checkerUser = req.user;
-    const { id } = req.params;
-    const { reason } = req.body;
-    const approval = ListingService.approveListing(id, checkerUser.id, reason, extractSecurityMeta(req));
-    res.json({ success: true, approval });
-  } catch (err) {
-    const isSelfApproval = err.message.includes("Maker-Checker");
-    res.status(isSelfApproval ? 403 : 400).json({
-      error: err.message,
-      code: isSelfApproval ? "SELF_APPROVAL_FORBIDDEN" : "APPROVAL_FAILED"
-    });
-  }
-});
-listingRouter.post("/:id/reject", requireAdmin, (req, res) => {
-  try {
-    const checkerUser = req.user;
-    const { id } = req.params;
-    const { reason } = req.body;
-    const approval = ListingService.rejectListing(id, checkerUser.id, reason, extractSecurityMeta(req));
-    res.json({ success: true, approval });
-  } catch (err) {
-    const isSelfApproval = err.message.includes("Maker-Checker");
-    res.status(isSelfApproval ? 403 : 400).json({
-      error: err.message,
-      code: isSelfApproval ? "SELF_APPROVAL_FORBIDDEN" : "REJECTION_FAILED"
-    });
-  }
-});
-listingRouter.post("/:id/schedule", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { id } = req.params;
-    const { scheduledAt } = req.body;
-    const scheduled = ListingService.scheduleListing(id, Number(scheduledAt), adminUser.id, extractSecurityMeta(req));
-    res.json({
-      success: true,
-      message: `Listing berhasil dijadwalkan untuk ${new Date(scheduled.scheduledAt || 0).toLocaleString("id-ID")}. Countdown timer kini aktif di Market Chart.`,
-      listing: scheduled
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message, code: "SCHEDULE_FAILED" });
-  }
-});
-listingRouter.post("/:id/unschedule", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { id } = req.params;
-    const updated = ListingService.cancelScheduleListing(id, adminUser.id, extractSecurityMeta(req));
-    res.json({
-      success: true,
-      message: "Jadwal aktivasi listing dibatalkan (kembali ke status APPROVED).",
-      listing: updated
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message, code: "UNSCHEDULE_FAILED" });
-  }
-});
-listingRouter.post("/:id/activate", requireAdmin, async (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { id } = req.params;
-    const idempotencyKey = req.headers["x-idempotency-key"];
-    const result = await ListingService.activateListing(
-      id,
-      adminUser.id,
-      idempotencyKey,
-      extractSecurityMeta(req)
-    );
-    res.json(result);
-  } catch (err) {
-    res.status(400).json({ error: err.message, code: "ACTIVATION_FAILED" });
-  }
-});
-listingRouter.post("/:id/suspend", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { id } = req.params;
-    const { reason = "Emergency regulatory halt" } = req.body;
-    const market = ListingService.suspendMarket(id, adminUser.id, reason, extractSecurityMeta(req));
-    res.json({ success: true, market });
-  } catch (err) {
-    res.status(400).json({ error: err.message, code: "SUSPEND_FAILED" });
-  }
-});
-listingRouter.post("/:id/resume", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { id } = req.params;
-    const { reason = "Resumed by market operations" } = req.body;
-    const market = ListingService.resumeMarket(id, adminUser.id, reason, extractSecurityMeta(req));
-    res.json({ success: true, market });
-  } catch (err) {
-    res.status(400).json({ error: err.message, code: "RESUME_FAILED" });
-  }
-});
-listingRouter.get("/audit/verify", requireAdmin, (req, res) => {
-  const result = ListingAuditService.verifyAuditIntegrity();
-  res.json({ success: true, ...result });
-});
-listingRouter.get("/:id/reconcile", requireAdmin, (req, res) => {
-  const { id } = req.params;
-  const listing = db.listingRequests.get(id);
-  const symbol = listing ? `${db.assets.get(listing.assetId)?.symbol}-${db.assets.get(listing.quoteAssetId)?.symbol}` : id;
-  const report = ListingActivationService.reconcileMarketReadiness(symbol);
-  res.json({ success: true, symbol, report });
-});
-
-// server/routes/markets.ts
-init_database();
-import { Router as Router8 } from "express";
-var marketsRouter = Router8();
-marketsRouter.get("/", (req, res) => {
-  try {
-    db.ensureAssetsForTradingPairs();
-    db.recalculatePair24hStats();
-    const assetsBySymbol = new Map(
-      Array.from(db.assets.values()).map((a) => [a.symbol.toUpperCase(), a])
-    );
-    const activeMarkets = Array.from(db.markets.values()).filter((m) => m.status === "ACTIVE").map((m) => {
-      const baseSym = m.symbol.split("-")[0];
-      const quoteSym = m.symbol.split("-")[1];
-      const baseAsset = db.assets.get(m.baseAssetId) || assetsBySymbol.get(baseSym);
-      const quoteAsset = db.assets.get(m.quoteAssetId) || assetsBySymbol.get(quoteSym);
-      const pair = db.tradingPairs.get(m.id);
-      return {
-        id: m.id,
-        symbol: m.symbol,
-        baseCurrency: baseAsset ? baseAsset.symbol : baseSym,
-        quoteCurrency: quoteAsset ? quoteAsset.symbol : quoteSym,
-        baseName: baseAsset?.name || baseSym,
-        baseLogoUrl: baseAsset?.logoUrl || "",
-        quoteLogoUrl: quoteAsset?.logoUrl || "",
-        baseDecimals: baseAsset ? baseAsset.decimals : 8,
-        quoteDecimals: quoteAsset ? quoteAsset.decimals : 2,
-        tickSize: m.tickSize,
-        lotSize: m.lotSize,
-        minQuantity: m.minQuantity,
-        minNotional: m.minNotional,
-        makerFeeBps: m.makerFeeBps,
-        takerFeeBps: m.takerFeeBps,
-        status: m.status,
-        isHalted: pair ? pair.isHalted : false,
-        lastPrice: pair ? pair.lastPrice : "0",
-        high24h: pair ? pair.high24h : "0",
-        low24h: pair ? pair.low24h : "0",
-        volume24h: pair ? pair.volume24h : "0",
-        quoteVolume24h: pair ? pair.quoteVolume24h || "0" : "0",
-        priceChange24h: pair ? pair.priceChange24h : "+0.00",
-        priceChangePercent24h: pair ? pair.priceChangePercent24h || "0.00" : "0.00",
-        activatedAt: m.activatedAt
-      };
-    });
-    const newListings = Array.from(db.listingRequests.values()).map((l) => {
-      const baseAsset = db.assets.get(l.assetId);
-      const quoteAsset = db.assets.get(l.quoteAssetId);
-      const quoteSym = quoteAsset?.symbol || "IDR";
-      const isDepositOpen = baseAsset?.depositEnabled ?? l.depositEnabled ?? true;
-      const isWithdrawOpen = baseAsset?.withdrawalEnabled ?? l.withdrawalEnabled ?? true;
-      const pairId = `${baseAsset?.symbol || "TOKEN"}-${quoteSym}`;
-      const pair = db.tradingPairs.get(pairId);
-      return {
-        id: l.id,
-        pairId,
-        symbol: pairId,
-        baseCurrency: baseAsset?.symbol || "TOKEN",
-        quoteCurrency: quoteSym,
-        tokenName: baseAsset?.name || baseAsset?.symbol,
-        logoUrl: baseAsset?.logoUrl || "",
-        network: baseAsset?.network || "TOKEN",
-        contractAddress: baseAsset?.contractAddress,
-        decimals: baseAsset?.decimals ?? 8,
-        status: l.status,
-        depositStatus: isDepositOpen ? "OPEN" : "CLOSED",
-        withdrawalStatus: isWithdrawOpen ? "OPEN" : "CLOSED",
-        depositOpenedAt: l.depositOpenedAt || baseAsset?.depositOpenedAt,
-        withdrawalOpenedAt: l.withdrawalOpenedAt || baseAsset?.withdrawalOpenedAt,
-        scheduledAt: l.scheduledAt,
-        lastPrice: pair ? pair.lastPrice : "0",
-        priceChange24h: pair ? pair.priceChange24h : "+0.00",
-        marketMakerAccountId: l.marketMakerAccountId,
-        projectOwnerAccountId: l.projectOwnerAccountId
-      };
-    });
-    res.json({
-      success: true,
-      count: activeMarkets.length,
-      markets: activeMarkets,
-      newListings
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
-  }
-});
-marketsRouter.get("/assets", (req, res) => {
-  try {
-    const allAssets = db.ensureAssetsForTradingPairs().map((a) => ({
-      id: a.id,
-      symbol: a.symbol,
-      name: a.name,
-      logoUrl: a.logoUrl || "",
-      assetType: a.assetType,
-      category: a.category || (a.network === "FIAT" ? "Fiat" : a.assetType === "NATIVE" ? "Layer 1" : "Token"),
-      decimals: a.decimals,
-      network: a.network,
-      contractAddress: a.contractAddress || "",
-      description: a.description || "",
-      websiteUrl: a.websiteUrl || "",
-      explorerUrl: a.explorerUrl || "",
-      status: a.status,
-      depositEnabled: a.depositEnabled,
-      withdrawalEnabled: a.withdrawalEnabled,
-      updatedAt: a.updatedAt
-    }));
-    res.json({
-      success: true,
-      count: allAssets.length,
-      assets: allAssets
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
-  }
-});
-marketsRouter.get("/:symbol", (req, res) => {
-  try {
-    const symbol = req.params.symbol.toUpperCase();
-    const market = db.markets.get(symbol);
-    if (!market || market.status !== "ACTIVE") {
-      return res.status(404).json({
-        error: `Market ${symbol} tidak ditemukan atau belum aktif diperdagangkan`,
-        code: "MARKET_NOT_FOUND"
-      });
-    }
-    const baseAsset = db.assets.get(market.baseAssetId);
-    const quoteAsset = db.assets.get(market.quoteAssetId);
-    const pair = db.tradingPairs.get(market.id);
-    res.json({
-      success: true,
-      market: {
-        id: market.id,
-        symbol: market.symbol,
-        baseCurrency: baseAsset ? baseAsset.symbol : market.symbol.split("-")[0],
-        quoteCurrency: quoteAsset ? quoteAsset.symbol : market.symbol.split("-")[1],
-        baseName: baseAsset?.name || market.symbol.split("-")[0],
-        baseLogoUrl: baseAsset?.logoUrl || "",
-        quoteLogoUrl: quoteAsset?.logoUrl || "",
-        baseDecimals: baseAsset ? baseAsset.decimals : 8,
-        quoteDecimals: quoteAsset ? quoteAsset.decimals : 2,
-        tickSize: market.tickSize,
-        lotSize: market.lotSize,
-        minQuantity: market.minQuantity,
-        minNotional: market.minNotional,
-        makerFeeBps: market.makerFeeBps,
-        takerFeeBps: market.takerFeeBps,
-        status: market.status,
-        isHalted: pair ? pair.isHalted : false,
-        lastPrice: pair ? pair.lastPrice : "0",
-        high24h: pair ? pair.high24h : "0",
-        low24h: pair ? pair.low24h : "0",
-        volume24h: pair ? pair.volume24h : "0",
-        priceChange24h: pair ? pair.priceChange24h : "0.00",
-        activatedAt: market.activatedAt
-      }
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
-  }
-});
-
-// server/routes/risk.ts
-import { Router as Router9 } from "express";
-import crypto16 from "crypto";
-init_database();
-var riskRouter = Router9();
-riskRouter.get("/suspicious-activity", requireAdmin, (req, res) => {
-  const flags = [];
-  for (const tx of db.fiatTransactions.values()) {
-    if (BigInt(tx.amount) > 5000000000n) {
-      flags.push({
-        id: `aml-tx-${tx.id.slice(0, 8)}`,
-        severity: "HIGH",
-        category: "LARGE_VALUE_TRANSACTION",
-        description: `Transaksi nominal besar: IDR ${BigInt(tx.amount) / 100n} oleh user ${tx.userId}`,
-        userId: tx.userId,
-        createdAt: tx.createdAt
-      });
-    }
-  }
-  for (const u of db.users.values()) {
-    if (u.failedLoginAttempts >= 3) {
-      flags.push({
-        id: `sec-user-${u.id.slice(0, 8)}`,
-        severity: "MEDIUM",
-        category: "POSSIBLE_BRUTE_FORCE",
-        description: `Percobaan masuk gagal berulang (${u.failedLoginAttempts} kali) untuk email: ${u.email}`,
-        userId: u.id,
-        createdAt: Date.now() - 3e5
-      });
-    }
-  }
-  res.json(flags);
-});
-riskRouter.post("/account-freeze", requireAdmin, (req, res) => {
-  try {
-    const adminUser = req.user;
-    const { userId, freeze, reason } = req.body;
-    const targetUser = db.users.get(userId);
-    if (!targetUser) return res.status(404).json({ error: "User tidak ditemukan" });
-    targetUser.status = freeze ? "frozen" : "active";
-    targetUser.updatedAt = Date.now();
-    db.auditLogs.push({
-      id: crypto16.randomUUID(),
-      actorId: adminUser.id,
-      action: freeze ? "ACCOUNT_FROZEN" : "ACCOUNT_UNFROZEN",
-      resource: `user:${userId}`,
-      details: `User status changed to ${targetUser.status}. Reason: ${reason || "AML/Compliance investigation"}`,
-      createdAt: Date.now()
-    });
-    res.json({
-      success: true,
-      message: `Akun ${targetUser.email} berhasil ${freeze ? "DIBEKUKAN (FROZEN)" : "DIAKTIFKAN KEMBALI"}`,
-      user: {
-        id: targetUser.id,
-        email: targetUser.email,
-        status: targetUser.status
-      }
-    });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-riskRouter.get("/export-report", requireAdmin, (req, res) => {
-  const report = {
-    reportId: `AML-DMX-${Date.now()}`,
-    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    totalUsers: db.users.size,
-    totalTrades: db.trades.length,
-    totalFiatTransactions: db.fiatTransactions.size,
-    totalCryptoTransactions: db.cryptoTransactions.size,
-    systemInvariantsValid: true
-  };
-  res.json(report);
-});
-
-// server/routes/bot.ts
-import { Router as Router10 } from "express";
-import crypto17 from "crypto";
-import fs3 from "fs";
-import path3 from "path";
-init_database();
-init_PrecisionMath();
-var botRouter = Router10();
-var requireAuthOrHmac = (req, res, next) => {
-  const apiKey = req.headers["x-dimonex-apikey"];
-  if (apiKey) {
-    return requireHmacAuth(req, res, next);
-  }
-  return requireAuth(req, res, next);
-};
-function getBotDataDirectory() {
-  if (process.env.VERCEL === "1") {
-    const tmpDir = path3.join("/tmp", "dimonex_data");
-    if (!fs3.existsSync(tmpDir)) {
-      try {
-        fs3.mkdirSync(tmpDir, { recursive: true });
-      } catch {
-      }
-    }
-    return tmpDir;
-  }
-  const localDir = path3.resolve(process.cwd(), "server", "data");
-  try {
-    if (!fs3.existsSync(localDir)) {
-      fs3.mkdirSync(localDir, { recursive: true });
-    }
-    const testFile = path3.join(localDir, ".write_test_bot");
-    fs3.writeFileSync(testFile, "ok");
-    try {
-      fs3.unlinkSync(testFile);
-    } catch {
-    }
-    return localDir;
-  } catch {
-    const tmpDir = path3.join("/tmp", "dimonex_data");
-    if (!fs3.existsSync(tmpDir)) {
-      try {
-        fs3.mkdirSync(tmpDir, { recursive: true });
-      } catch {
-      }
-    }
-    return tmpDir;
-  }
-}
-var activeBots = /* @__PURE__ */ new Map();
-var botIntervals = /* @__PURE__ */ new Map();
-var saveBotsTimer = null;
-function scheduleSaveBots() {
-  if (saveBotsTimer) clearTimeout(saveBotsTimer);
-  saveBotsTimer = setTimeout(() => {
-    saveBotsToDisk();
-    saveBotsTimer = null;
-  }, 5e3);
-}
-function saveBotsToDisk() {
-  try {
-    const dir = getBotDataDirectory();
-    if (!fs3.existsSync(dir)) fs3.mkdirSync(dir, { recursive: true });
-    for (const bot of activeBots.values()) {
-      if (bot.deployedOrderIds && bot.deployedOrderIds.length > 80) {
-        bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
-      }
-      if (bot.logs && bot.logs.length > 80) {
-        bot.logs = bot.logs.slice(0, 80);
-      }
-    }
-    const botsArray = Array.from(activeBots.values());
-    const jsonStr = JSON.stringify(
-      botsArray,
-      (key, value) => typeof value === "bigint" ? value.toString() : value
-    );
-    const targetFiles = [
-      path3.join(dir, "bots_state.json"),
-      path3.join(dir, "bot_state.json")
-    ];
-    const bundledDir = path3.resolve(process.cwd(), "server", "data");
-    if (dir !== bundledDir && fs3.existsSync(bundledDir)) {
-      try {
-        targetFiles.push(path3.join(bundledDir, "bots_state.json"));
-        targetFiles.push(path3.join(bundledDir, "bot_state.json"));
-      } catch {
-      }
-    }
-    for (const filePath of targetFiles) {
-      try {
-        const tempFile = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 6)}`;
-        fs3.writeFileSync(tempFile, jsonStr, "utf-8");
-        try {
-          fs3.renameSync(tempFile, filePath);
-        } catch {
-          fs3.copyFileSync(tempFile, filePath);
-          try {
-            fs3.unlinkSync(tempFile);
-          } catch {
-          }
-        }
-      } catch (fErr) {
-      }
-    }
-  } catch (err) {
-    console.error("[DIMONEX Bot Engine] Gagal menyimpan bots ke disk:", err);
-  }
-}
-function addBotLog(bot, message, type = "INFO") {
-  bot.logs.unshift({
-    timestamp: Date.now(),
-    message,
-    type
-  });
-  if (bot.logs.length > 80) bot.logs.pop();
-  bot.updatedAt = Date.now();
-  scheduleSaveBots();
-  marketWsService.broadcastBotUpdate(bot);
-}
-marketWsService.setBotProvider((userId) => {
-  return Array.from(activeBots.values()).filter((b) => b.userId === userId).sort((a, b) => b.createdAt - a.createdAt);
-});
-botRouter.get("/list", requireAuthOrHmac, (req, res) => {
-  const user = req.user;
-  const userBots = Array.from(activeBots.values()).filter((b) => b.userId === user.id).sort((a, b) => b.createdAt - a.createdAt);
-  res.json(userBots);
-});
-botRouter.get("/orders/:botId", requireAuthOrHmac, (req, res) => {
-  const user = req.user;
-  const bot = activeBots.get(req.params.botId);
-  if (!bot || bot.userId !== user.id) {
-    return res.status(404).json({ error: "Bot tidak ditemukan" });
-  }
-  const botOrders = bot.deployedOrderIds.map((id) => db.orders.get(id)).filter(Boolean);
-  res.json(botOrders);
-});
-botRouter.get("/open-orders", requireAuthOrHmac, (req, res) => {
-  const user = req.user;
-  const userBots = Array.from(activeBots.values()).filter((b) => b.userId === user.id);
-  const botOrderIds = /* @__PURE__ */ new Set();
-  userBots.forEach((b) => b.deployedOrderIds.forEach((id) => botOrderIds.add(id)));
-  const openOrders = Array.from(db.orders.values()).filter((o) => o.userId === user.id && (botOrderIds.has(o.id) || o.clientOrderId && o.clientOrderId.startsWith("bot-")) && (o.status === "NEW" || o.status === "PARTIALLY_FILLED")).sort((a, b) => b.createdAt - a.createdAt);
-  res.json(openOrders);
-});
-botRouter.post("/grid/deploy", requireAuthOrHmac, (req, res) => {
-  try {
-    const user = req.user;
-    const { apiKeyId, pairId, lowerPrice, upperPrice, gridCount, totalInvestmentIdr, investmentCrypto } = req.body;
-    if (!pairId || !lowerPrice || !upperPrice || !gridCount || !totalInvestmentIdr) {
-      return res.status(400).json({ error: "Parameter Spot Grid tidak lengkap" });
-    }
-    const pair = db.tradingPairs.get(pairId);
-    if (!pair) return res.status(404).json({ error: "Trading pair tidak ditemukan" });
-    const existingRunningBot = Array.from(activeBots.values()).find(
-      (b) => b.userId === user.id && b.pairId === pairId && b.status === "RUNNING" && b.strategy === "SPOT_GRID"
-    );
-    if (existingRunningBot) {
-      return res.status(409).json({
-        error: `Bot Spot Grid aktif untuk pair ${pairId} sudah berjalan (${existingRunningBot.name}). Hentikan bot sebelumnya sebelum meluncurkan bot baru.`
-      });
-    }
-    const reqInvestmentUnits = PrecisionMath.parseToUnits(totalInvestmentIdr, pair.quoteDecimals);
-    const userQuoteAcc = db.createOrGetAccount(user.id, pair.quoteCurrency);
-    const availableQuoteUnits = BigInt(userQuoteAcc.balanceAvailable);
-    if (availableQuoteUnits < reqInvestmentUnits) {
-      return res.status(400).json({
-        error: `Saldo ${pair.quoteCurrency} tidak mencukupi di ledger untuk meluncurkan bot. Diperlukan: Rp ${PrecisionMath.formatIDRDisplay(reqInvestmentUnits)}, Tersedia: Rp ${PrecisionMath.formatIDRDisplay(availableQuoteUnits)}`
-      });
-    }
-    const lowerUnits = PrecisionMath.parseToUnits(lowerPrice, pair.quoteDecimals);
-    const upperUnits = PrecisionMath.parseToUnits(upperPrice, pair.quoteDecimals);
-    const currentPriceUnits = BigInt(pair.lastPrice);
-    if (lowerUnits >= upperUnits) {
-      return res.status(400).json({ error: "Batas harga bawah harus lebih kecil dari batas harga atas" });
-    }
-    const count = parseInt(gridCount, 10);
-    if (count < 3 || count > 30) {
-      return res.status(400).json({ error: "Jumlah grid harus di antara 3 sampai 30" });
-    }
-    const priceStep = (upperUnits - lowerUnits) / BigInt(count);
-    const budgetPerGridIdr = PrecisionMath.parseToUnits(totalInvestmentIdr, 2) / BigInt(count);
-    const botId = `bot-grid-${crypto17.randomUUID().slice(0, 8)}`;
-    const bot = {
-      id: botId,
-      userId: user.id,
-      userEmail: user.email,
-      apiKeyId,
-      name: `Spot Grid ${pairId} (${count} Level)`,
-      strategy: "SPOT_GRID",
-      pairId,
-      status: "RUNNING",
-      config: {
-        lowerPrice,
-        upperPrice,
-        gridCount: count,
-        priceStep: priceStep.toString(),
-        totalInvestmentIdr
-      },
-      deployedOrderIds: [],
-      filledOrderCount: 0,
-      totalVolumeFilled: "0",
-      realizedProfitIdr: "0",
-      logs: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
-    addBotLog(bot, `Bot Spot Grid diinisialisasi oleh ${user.email} (API Key: ${apiKeyId || "Session Token"}).`);
-    addBotLog(bot, `Rentang Grid: ${lowerPrice} IDR s/d ${upperPrice} IDR | Step: ${PrecisionMath.formatFromUnits(priceStep, 2)} IDR`);
-    const userBaseAcc = db.createOrGetAccount(user.id, pair.baseCurrency);
-    const availableBaseUnits = BigInt(userBaseAcc.balanceAvailable);
-    let buyOrdersDeployed = 0;
-    let sellOrdersDeployed = 0;
-    for (let i = 0; i <= count; i++) {
-      const gridPrice = lowerUnits + priceStep * BigInt(i);
-      if (gridPrice < currentPriceUnits) {
-        const qtyBaseUnits = PrecisionMath.calculateBaseQuantity(budgetPerGridIdr, pair.baseDecimals, gridPrice);
-        if (qtyBaseUnits >= BigInt(pair.minOrderSize)) {
-          try {
-            const result = matchingEngine.placeOrder({
-              userId: user.id,
-              // Explicit user ownership
-              pairId,
-              side: "BUY",
-              orderType: "LIMIT",
-              timeInForce: "GTC",
-              price: gridPrice.toString(),
-              quantity: qtyBaseUnits.toString(),
-              clientOrderId: `${botId}-buy-${i + 1}`
-            });
-            bot.deployedOrderIds.push(result.takerOrder.id);
-            marketWsService.broadcastOrderUpdate(result.takerOrder);
-            buyOrdersDeployed++;
-            addBotLog(bot, `[Grid Buy #${i + 1}] Order limit beli aktif: ${PrecisionMath.formatFromUnits(qtyBaseUnits, pair.baseDecimals)} @ ${PrecisionMath.formatIDRDisplay(gridPrice)}`, "ORDER");
-          } catch (err) {
-            addBotLog(bot, `Gagal memasang grid buy #${i + 1}: ${err.message}`, "ERROR");
-          }
-        }
-      } else if (gridPrice > currentPriceUnits && availableBaseUnits > 0n) {
-        const qtyToSellUnits = availableBaseUnits / BigInt(count);
-        if (qtyToSellUnits >= BigInt(pair.minOrderSize)) {
-          try {
-            const result = matchingEngine.placeOrder({
-              userId: user.id,
-              pairId,
-              side: "SELL",
-              orderType: "LIMIT",
-              timeInForce: "GTC",
-              price: gridPrice.toString(),
-              quantity: qtyToSellUnits.toString(),
-              clientOrderId: `${botId}-sell-${i + 1}`
-            });
-            bot.deployedOrderIds.push(result.takerOrder.id);
-            marketWsService.broadcastOrderUpdate(result.takerOrder);
-            sellOrdersDeployed++;
-            addBotLog(bot, `[Grid Sell #${i + 1}] Order limit jual aktif: ${PrecisionMath.formatFromUnits(qtyToSellUnits, pair.baseDecimals)} @ ${PrecisionMath.formatIDRDisplay(gridPrice)}`, "ORDER");
-          } catch (err) {
-          }
-        }
-      }
-    }
-    addBotLog(bot, `Deployment selesai: Total ${bot.deployedOrderIds.length} order limit aktif dimasukkan ke buku order (${buyOrdersDeployed} Beli, ${sellOrdersDeployed} Jual)`);
-    activeBots.set(bot.id, bot);
-    marketWsService.broadcastBotUpdate(bot);
-    const book = matchingEngine.getOrderBook(pairId);
-    marketWsService.broadcast(`depth:${pairId}`, { type: "depth", pairId, data: book.getDepth(25) });
-    res.json({ success: true, bot });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-botRouter.post("/layers/deploy", requireAuthOrHmac, (req, res) => {
-  try {
-    const user = req.user;
-    const { apiKeyId, pairId, side, startPrice, layerCount, priceStepPercent, quantityPerLayer } = req.body;
-    if (!pairId || !side || !startPrice || !layerCount || !priceStepPercent || !quantityPerLayer) {
-      return res.status(400).json({ error: "Konfigurasi layer order tidak lengkap" });
-    }
-    const pair = db.tradingPairs.get(pairId);
-    if (!pair) return res.status(404).json({ error: "Pair tidak ditemukan" });
-    const strat = side === "BUY" ? "BUY_LAYERS" : "SELL_LAYERS";
-    const duplicate = Array.from(activeBots.values()).find(
-      (b) => b.userId === user.id && b.pairId === pairId && b.status === "RUNNING" && b.strategy === strat
-    );
-    if (duplicate) {
-      return res.status(409).json({
-        error: `Bot Tangga ${side} aktif untuk pair ${pairId} sudah berjalan (${duplicate.name}). Hentikan bot sebelumnya sebelum membuat ladder baru.`
-      });
-    }
-    const baseStartPriceUnits = PrecisionMath.parseToUnits(startPrice, pair.quoteDecimals);
-    const count = parseInt(layerCount, 10);
-    const stepBps = Math.round(parseFloat(priceStepPercent) * 100);
-    const qtyUnits = PrecisionMath.parseToUnits(quantityPerLayer, pair.baseDecimals);
-    if (count < 2 || count > 20) {
-      return res.status(400).json({ error: "Jumlah layer order harus antara 2 sampai 20" });
-    }
-    const calculatedStepUnits = baseStartPriceUnits * BigInt(stepBps) / 10000n;
-    const minTickStepUnits = pair.quoteCurrency === "IDR" ? 100n : 1n;
-    const effectiveStepUnits = calculatedStepUnits > minTickStepUnits ? calculatedStepUnits : minTickStepUnits;
-    if (side === "BUY") {
-      let totalQuoteNeeded = 0n;
-      for (let i = 0; i < count; i++) {
-        const layerPriceUnits = baseStartPriceUnits - effectiveStepUnits * BigInt(i);
-        totalQuoteNeeded += PrecisionMath.calculateQuoteAmount(qtyUnits, pair.baseDecimals, layerPriceUnits);
-      }
-      const quoteAcc = db.createOrGetAccount(user.id, pair.quoteCurrency);
-      const availableQuote = BigInt(quoteAcc.balanceAvailable);
-      if (availableQuote < totalQuoteNeeded) {
-        return res.status(400).json({
-          error: `Saldo ${pair.quoteCurrency} tidak mencukupi di ledger. Diperlukan: Rp ${PrecisionMath.formatIDRDisplay(totalQuoteNeeded)}, Tersedia: Rp ${PrecisionMath.formatIDRDisplay(availableQuote)}`
-        });
-      }
-    } else {
-      const totalBaseNeeded = qtyUnits * BigInt(count);
-      const baseAcc = db.createOrGetAccount(user.id, pair.baseCurrency);
-      const availableBase = BigInt(baseAcc.balanceAvailable);
-      if (availableBase < totalBaseNeeded) {
-        return res.status(400).json({
-          error: `Saldo ${pair.baseCurrency} tidak mencukupi di ledger. Diperlukan: ${PrecisionMath.formatFromUnits(totalBaseNeeded, pair.baseDecimals)} ${pair.baseCurrency}, Tersedia: ${PrecisionMath.formatFromUnits(availableBase, pair.baseDecimals)} ${pair.baseCurrency}`
-        });
-      }
-    }
-    const botId = `bot-layer-${crypto17.randomUUID().slice(0, 8)}`;
-    const bot = {
-      id: botId,
-      userId: user.id,
-      userEmail: user.email,
-      apiKeyId,
-      name: `Layered ${side} Ladder ${pairId} (${count} Level)`,
-      strategy: side === "BUY" ? "BUY_LAYERS" : "SELL_LAYERS",
-      pairId,
-      status: "RUNNING",
-      config: {
-        side,
-        startPrice,
-        layerCount: count,
-        priceStepPercent,
-        quantityPerLayer
-      },
-      deployedOrderIds: [],
-      filledOrderCount: 0,
-      totalVolumeFilled: "0",
-      realizedProfitIdr: "0",
-      logs: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
-    addBotLog(bot, `Mendeploy tangga order ${side} untuk ${user.email} (Step: ${priceStepPercent}% per level)`);
-    for (let i = 0; i < count; i++) {
-      const layerPriceUnits = side === "BUY" ? baseStartPriceUnits - effectiveStepUnits * BigInt(i) : baseStartPriceUnits + effectiveStepUnits * BigInt(i);
-      try {
-        const result = matchingEngine.placeOrder({
-          userId: user.id,
-          // Explicit user ownership
-          pairId,
-          side,
-          orderType: "LIMIT",
-          timeInForce: "GTC",
-          price: layerPriceUnits.toString(),
-          quantity: qtyUnits.toString(),
-          clientOrderId: `${botId}-${side.toLowerCase()}-layer-${i + 1}`
-        });
-        bot.deployedOrderIds.push(result.takerOrder.id);
-        marketWsService.broadcastOrderUpdate(result.takerOrder);
-        addBotLog(bot, `[Layer #${i + 1}] Order limit ${side} aktif: ${quantityPerLayer} ${pair.baseCurrency} @ ${PrecisionMath.formatIDRDisplay(layerPriceUnits)}`, "ORDER");
-      } catch (err) {
-        addBotLog(bot, `Gagal memasang layer #${i + 1}: ${err.message}`, "ERROR");
-      }
-    }
-    addBotLog(bot, `Berhasil memasukkan ${bot.deployedOrderIds.length} order limit ke buku order dan antrean order aktif.`);
-    activeBots.set(bot.id, bot);
-    marketWsService.broadcastBotUpdate(bot);
-    const book = matchingEngine.getOrderBook(pairId);
-    marketWsService.broadcast(`depth:${pairId}`, { type: "depth", pairId, data: book.getDepth(25) });
-    res.json({ success: true, bot });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-botRouter.post("/smart-trade/deploy", requireAuthOrHmac, (req, res) => {
-  try {
-    const user = req.user;
-    const { apiKeyId, pairId, side, targetPrice, totalVolume, sliceCount, orderType } = req.body;
-    if (!pairId || !side || !targetPrice || !totalVolume || !sliceCount) {
-      return res.status(400).json({ error: "Parameter Smart Trade tidak lengkap" });
-    }
-    const pair = db.tradingPairs.get(pairId);
-    if (!pair) return res.status(404).json({ error: "Pair tidak ditemukan" });
-    const duplicate = Array.from(activeBots.values()).find(
-      (b) => b.userId === user.id && b.pairId === pairId && b.status === "RUNNING" && b.strategy === "SMART_TRADE"
-    );
-    if (duplicate) {
-      return res.status(409).json({
-        error: `Bot Smart Trade aktif untuk pair ${pairId} sudah berjalan (${duplicate.name}). Hentikan bot sebelumnya sebelum meluncurkan baru.`
-      });
-    }
-    const totalVolumeUnits = PrecisionMath.parseToUnits(totalVolume, pair.baseDecimals);
-    const targetPriceUnits = PrecisionMath.parseToUnits(targetPrice, pair.quoteDecimals);
-    const slices = parseInt(sliceCount, 10);
-    const sliceQtyUnits = totalVolumeUnits / BigInt(slices);
-    if (side === "BUY") {
-      const totalQuoteNeeded = PrecisionMath.calculateQuoteAmount(totalVolumeUnits, pair.baseDecimals, targetPriceUnits);
-      const quoteAcc = db.createOrGetAccount(user.id, pair.quoteCurrency);
-      const availableQuote = BigInt(quoteAcc.balanceAvailable);
-      if (availableQuote < totalQuoteNeeded) {
-        return res.status(400).json({
-          error: `Saldo ${pair.quoteCurrency} tidak mencukupi di ledger. Diperlukan: Rp ${PrecisionMath.formatIDRDisplay(totalQuoteNeeded)}, Tersedia: Rp ${PrecisionMath.formatIDRDisplay(availableQuote)}`
-        });
-      }
-    } else {
-      const baseAcc = db.createOrGetAccount(user.id, pair.baseCurrency);
-      const availableBase = BigInt(baseAcc.balanceAvailable);
-      if (availableBase < totalVolumeUnits) {
-        return res.status(400).json({
-          error: `Saldo ${pair.baseCurrency} tidak mencukupi di ledger. Diperlukan: ${totalVolume} ${pair.baseCurrency}, Tersedia: ${PrecisionMath.formatFromUnits(availableBase, pair.baseDecimals)} ${pair.baseCurrency}`
-        });
-      }
-    }
-    const botId = `bot-smart-${crypto17.randomUUID().slice(0, 8)}`;
-    const bot = {
-      id: botId,
-      userId: user.id,
-      userEmail: user.email,
-      apiKeyId,
-      name: `Smart Trade ${side} ${pairId} (${totalVolume} ${pair.baseCurrency})`,
-      strategy: "SMART_TRADE",
-      pairId,
-      status: "RUNNING",
-      config: {
-        side,
-        targetPrice,
-        totalVolume,
-        sliceCount: slices,
-        orderType: orderType || "LIMIT"
-      },
-      deployedOrderIds: [],
-      filledOrderCount: 0,
-      totalVolumeFilled: "0",
-      realizedProfitIdr: "0",
-      logs: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
-    addBotLog(bot, `Smart Trade dimulai: Target volume ${totalVolume} ${pair.baseCurrency} dibagi ke dalam ${slices} slice @ ${targetPrice} IDR`);
-    try {
-      const result = matchingEngine.placeOrder({
-        userId: user.id,
-        // Explicit user ownership
-        pairId,
-        side,
-        orderType: orderType === "MARKET" ? "MARKET" : "LIMIT",
-        timeInForce: "GTC",
-        price: targetPriceUnits.toString(),
-        quantity: sliceQtyUnits.toString(),
-        clientOrderId: `${botId}-slice-1`
-      });
-      bot.deployedOrderIds.push(result.takerOrder.id);
-      marketWsService.broadcastOrderUpdate(result.takerOrder);
-      if (result.trades.length > 0) {
-        bot.filledOrderCount += 1;
-        bot.totalVolumeFilled = (BigInt(bot.totalVolumeFilled) + sliceQtyUnits).toString();
-        addBotLog(bot, `Slice #1 terisi langsung: ${PrecisionMath.formatFromUnits(sliceQtyUnits, pair.baseDecimals)} ${pair.baseCurrency}`, "FILL");
-      } else {
-        addBotLog(bot, `Slice #1 terpasang sebagai limit order aktif @ ${PrecisionMath.formatIDRDisplay(targetPriceUnits)}`, "ORDER");
-      }
-    } catch (err) {
-      addBotLog(bot, `Gagal mengeksekusi slice awal: ${err.message}`, "ERROR");
-    }
-    activeBots.set(bot.id, bot);
-    marketWsService.broadcastBotUpdate(bot);
-    const book = matchingEngine.getOrderBook(pairId);
-    marketWsService.broadcast(`depth:${pairId}`, { type: "depth", pairId, data: book.getDepth(25) });
-    res.json({ success: true, bot });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-function startVolumeBotRunner(botId) {
-  const bot = activeBots.get(botId);
-  if (!bot || bot.status !== "RUNNING") return;
-  const pair = db.tradingPairs.get(bot.pairId);
-  if (!pair) return;
-  const delayMs = Math.max(1e3, Number(bot.config.delaySecondAmount || 3) * 1e3);
-  let stepIndex = 0;
-  const executeTick = () => {
-    const currentBot = activeBots.get(botId);
-    if (!currentBot || currentBot.status !== "RUNNING") {
-      const timer = botIntervals.get(botId);
-      if (timer) {
-        clearInterval(timer);
-        botIntervals.delete(botId);
-      }
-      return;
-    }
-    const currentPair = db.tradingPairs.get(currentBot.pairId);
-    if (!currentPair) return;
-    const targetVolumeUnits = PrecisionMath.parseToUnits(currentBot.config.targetVolumeReach, currentPair.baseDecimals);
-    const currentFilledUnits = BigInt(currentBot.totalVolumeFilled || "0");
-    if (currentFilledUnits >= targetVolumeUnits) {
-      currentBot.status = "COMPLETED";
-      addBotLog(currentBot, `\u{1F3AF} Target volume ${currentBot.config.targetVolumeReach} ${currentPair.baseCurrency} tercapai 100%! Bot volume selesai secara otomatis.`, "FILL");
-      const timer = botIntervals.get(botId);
-      if (timer) {
-        clearInterval(timer);
-        botIntervals.delete(botId);
-      }
-      return;
-    }
-    let side;
-    if (currentBot.config.directionMode === "BUY_FIRST") {
-      side = stepIndex % 2 === 0 ? "BUY" : "SELL";
-    } else if (currentBot.config.directionMode === "SELL_FIRST") {
-      side = stepIndex % 2 === 0 ? "SELL" : "BUY";
-    } else {
-      side = Math.random() >= 0.5 ? "BUY" : "SELL";
-    }
-    let qtyStr = currentBot.config.amountMin || "0.01";
-    if (currentBot.config.amountRandom) {
-      const minVal = parseFloat(currentBot.config.amountMin || "0.01");
-      const maxVal = parseFloat(currentBot.config.amountMax || (minVal * 2).toString());
-      const randVal = minVal + Math.random() * (maxVal - minVal);
-      qtyStr = randVal.toFixed(currentPair.baseDecimals > 6 ? 4 : 2);
-    }
-    let qtyUnits = PrecisionMath.parseToUnits(qtyStr, currentPair.baseDecimals);
-    if (qtyUnits < BigInt(currentPair.minOrderSize)) {
-      qtyUnits = BigInt(currentPair.minOrderSize);
-    }
-    const remainingUnits = targetVolumeUnits - currentFilledUnits;
-    if (qtyUnits > remainingUnits) {
-      qtyUnits = remainingUnits;
-    }
-    const minUnits = PrecisionMath.parseToUnits(currentBot.config.minPrice, currentPair.quoteDecimals);
-    const maxUnits = PrecisionMath.parseToUnits(currentBot.config.maxPrice, currentPair.quoteDecimals);
-    const midUnits = BigInt(currentPair.lastPrice);
-    const randomBps = BigInt(Math.floor(Math.random() * 30 - 15));
-    let priceUnits = midUnits + midUnits * randomBps / 10000n;
-    if (priceUnits < minUnits) priceUnits = minUnits;
-    if (priceUnits > maxUnits) priceUnits = maxUnits;
-    stepIndex++;
-    try {
-      db.createOrGetAccount(currentBot.userId, currentPair.quoteCurrency, "500000000000");
-      db.createOrGetAccount(currentBot.userId, currentPair.baseCurrency, "1000000000");
-      const book = matchingEngine.getOrderBook(currentPair.id);
-      const opposingSide = side === "BUY" ? book.asks : book.bids;
-      const hasOpposing = opposingSide.some((o) => o.userId !== currentBot.userId);
-      if (!hasOpposing) {
-        matchingEngine.placeOrder({
-          userId: SYSTEM_TREASURY_ID,
-          pairId: currentPair.id,
-          side: side === "BUY" ? "SELL" : "BUY",
-          orderType: "LIMIT",
-          timeInForce: "GTC",
-          price: priceUnits.toString(),
-          quantity: qtyUnits.toString(),
-          clientOrderId: `sys-vol-maker-${Date.now()}`
-        });
-      }
-      const result = matchingEngine.placeOrder({
-        userId: currentBot.userId,
-        pairId: currentPair.id,
-        side,
-        orderType: "LIMIT",
-        timeInForce: "IOC",
-        price: priceUnits.toString(),
-        quantity: qtyUnits.toString(),
-        clientOrderId: `${botId}-vol-${side.toLowerCase()}-${stepIndex}`
-      });
-      currentBot.deployedOrderIds.push(result.takerOrder.id);
-      if (currentBot.deployedOrderIds.length > 80) {
-        currentBot.deployedOrderIds.splice(0, currentBot.deployedOrderIds.length - 80);
-      }
-      currentBot.filledOrderCount += 1;
-      const filledThisTick = BigInt(result.takerOrder.filledQuantity || qtyUnits.toString());
-      currentBot.totalVolumeFilled = (BigInt(currentBot.totalVolumeFilled) + filledThisTick).toString();
-      for (const t of result.trades) {
-        marketWsService.broadcastTrade(t);
-      }
-      marketWsService.broadcastOrderUpdate(result.takerOrder);
-      const updatedBook = matchingEngine.getOrderBook(currentPair.id);
-      marketWsService.broadcast(`depth:${currentPair.id}`, { type: "depth", pairId: currentPair.id, data: updatedBook.getDepth(25) });
-      const cumFormatted = PrecisionMath.formatFromUnits(BigInt(currentBot.totalVolumeFilled), currentPair.baseDecimals);
-      const targetFormatted = currentBot.config.targetVolumeReach;
-      const pct = Math.min(100, Number(BigInt(currentBot.totalVolumeFilled) * 100n / targetVolumeUnits));
-      addBotLog(
-        currentBot,
-        `[Vol Bot #${stepIndex}] Eksekusi ${side} ${PrecisionMath.formatFromUnits(filledThisTick, currentPair.baseDecimals)} ${currentPair.baseCurrency} @ ${PrecisionMath.formatIDRDisplay(priceUnits)} | Akumulasi: ${cumFormatted}/${targetFormatted} (${pct}%)`,
-        "FILL"
-      );
-      if (BigInt(currentBot.totalVolumeFilled) >= targetVolumeUnits) {
-        currentBot.status = "COMPLETED";
-        addBotLog(currentBot, `\u{1F3AF} Target volume ${targetFormatted} ${currentPair.baseCurrency} TERCAPAI LENGKAP 100%! Bot volume selesai.`, "INFO");
-        const timer = botIntervals.get(botId);
-        if (timer) {
-          clearInterval(timer);
-          botIntervals.delete(botId);
-        }
-      }
-    } catch (err) {
-      addBotLog(currentBot, `Gagal eksekusi tick volume #${stepIndex}: ${err.message}`, "ERROR");
-    }
-  };
-  executeTick();
-  const interval = setInterval(executeTick, delayMs);
-  botIntervals.set(botId, interval);
-}
-function loadBotsFromDisk() {
-  try {
-    const dir = getBotDataDirectory();
-    const bundledDir = path3.resolve(process.cwd(), "server", "data");
-    const candidatePaths = [
-      path3.join(dir, "bots_state.json"),
-      path3.join(dir, "bot_state.json"),
-      path3.join(bundledDir, "bots_state.json"),
-      path3.join(bundledDir, "bot_state.json")
-    ];
-    let loaded = false;
-    for (const p of candidatePaths) {
-      if (fs3.existsSync(p)) {
-        try {
-          const raw = fs3.readFileSync(p, "utf-8");
-          if (raw && raw.trim().length > 0) {
-            const botsArray = JSON.parse(raw);
-            if (Array.isArray(botsArray)) {
-              let volIdx = 0;
-              let wasPruned = false;
-              for (const bot of botsArray) {
-                if (bot.deployedOrderIds && bot.deployedOrderIds.length > 80) {
-                  bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
-                  wasPruned = true;
-                }
-                if (bot.logs && bot.logs.length > 80) {
-                  bot.logs = bot.logs.slice(0, 80);
-                  wasPruned = true;
-                }
-                activeBots.set(bot.id, bot);
-                if (bot.status === "RUNNING" && bot.strategy === "VOLUME_BOT") {
-                  const delay = 2500 + volIdx * 250;
-                  volIdx++;
-                  setTimeout(() => {
-                    startVolumeBotRunner(bot.id);
-                  }, delay);
-                }
-              }
-              console.log(`[DIMONEX Bot Engine] Berhasil memuat ${activeBots.size} bot dari disk (${p}).`);
-              loaded = true;
-              if (wasPruned) {
-                scheduleSaveBots();
-              }
-              break;
-            }
-          }
-        } catch (readErr) {
-          console.warn(`[DIMONEX Bot Engine] Gagal membaca ${p}:`, readErr);
-        }
-      }
-    }
-    const onExit = () => {
-      saveBotsToDisk();
-    };
-    process.on("SIGINT", onExit);
-    process.on("SIGTERM", onExit);
-    process.on("beforeExit", onExit);
-  } catch (err) {
-    console.warn("[DIMONEX Bot Engine] Gagal memuat bots dari disk:", err);
-  }
-}
-loadBotsFromDisk();
-botRouter.post("/volume/deploy", requireAuthOrHmac, (req, res) => {
-  try {
-    const user = req.user;
-    const {
-      apiKeyId,
-      pairId,
-      targetVolumeReach,
-      minPrice,
-      maxPrice,
-      delaySecondAmount,
-      amountRandom,
-      amountMin,
-      amountMax,
-      directionMode
-    } = req.body;
-    if (!pairId || !targetVolumeReach || !minPrice || !maxPrice) {
-      return res.status(400).json({ error: "Parameter volume bot tidak lengkap (pairId, targetVolumeReach, minPrice, maxPrice)" });
-    }
-    const pair = db.tradingPairs.get(pairId);
-    if (!pair) return res.status(404).json({ error: "Trading pair tidak ditemukan" });
-    const duplicate = Array.from(activeBots.values()).find(
-      (b) => b.userId === user.id && b.pairId === pairId && b.status === "RUNNING" && b.strategy === "VOLUME_BOT"
-    );
-    if (duplicate) {
-      return res.status(409).json({
-        error: `Bot Volume Maker aktif untuk pair ${pairId} sudah berjalan (${duplicate.name}). Hentikan bot sebelumnya sebelum meluncurkan bot baru.`
-      });
-    }
-    const minPriceUnits = PrecisionMath.parseToUnits(minPrice, pair.quoteDecimals);
-    const maxPriceUnits = PrecisionMath.parseToUnits(maxPrice, pair.quoteDecimals);
-    if (minPriceUnits >= maxPriceUnits) {
-      return res.status(400).json({ error: "Harga minimum harus lebih kecil dari harga maksimum" });
-    }
-    const delaySec = Math.max(1, parseInt(String(delaySecondAmount || 3), 10));
-    const botId = `bot-vol-${crypto17.randomUUID().slice(0, 8)}`;
-    const bot = {
-      id: botId,
-      userId: user.id,
-      userEmail: user.email,
-      apiKeyId,
-      name: `Volume Bot ${pairId} (${targetVolumeReach} ${pair.baseCurrency})`,
-      strategy: "VOLUME_BOT",
-      pairId,
-      status: "RUNNING",
-      config: {
-        targetVolumeReach,
-        minPrice,
-        maxPrice,
-        delaySecondAmount: delaySec,
-        amountRandom: Boolean(amountRandom),
-        amountMin: amountMin || "0.01",
-        amountMax: amountMax || "0.05",
-        directionMode: directionMode || "RANDOM"
-      },
-      deployedOrderIds: [],
-      filledOrderCount: 0,
-      totalVolumeFilled: "0",
-      realizedProfitIdr: "0",
-      logs: [],
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
-    addBotLog(bot, `Volume Bot diluncurkan oleh ${user.email}. Target: ${targetVolumeReach} ${pair.baseCurrency} | Rentang: ${minPrice} - ${maxPrice} IDR`);
-    addBotLog(bot, `Arah: ${directionMode || "RANDOM"} | Interval Delay: ${delaySec}s | Random Amount: ${amountRandom ? "YA" : "TIDAK"}`);
-    activeBots.set(bot.id, bot);
-    marketWsService.broadcastBotUpdate(bot);
-    startVolumeBotRunner(bot.id);
-    res.json({ success: true, bot });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-botRouter.post("/stop", requireAuthOrHmac, (req, res) => {
-  try {
-    const user = req.user;
-    const { botId, cancelOpenOrders } = req.body;
-    const bot = activeBots.get(botId);
-    if (!bot) {
-      return res.status(404).json({ error: "Bot tidak ditemukan" });
-    }
-    const roleUpper = (user.role || "").toUpperCase();
-    const isOwner = bot.userId === user.id;
-    const isPrivileged = roleUpper === "ADMIN" || roleUpper === "SUPERADMIN" || roleUpper === "MM";
-    if (!isOwner && !isPrivileged) {
-      return res.status(403).json({ error: "Tidak memiliki otorisasi untuk menghentikan bot ini" });
-    }
-    if (bot.status === "STOPPED" || bot.status === "COMPLETED") {
-      marketWsService.broadcastBotUpdate(bot);
-      return res.json({
-        success: true,
-        message: `Bot ${bot.name} sudah dalam status ${bot.status}.`,
-        bot
-      });
-    }
-    bot.status = "STOPPED";
-    bot.updatedAt = Date.now();
-    addBotLog(bot, `Bot dihentikan oleh user ${user.email}`);
-    const timer = botIntervals.get(botId);
-    if (timer) {
-      clearInterval(timer);
-      botIntervals.delete(botId);
-    }
-    let cancelledCount = 0;
-    if (cancelOpenOrders !== false) {
-      for (const orderId of bot.deployedOrderIds) {
-        const order = db.orders.get(orderId);
-        if (order && (order.status === "NEW" || order.status === "PARTIALLY_FILLED")) {
-          try {
-            matchingEngine.cancelOrder(orderId, bot.userId, bot.pairId, user.role);
-            cancelledCount++;
-          } catch (e) {
-            console.warn(`[Bot Stop] Gagal batalkan order ${orderId}:`, e);
-          }
-        }
-      }
-      addBotLog(bot, `Membatalkan ${cancelledCount} order aktif yang belum terisi di buku order.`);
-      const book = matchingEngine.getOrderBook(bot.pairId);
-      marketWsService.broadcast(`depth:${bot.pairId}`, { type: "depth", pairId: bot.pairId, data: book.getDepth(25) });
-    }
-    scheduleSaveBots();
-    db.scheduleSave();
-    marketWsService.broadcastBotUpdate(bot);
-    marketWsService.broadcastBotStopped(bot.id, bot.userId, bot);
-    res.json({ success: true, message: `Bot ${bot.name} berhasil dihentikan. ${cancelledCount} order aktif dibatalkan.`, bot });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-botRouter.post("/cancel-all", requireAuthOrHmac, (req, res) => {
-  try {
-    const user = req.user;
-    const roleUpper = (user.role || "").toUpperCase();
-    const isSuper = roleUpper === "ADMIN" || roleUpper === "SUPERADMIN";
-    const userBots = Array.from(activeBots.values()).filter((b) => isSuper || b.userId === user.id);
-    let totalCancelled = 0;
-    const affectedPairs = /* @__PURE__ */ new Set();
-    for (const bot of userBots) {
-      const timer = botIntervals.get(bot.id);
-      if (timer) {
-        clearInterval(timer);
-        botIntervals.delete(bot.id);
-      }
-      bot.status = "STOPPED";
-      bot.updatedAt = Date.now();
-      affectedPairs.add(bot.pairId);
-      for (const orderId of bot.deployedOrderIds) {
-        const order = db.orders.get(orderId);
-        if (order && (order.status === "NEW" || order.status === "PARTIALLY_FILLED")) {
-          try {
-            matchingEngine.cancelOrder(orderId, bot.userId, bot.pairId, user.role);
-            totalCancelled++;
-          } catch (e) {
-          }
-        }
-      }
-      addBotLog(bot, `Semua order bot dibatalkan secara massal.`);
-      marketWsService.broadcastBotUpdate(bot);
-      marketWsService.broadcastBotStopped(bot.id, bot.userId, bot);
-    }
-    for (const pairId of affectedPairs) {
-      const book = matchingEngine.getOrderBook(pairId);
-      marketWsService.broadcast(`depth:${pairId}`, { type: "depth", pairId, data: book.getDepth(25) });
-    }
-    scheduleSaveBots();
-    db.scheduleSave();
-    res.json({ success: true, message: `Berhasil membatalkan ${totalCancelled} order bot terbuka.`, totalCancelled });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-// server/routes/mmConsole.ts
-import fs4 from "fs";
-import path4 from "path";
-import { Router as Router11 } from "express";
-import crypto21 from "crypto";
-init_database();
 
 // server/services/BotWorkerManager.ts
 init_database();
-import crypto18 from "crypto";
+import crypto13 from "crypto";
 init_PrecisionMath();
 
 // server/services/bots/PriceFollowerBot.ts
@@ -14660,6 +11228,518 @@ var AdvancedMarketMakerBotExecutor = class {
   }
 };
 
+// server/services/bots/VolumeSpreadBot.ts
+init_database();
+import crypto12 from "crypto";
+init_PrecisionMath();
+function randomBigIntInclusive(min, max) {
+  if (max <= min) return min;
+  const range = max - min + 1n;
+  if (range <= 1n) return min;
+  const bitsNeeded = range.toString(2).length;
+  const bytesNeeded = Math.ceil(bitsNeeded / 8);
+  const mask = (1n << BigInt(bitsNeeded)) - 1n;
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const buf2 = crypto12.randomBytes(bytesNeeded);
+    let val2 = 0n;
+    for (let i = 0; i < buf2.length; i++) {
+      val2 = val2 << 8n | BigInt(buf2[i]);
+    }
+    val2 = val2 & mask;
+    if (val2 < range) {
+      return min + val2;
+    }
+  }
+  const buf = crypto12.randomBytes(bytesNeeded + 4);
+  let val = 0n;
+  for (let i = 0; i < buf.length; i++) {
+    val = val << 8n | BigInt(buf[i]);
+  }
+  return min + val % range;
+}
+function alignUpToTick(value, tick) {
+  if (tick <= 1n) return value;
+  const rem = value % tick;
+  return rem === 0n ? value : value + (tick - rem);
+}
+function alignDownToTick(value, tick) {
+  if (tick <= 1n) return value;
+  return value - value % tick;
+}
+function getAvailableBalanceUnits(userId, currency) {
+  const accId = db.accountIndex.get(`${userId}:${currency}`);
+  if (!accId) return 0n;
+  const acc = db.ledgerAccounts.get(accId);
+  if (!acc) return 0n;
+  return BigInt(acc.balanceAvailable || "0");
+}
+var VolumeSpreadBotExecutor = class {
+  /**
+   * Determine pair tick size in quote units (BigInt).
+   */
+  static resolveTickUnits(pair, cfg) {
+    if (cfg.tick_size && cfg.tick_size.trim() !== "") {
+      try {
+        const parsed = PrecisionMath.parseToUnits(cfg.tick_size.trim(), pair.quoteDecimals);
+        if (parsed > 0n) return parsed;
+      } catch {
+      }
+    }
+    const market = db.markets.get(pair.id);
+    if (market?.tickSize) {
+      try {
+        const marketTick = BigInt(market.tickSize);
+        if (marketTick > 0n) return marketTick;
+      } catch {
+      }
+    }
+    if (pair.quoteCurrency === "IDR" && pair.quoteDecimals >= 2) {
+      return 10n ** BigInt(pair.quoteDecimals);
+    }
+    if (pair.quoteDecimals >= 2) {
+      return 10n ** BigInt(pair.quoteDecimals - 2);
+    }
+    return 1n;
+  }
+  /**
+   * Compute next Taker side given configured side_pattern and previous executed side.
+   */
+  static pickTakerSide(cfg) {
+    switch (cfg.side_pattern) {
+      case "BUY_EATS_SELL":
+        return "BUY";
+      case "SELL_EATS_BUY":
+        return "SELL";
+      case "RANDOM":
+        return crypto12.randomInt(0, 2) === 0 ? "BUY" : "SELL";
+      case "ALTERNATE":
+      default:
+        return cfg.lastSideExecuted === "BUY" ? "SELL" : "BUY";
+    }
+  }
+  /**
+   * Check whether quote volume stop target has already been met using exact quote unit counter.
+   */
+  static isStopTargetReached(pair, cfg) {
+    const stopTargetUnits = PrecisionMath.parseToUnits(cfg.vol_quote_stop_target || "0", pair.quoteDecimals);
+    const executedQuoteUnits = BigInt(cfg.executedQuoteVolumeUnits || "0");
+    return {
+      reached: stopTargetUnits > 0n && executedQuoteUnits >= stopTargetUnits,
+      executedQuoteUnits,
+      stopTargetUnits
+    };
+  }
+  /**
+   * Phase 1 of Tick: Compute inside-spread price & size, validate real balances, and place Maker LIMIT GTC.
+   */
+  static prepareSpreadCrossTick(bot, addLog) {
+    const cfg = bot.volumeSpreadConfig;
+    if (!cfg) {
+      throw new Error("Konfigurasi Volume Spread Bot (Phase 2) tidak ditemukan.");
+    }
+    const pair = db.tradingPairs.get(bot.pairId);
+    if (!pair || !pair.isActive || pair.isHalted) {
+      return {
+        status: "PAIR_HALTED",
+        reason: `Pair ${bot.pairId} tidak aktif atau sedang halted.`
+      };
+    }
+    const targetCheck = this.isStopTargetReached(pair, cfg);
+    if (targetCheck.reached) {
+      return {
+        status: "STOP_TARGET_REACHED",
+        reason: `Target volume ${PrecisionMath.formatFromUnits(targetCheck.stopTargetUnits, pair.quoteDecimals)} ${pair.quoteCurrency} tercapai.`
+      };
+    }
+    const tickUnits = this.resolveTickUnits(pair, cfg);
+    const minLimitUnits = cfg.min_limit_price ? PrecisionMath.parseToUnits(cfg.min_limit_price, pair.quoteDecimals) : tickUnits;
+    const maxLimitUnits = cfg.max_limit_price ? PrecisionMath.parseToUnits(cfg.max_limit_price, pair.quoteDecimals) : minLimitUnits * 1000n > 0n ? minLimitUnits * 1000n : 10n ** 18n;
+    if (minLimitUnits <= 0n || maxLimitUnits < minLimitUnits) {
+      throw new Error("Rentang harga batas (min_limit_price / max_limit_price) tidak valid.");
+    }
+    const book = matchingEngine.getOrderBook(bot.pairId);
+    const bestBidUnits = book.bids.length > 0 ? BigInt(book.bids[0].price) : 0n;
+    const bestAskUnits = book.asks.length > 0 ? BigInt(book.asks[0].price) : 0n;
+    let windowLowUnits = 0n;
+    let windowHighUnits = 0n;
+    let bookSpreadBps = 0;
+    let usedLiveSpread = false;
+    const minSpreadBps = BigInt(Math.max(1, cfg.min_spread_bps || 1));
+    if (bestBidUnits > 0n && bestAskUnits > bestBidUnits) {
+      const spreadUnits = bestAskUnits - bestBidUnits;
+      const midUnits = (bestBidUnits + bestAskUnits) / 2n;
+      bookSpreadBps = midUnits > 0n ? Number(spreadUnits * 10000n / midUnits) : 0;
+      const hasMinSpread = midUnits > 0n && spreadUnits * 10000n >= minSpreadBps * midUnits;
+      const strictLow = bestBidUnits + tickUnits;
+      const strictHigh = bestAskUnits - tickUnits;
+      if (hasMinSpread && strictLow <= strictHigh) {
+        const clampedLow = strictLow > minLimitUnits ? strictLow : minLimitUnits;
+        const clampedHigh = strictHigh < maxLimitUnits ? strictHigh : maxLimitUnits;
+        const alignedLow = alignUpToTick(clampedLow, tickUnits);
+        const alignedHigh = alignDownToTick(clampedHigh, tickUnits);
+        if (alignedLow > bestBidUnits && alignedHigh < bestAskUnits && alignedLow <= alignedHigh) {
+          windowLowUnits = alignedLow;
+          windowHighUnits = alignedHigh;
+          usedLiveSpread = true;
+        }
+      }
+    }
+    if (!usedLiveSpread) {
+      if (cfg.require_two_sided_book) {
+        return {
+          status: "WAITING_SPREAD",
+          bestBidUnits,
+          bestAskUnits,
+          bookSpreadBps,
+          reason: `Spread live (${bookSpreadBps} bps) belum memenuhi syarat minimum (${cfg.min_spread_bps} bps) atau salah satu sisi book kosong.`
+        };
+      }
+      let refPrice = BigInt(pair.lastPrice || "0");
+      if (bestBidUnits > 0n && bestAskUnits > bestBidUnits) {
+        refPrice = (bestBidUnits + bestAskUnits) / 2n;
+      } else if (refPrice <= 0n) {
+        refPrice = (minLimitUnits + maxLimitUnits) / 2n;
+      }
+      if (refPrice < minLimitUnits) refPrice = minLimitUnits;
+      if (refPrice > maxLimitUnits) refPrice = maxLimitUnits;
+      const halfBps = BigInt(Math.max(1, cfg.fallback_half_spread_bps || 15));
+      let halfDelta = refPrice * halfBps / 10000n;
+      if (halfDelta < tickUnits) halfDelta = tickUnits;
+      let fLow = refPrice - halfDelta;
+      let fHigh = refPrice + halfDelta;
+      if (fLow < minLimitUnits) fLow = minLimitUnits;
+      if (fHigh > maxLimitUnits) fHigh = maxLimitUnits;
+      if (bestBidUnits > 0n && fLow <= bestBidUnits) {
+        fLow = bestBidUnits + tickUnits;
+      }
+      if (bestAskUnits > 0n && fHigh >= bestAskUnits) {
+        fHigh = bestAskUnits - tickUnits;
+      }
+      const alignedLow = alignUpToTick(fLow, tickUnits);
+      const alignedHigh = alignDownToTick(fHigh, tickUnits);
+      if (alignedLow > alignedHigh || bestBidUnits > 0n && alignedLow <= bestBidUnits || bestAskUnits > 0n && alignedHigh >= bestAskUnits) {
+        return {
+          status: "WAITING_SPREAD",
+          bestBidUnits,
+          bestAskUnits,
+          bookSpreadBps,
+          reason: "Spread order book terlalu rapat untuk menempatkan order baru di dalam spread tanpa menyentuh order luar."
+        };
+      }
+      windowLowUnits = alignedLow;
+      windowHighUnits = alignedHigh;
+    }
+    const takerSide = this.pickTakerSide(cfg);
+    const makerSide = takerSide === "BUY" ? "SELL" : "BUY";
+    const bandMinPct = Math.max(1, Math.min(99, Math.round(cfg.spread_band_min_pct || 15)));
+    const bandMaxPct = Math.max(bandMinPct, Math.min(99, Math.round(cfg.spread_band_max_pct || 85)));
+    let effectiveMinPct = bandMinPct;
+    let effectiveMaxPct = bandMaxPct;
+    if (cfg.spread_mode === "MIDPOINT_JITTER") {
+      effectiveMinPct = Math.max(bandMinPct, 40);
+      effectiveMaxPct = Math.min(bandMaxPct, 60);
+      if (effectiveMinPct > effectiveMaxPct) {
+        effectiveMinPct = 45;
+        effectiveMaxPct = 55;
+      }
+    } else if (cfg.spread_mode === "PING_PONG_EDGE") {
+      if (takerSide === "SELL") {
+        effectiveMinPct = bandMinPct;
+        effectiveMaxPct = Math.min(bandMaxPct, Math.max(bandMinPct, bandMinPct + 20));
+      } else {
+        effectiveMaxPct = bandMaxPct;
+        effectiveMinPct = Math.max(bandMinPct, Math.min(bandMaxPct, bandMaxPct - 20));
+      }
+    }
+    const totalWindow = windowHighUnits - windowLowUnits;
+    let pickLow = windowLowUnits + totalWindow * BigInt(effectiveMinPct) / 100n;
+    let pickHigh = windowLowUnits + totalWindow * BigInt(effectiveMaxPct) / 100n;
+    pickLow = alignUpToTick(pickLow, tickUnits);
+    pickHigh = alignDownToTick(pickHigh, tickUnits);
+    if (pickLow < windowLowUnits) pickLow = windowLowUnits;
+    if (pickHigh > windowHighUnits) pickHigh = windowHighUnits;
+    let execPriceUnits = pickLow <= pickHigh ? randomBigIntInclusive(pickLow, pickHigh) : (windowLowUnits + windowHighUnits) / 2n;
+    execPriceUnits = alignDownToTick(execPriceUnits, tickUnits);
+    if (execPriceUnits < windowLowUnits) execPriceUnits = windowLowUnits;
+    if (execPriceUnits > windowHighUnits) execPriceUnits = windowHighUnits;
+    let minQtyUnits = PrecisionMath.parseToUnits(cfg.random_min_quantity || "0.01", pair.baseDecimals);
+    let maxQtyUnits = PrecisionMath.parseToUnits(cfg.random_max_quantity || cfg.random_min_quantity || "0.05", pair.baseDecimals);
+    const pairMin = BigInt(pair.minOrderSize);
+    const pairMax = BigInt(pair.maxOrderSize);
+    if (minQtyUnits < pairMin) minQtyUnits = pairMin;
+    if (maxQtyUnits > pairMax) maxQtyUnits = pairMax;
+    if (maxQtyUnits < minQtyUnits) maxQtyUnits = minQtyUnits;
+    const qtyUnits = randomBigIntInclusive(minQtyUnits, maxQtyUnits);
+    const takerUserId = cfg.account_id || bot.accountId || bot.ownerUserId;
+    const makerUserId = cfg.counterparty_account_id && cfg.counterparty_account_id.trim() !== "" ? cfg.counterparty_account_id.trim() : takerUserId;
+    const quoteVolUnits = PrecisionMath.calculateQuoteAmount(qtyUnits, pair.baseDecimals, execPriceUnits);
+    const buyerLockUnits = quoteVolUnits + PrecisionMath.calculateFee(quoteVolUnits, pair.takerFeeBps);
+    if (makerUserId === takerUserId) {
+      const availBase = getAvailableBalanceUnits(takerUserId, pair.baseCurrency);
+      const availQuote = getAvailableBalanceUnits(takerUserId, pair.quoteCurrency);
+      if (availBase < qtyUnits) {
+        return {
+          status: "INSUFFICIENT_BALANCE",
+          reason: `Saldo ${pair.baseCurrency} akun ${takerUserId} tidak cukup (${PrecisionMath.formatFromUnits(availBase, pair.baseDecimals)} < ${PrecisionMath.formatFromUnits(qtyUnits, pair.baseDecimals)}).`
+        };
+      }
+      if (availQuote < buyerLockUnits) {
+        return {
+          status: "INSUFFICIENT_BALANCE",
+          reason: `Saldo ${pair.quoteCurrency} akun ${takerUserId} tidak cukup (${PrecisionMath.formatFromUnits(availQuote, pair.quoteDecimals)} < ${PrecisionMath.formatFromUnits(buyerLockUnits, pair.quoteDecimals)}).`
+        };
+      }
+    } else {
+      const sellerUserId = makerSide === "SELL" ? makerUserId : takerUserId;
+      const buyerUserId = makerSide === "BUY" ? makerUserId : takerUserId;
+      const availSellerBase = getAvailableBalanceUnits(sellerUserId, pair.baseCurrency);
+      const availBuyerQuote = getAvailableBalanceUnits(buyerUserId, pair.quoteCurrency);
+      if (availSellerBase < qtyUnits) {
+        return {
+          status: "INSUFFICIENT_BALANCE",
+          reason: `Saldo ${pair.baseCurrency} penjual (${sellerUserId}) tidak mencukupi.`
+        };
+      }
+      if (availBuyerQuote < buyerLockUnits) {
+        return {
+          status: "INSUFFICIENT_BALANCE",
+          reason: `Saldo ${pair.quoteCurrency} pembeli (${buyerUserId}) tidak mencukupi.`
+        };
+      }
+    }
+    const seq = crypto12.randomUUID().slice(0, 8);
+    const makerRes = matchingEngine.placeOrder({
+      userId: makerUserId,
+      pairId: bot.pairId,
+      side: makerSide,
+      orderType: "LIMIT",
+      timeInForce: "GTC",
+      price: execPriceUnits.toString(),
+      quantity: qtyUnits.toString(),
+      clientOrderId: `${bot.id}-vol-sp-m-${seq}`
+    });
+    bot.deployedOrderIds.push(makerRes.takerOrder.id);
+    if (bot.deployedOrderIds.length > 500) {
+      bot.deployedOrderIds = bot.deployedOrderIds.slice(-300);
+    }
+    bot.stats.ordersSubmitted += 1;
+    bot.stats.ordersAccepted += 1;
+    if (makerRes.trades.length > 0) {
+      let matchedBase = 0n;
+      let matchedQuote = 0n;
+      for (const t of makerRes.trades) {
+        matchedBase += BigInt(t.quantity);
+        matchedQuote += BigInt(t.quoteVolume);
+        marketWsService.broadcastTrade(t);
+      }
+      this.recordTradesOnBot(bot, cfg, matchedBase, matchedQuote, makerRes.trades.length, takerSide, execPriceUnits, bookSpreadBps);
+      marketWsService.broadcastOrderUpdate(makerRes.takerOrder);
+      marketWsService.broadcastDepth(bot.pairId);
+    } else {
+      marketWsService.broadcastOrderUpdate(makerRes.takerOrder);
+      marketWsService.broadcastDepth(bot.pairId);
+    }
+    const makerRemaining = BigInt(makerRes.takerOrder.quantity) - BigInt(makerRes.takerOrder.filledQuantity);
+    if (makerRemaining <= 0n || makerRes.takerOrder.status !== "NEW" && makerRes.takerOrder.status !== "PARTIALLY_FILLED") {
+      return {
+        status: "READY_FOR_CROSS",
+        makerOrderId: makerRes.takerOrder.id,
+        makerUserId,
+        takerUserId,
+        makerSide,
+        takerSide,
+        execPriceUnits,
+        qtyUnits: 0n,
+        bookSpreadBps,
+        bestBidUnits,
+        bestAskUnits
+      };
+    }
+    return {
+      status: "READY_FOR_CROSS",
+      makerOrderId: makerRes.takerOrder.id,
+      makerUserId,
+      takerUserId,
+      makerSide,
+      takerSide,
+      execPriceUnits,
+      qtyUnits: makerRemaining,
+      bookSpreadBps,
+      bestBidUnits,
+      bestAskUnits
+    };
+  }
+  /**
+   * Phase 2 of Tick: Submit opposing Taker LIMIT IOC at execPriceUnits so it matches our Maker inside spread.
+   */
+  static completeSpreadCrossLeg(bot, leg, addLog) {
+    const cfg = bot.volumeSpreadConfig;
+    const pair = db.tradingPairs.get(bot.pairId);
+    if (!pair || !pair.isActive || pair.isHalted) {
+      if (leg.makerOrderId && leg.makerUserId) {
+        try {
+          matchingEngine.cancelOrder(leg.makerOrderId, leg.makerUserId, bot.pairId);
+        } catch {
+        }
+      }
+      return {
+        status: "ERROR",
+        executedBaseUnits: 0n,
+        executedQuoteUnits: 0n,
+        tradesCount: 0,
+        reason: `Pair ${bot.pairId} tidak aktif atau halted sebelum cross leg.`
+      };
+    }
+    if (!leg.makerOrderId || !leg.execPriceUnits || !leg.takerSide || !leg.takerUserId || !leg.makerUserId) {
+      return {
+        status: "NO_FILL",
+        executedBaseUnits: 0n,
+        executedQuoteUnits: 0n,
+        tradesCount: 0
+      };
+    }
+    const makerOrder = db.orders.get(leg.makerOrderId);
+    if (!makerOrder || makerOrder.status !== "NEW" && makerOrder.status !== "PARTIALLY_FILLED") {
+      return {
+        status: "MAKER_CONSUMED",
+        executedBaseUnits: 0n,
+        executedQuoteUnits: 0n,
+        tradesCount: 0,
+        reason: "Maker order sudah terpenuhi atau dibatalkan sebelum Taker IOC dieksekusi."
+      };
+    }
+    const makerRemaining = BigInt(makerOrder.quantity) - BigInt(makerOrder.filledQuantity);
+    if (makerRemaining <= 0n || leg.qtyUnits !== void 0 && leg.qtyUnits <= 0n) {
+      return {
+        status: "MAKER_CONSUMED",
+        executedBaseUnits: 0n,
+        executedQuoteUnits: 0n,
+        tradesCount: 0
+      };
+    }
+    const takerQty = leg.qtyUnits && leg.qtyUnits < makerRemaining ? leg.qtyUnits : makerRemaining;
+    const seq = crypto12.randomUUID().slice(0, 8);
+    const takerRes = matchingEngine.placeOrder({
+      userId: leg.takerUserId,
+      pairId: bot.pairId,
+      side: leg.takerSide,
+      orderType: "LIMIT",
+      timeInForce: "IOC",
+      price: leg.execPriceUnits.toString(),
+      quantity: takerQty.toString(),
+      clientOrderId: `${bot.id}-vol-sp-t-${seq}`
+    });
+    bot.deployedOrderIds.push(takerRes.takerOrder.id);
+    bot.stats.ordersSubmitted += 1;
+    bot.stats.ordersAccepted += 1;
+    const refreshedMaker = db.orders.get(leg.makerOrderId);
+    if (refreshedMaker && (refreshedMaker.status === "NEW" || refreshedMaker.status === "PARTIALLY_FILLED")) {
+      try {
+        matchingEngine.cancelOrder(refreshedMaker.id, refreshedMaker.userId, bot.pairId);
+        marketWsService.broadcastOrderUpdate(refreshedMaker);
+      } catch {
+      }
+    }
+    let execBaseUnits = 0n;
+    let execQuoteUnits = 0n;
+    for (const trade of takerRes.trades) {
+      execBaseUnits += BigInt(trade.quantity);
+      execQuoteUnits += BigInt(trade.quoteVolume);
+      marketWsService.broadcastTrade(trade);
+    }
+    for (const updatedMaker of takerRes.makerOrdersUpdated) {
+      marketWsService.broadcastOrderUpdate(updatedMaker);
+    }
+    marketWsService.broadcastOrderUpdate(takerRes.takerOrder);
+    marketWsService.broadcastDepth(bot.pairId);
+    if (takerRes.trades.length > 0 && execBaseUnits > 0n) {
+      this.recordTradesOnBot(
+        bot,
+        cfg,
+        execBaseUnits,
+        execQuoteUnits,
+        takerRes.trades.length,
+        leg.takerSide,
+        leg.execPriceUnits,
+        leg.bookSpreadBps || 0
+      );
+      const formattedPrice = PrecisionMath.formatFromUnits(leg.execPriceUnits, pair.quoteDecimals);
+      const formattedQty = PrecisionMath.formatFromUnits(execBaseUnits, pair.baseDecimals);
+      const formattedQuote = PrecisionMath.formatFromUnits(execQuoteUnits, pair.quoteDecimals);
+      const bidDisplay = leg.bestBidUnits && leg.bestBidUnits > 0n ? PrecisionMath.formatFromUnits(leg.bestBidUnits, pair.quoteDecimals) : "-";
+      const askDisplay = leg.bestAskUnits && leg.bestAskUnits > 0n ? PrecisionMath.formatFromUnits(leg.bestAskUnits, pair.quoteDecimals) : "-";
+      addLog(
+        bot,
+        `[Spread Cross ${leg.takerSide}] Makan order sendiri @ ${formattedPrice} ${pair.quoteCurrency} \xD7 ${formattedQty} ${pair.baseCurrency} (Quote: ${formattedQuote}, Book: ${bidDisplay} / ${askDisplay})`,
+        "FILL"
+      );
+      const stopCheck = this.isStopTargetReached(pair, cfg);
+      if (stopCheck.reached) {
+        return {
+          status: "STOP_TARGET_REACHED",
+          executedBaseUnits: execBaseUnits,
+          executedQuoteUnits: execQuoteUnits,
+          tradesCount: takerRes.trades.length
+        };
+      }
+      return {
+        status: "EXECUTED",
+        executedBaseUnits: execBaseUnits,
+        executedQuoteUnits: execQuoteUnits,
+        tradesCount: takerRes.trades.length
+      };
+    }
+    addLog(
+      bot,
+      `Taker IOC (${leg.takerSide}) selesai tanpa fill baru; sisa maker dibersihkan.`,
+      "ORDER"
+    );
+    return {
+      status: "NO_FILL",
+      executedBaseUnits: 0n,
+      executedQuoteUnits: 0n,
+      tradesCount: 0
+    };
+  }
+  static recordTradesOnBot(bot, cfg, execBaseUnits, execQuoteUnits, tradesCount, takerSide, execPriceUnits, bookSpreadBps) {
+    bot.stats.ordersFilled += tradesCount;
+    bot.stats.totalTrades += tradesCount;
+    bot.stats.executedVolume = (BigInt(bot.stats.executedVolume || "0") + execBaseUnits).toString();
+    cfg.executedQuoteVolumeUnits = (BigInt(cfg.executedQuoteVolumeUnits || "0") + execQuoteUnits).toString();
+    cfg.lastSideExecuted = takerSide;
+    cfg.lastExecPriceUnits = execPriceUnits.toString();
+    cfg.lastSpreadBps = bookSpreadBps;
+    cfg.spreadSelfTradesCount = (cfg.spreadSelfTradesCount || 0) + tradesCount;
+    bot.lastExecutionResult = `CROSS_${takerSide} @ ${execPriceUnits.toString()}`;
+    bot.lastHeartbeat = Date.now();
+  }
+  /**
+   * Cancel any resting open orders owned by this Volume Spread Bot.
+   */
+  static cancelOpenBotOrders(bot, addLog) {
+    let cancelled = 0;
+    const seen = /* @__PURE__ */ new Set();
+    for (const orderId of bot.deployedOrderIds) {
+      if (seen.has(orderId)) continue;
+      seen.add(orderId);
+      const order = db.orders.get(orderId);
+      if (order && (order.status === "NEW" || order.status === "PARTIALLY_FILLED")) {
+        try {
+          matchingEngine.cancelOrder(order.id, order.userId, bot.pairId);
+          cancelled++;
+          marketWsService.broadcastOrderUpdate(order);
+        } catch {
+        }
+      }
+    }
+    if (cancelled > 0) {
+      addLog(bot, `Volume Spread Bot membersihkan ${cancelled} order maker tersisa.`, "ORDER");
+      marketWsService.broadcastDepth(bot.pairId);
+    }
+    return cancelled;
+  }
+};
+
 // server/services/BotWorkerManager.ts
 var BotWorkerManager = class {
   constructor() {
@@ -14822,6 +11902,46 @@ var BotWorkerManager = class {
       if (isNaN(minP) || isNaN(maxP) || minP >= maxP) {
         errors.push("min_limit_price harus lebih kecil dari max_limit_price.");
       }
+    } else if (bot.botType === "VOLUME_SPREAD_BOT") {
+      const cfg = bot.volumeSpreadConfig;
+      if (!cfg) {
+        errors.push("Konfigurasi Volume Spread Bot (Phase 2) tidak boleh kosong.");
+        return { isValid: false, errors };
+      }
+      if (cfg.min_delay < 1) errors.push("min_delay harus minimal 1 detik.");
+      if (cfg.max_delay < cfg.min_delay) errors.push("max_delay harus >= min_delay.");
+      try {
+        const minQtyUnits = PrecisionMath.parseToUnits(cfg.random_min_quantity || "0", pair.baseDecimals);
+        const maxQtyUnits = PrecisionMath.parseToUnits(cfg.random_max_quantity || "0", pair.baseDecimals);
+        if (minQtyUnits <= 0n) errors.push("random_min_quantity harus > 0.");
+        if (maxQtyUnits < minQtyUnits) errors.push("random_max_quantity harus >= random_min_quantity.");
+      } catch {
+        errors.push("Format random_min_quantity / random_max_quantity tidak valid.");
+      }
+      try {
+        const minPUnits = PrecisionMath.parseToUnits(cfg.min_limit_price || "0", pair.quoteDecimals);
+        const maxPUnits = PrecisionMath.parseToUnits(cfg.max_limit_price || "0", pair.quoteDecimals);
+        if (minPUnits <= 0n || maxPUnits <= minPUnits) {
+          errors.push("min_limit_price harus positif dan lebih kecil dari max_limit_price.");
+        }
+      } catch {
+        errors.push("Format min_limit_price / max_limit_price tidak valid.");
+      }
+      if (cfg.spread_band_min_pct < 1 || cfg.spread_band_min_pct > 99) {
+        errors.push("spread_band_min_pct harus antara 1% dan 99%.");
+      }
+      if (cfg.spread_band_max_pct < cfg.spread_band_min_pct || cfg.spread_band_max_pct > 99) {
+        errors.push("spread_band_max_pct harus >= spread_band_min_pct dan <= 99%.");
+      }
+      if (cfg.cross_delay_ms < 0 || cfg.cross_delay_ms > 2e3) {
+        errors.push("cross_delay_ms harus antara 0 sampai 2000 ms.");
+      }
+      try {
+        const targetUnits = PrecisionMath.parseToUnits(cfg.vol_quote_stop_target || "0", pair.quoteDecimals);
+        if (targetUnits <= 0n) errors.push("vol_quote_stop_target harus lebih besar dari 0.");
+      } catch {
+        errors.push("Format vol_quote_stop_target tidak valid.");
+      }
     } else if (bot.botType === "PRICE_FOLLOWER") {
       const cfg = bot.priceFollowerConfig;
       if (!cfg) {
@@ -14965,11 +12085,12 @@ var BotWorkerManager = class {
       this.addLog(bot, "Peringatan: Worker sudah berjalan untuk bot ini. Menggunakan lease aktif.", "INFO");
       return true;
     }
-    const leaseId = crypto18.randomUUID();
+    const leaseId = crypto13.randomUUID();
     const runtime = {
       botId,
       leaseId,
       timer: null,
+      crossTimer: null,
       isRunning: true,
       consecutiveErrors: 0,
       ordersPlacedInWindow: 0,
@@ -14985,6 +12106,8 @@ var BotWorkerManager = class {
       this.scheduleOrderBotTick(runtime);
     } else if (bot.botType === "VOLUME_BOT") {
       this.scheduleVolumeBotTick(runtime);
+    } else if (bot.botType === "VOLUME_SPREAD_BOT") {
+      this.scheduleVolumeSpreadTick(runtime);
     } else if (bot.botType === "PRICE_FOLLOWER") {
       this.schedulePriceFollowerTick(runtime);
     } else if (bot.botType === "DEPTH_LIQUIDITY") {
@@ -15010,6 +12133,7 @@ var BotWorkerManager = class {
     const runtime = this.workers.get(botId);
     if (runtime) {
       if (runtime.timer) clearTimeout(runtime.timer);
+      if (runtime.crossTimer) clearTimeout(runtime.crossTimer);
       runtime.isRunning = false;
       this.workers.delete(botId);
     }
@@ -15028,6 +12152,7 @@ var BotWorkerManager = class {
     const runtime = this.workers.get(botId);
     if (runtime) {
       if (runtime.timer) clearTimeout(runtime.timer);
+      if (runtime.crossTimer) clearTimeout(runtime.crossTimer);
       runtime.isRunning = false;
       this.workers.delete(botId);
     }
@@ -15049,6 +12174,8 @@ var BotWorkerManager = class {
         cancelledOrdersCount += SmartHftLadderBotExecutor.cancelOpenBotOrders(bot, this.addLog.bind(this));
       } else if (bot.botType === "ADVANCED_MM") {
         cancelledOrdersCount += AdvancedMarketMakerBotExecutor.cancelOpenOrders(bot, this.addLog.bind(this));
+      } else if (bot.botType === "VOLUME_SPREAD_BOT") {
+        cancelledOrdersCount += VolumeSpreadBotExecutor.cancelOpenBotOrders(bot, this.addLog.bind(this));
       }
       for (const orderId of bot.deployedOrderIds) {
         const order = db.orders.get(orderId);
@@ -15083,7 +12210,7 @@ var BotWorkerManager = class {
       }
     }
     db.auditLogs.push({
-      id: crypto18.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: "RISK_CONTROLLER",
       action: "EMERGENCY_KILL_SWITCH_TRIGGERED",
       resource: "ALL_BOTS",
@@ -15096,7 +12223,7 @@ var BotWorkerManager = class {
   resetEmergencyKillSwitch() {
     db.riskControls.isKillSwitchActive = false;
     db.auditLogs.push({
-      id: crypto18.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: "ADMIN",
       action: "EMERGENCY_KILL_SWITCH_RESET",
       resource: "ALL_BOTS",
@@ -15115,7 +12242,7 @@ var BotWorkerManager = class {
     const botName = bot.name;
     const stopResult = this.stopWorker(botId, true);
     db.auditLogs.push({
-      id: crypto18.randomUUID(),
+      id: crypto13.randomUUID(),
       actorId: actorEmail || "MM_OPERATOR",
       action: "BOT_INSTANCE_DELETED",
       resource: botId,
@@ -15472,6 +12599,113 @@ var BotWorkerManager = class {
     this.scheduleVolumeBotTick(runtime);
   }
   /**
+   * Volume Bot Phase 2 (Spread Self-Cross) Scheduling Loop
+   */
+  scheduleVolumeSpreadTick(runtime) {
+    if (!runtime.isRunning) return;
+    const bot = db.botInstances.get(runtime.botId);
+    if (!bot || bot.status !== "RUNNING") return;
+    const cfg = bot.volumeSpreadConfig;
+    if (!cfg) return;
+    const minDelayMs = Math.max(1, cfg.min_delay || 2) * 1e3;
+    const maxDelayMs = Math.max(minDelayMs, (cfg.max_delay || 5) * 1e3);
+    const delayMs = minDelayMs + crypto13.randomInt(0, Math.max(1, maxDelayMs - minDelayMs + 1));
+    runtime.timer = setTimeout(() => {
+      this.executeVolumeSpreadTick(runtime);
+    }, delayMs);
+  }
+  executeVolumeSpreadTick(runtime) {
+    if (!runtime.isRunning) return;
+    const bot = db.botInstances.get(runtime.botId);
+    if (!bot || bot.status !== "RUNNING") return;
+    const cfg = bot.volumeSpreadConfig;
+    if (!cfg) return;
+    const now = Date.now();
+    if (now - runtime.windowStart > 6e4) {
+      runtime.windowStart = now;
+      runtime.ordersPlacedInWindow = 0;
+    }
+    if (runtime.ordersPlacedInWindow >= db.riskControls.maxOrderSubmissionRatePerMin) {
+      this.addLog(bot, "Rate limit order per menit tercapai. Menunda spread cross tick...", "RISK");
+      this.scheduleVolumeSpreadTick(runtime);
+      return;
+    }
+    try {
+      const leg = VolumeSpreadBotExecutor.prepareSpreadCrossTick(bot, this.addLog.bind(this));
+      if (leg.status === "STOP_TARGET_REACHED") {
+        bot.status = "STOPPED";
+        this.addLog(bot, leg.reason || "Target volume tercapai! Spread Volume Bot (Phase 2) selesai.", "INFO");
+        this.stopWorker(bot.id, true);
+        return;
+      }
+      if (leg.status === "PAIR_HALTED" || leg.status === "WAITING_SPREAD") {
+        this.addLog(bot, leg.reason || "Menunggu kondisi spread book...", "RISK");
+        bot.lastHeartbeat = Date.now();
+        this.scheduleVolumeSpreadTick(runtime);
+        return;
+      }
+      if (leg.status === "INSUFFICIENT_BALANCE") {
+        runtime.consecutiveErrors++;
+        this.addLog(bot, leg.reason || "Saldo Base/Quote akun tidak mencukupi untuk spread self-cross.", "RISK");
+        if (runtime.consecutiveErrors >= db.riskControls.maxConsecutiveErrors) {
+          bot.status = "RISK_HALTED";
+          bot.errorInfo = leg.reason || "Saldo tidak mencukupi berulang kali.";
+          this.stopWorker(bot.id, true);
+          return;
+        }
+        this.scheduleVolumeSpreadTick(runtime);
+        return;
+      }
+      runtime.ordersPlacedInWindow += 1;
+      const crossDelayMs = Math.min(2e3, Math.max(0, Math.round(cfg.cross_delay_ms || 0)));
+      const finishCross = () => {
+        if (!runtime.isRunning) return;
+        const activeBot = db.botInstances.get(runtime.botId);
+        if (!activeBot || activeBot.status !== "RUNNING") return;
+        try {
+          const crossRes = VolumeSpreadBotExecutor.completeSpreadCrossLeg(activeBot, leg, this.addLog.bind(this));
+          runtime.ordersPlacedInWindow += 1;
+          runtime.consecutiveErrors = 0;
+          if (crossRes.status === "STOP_TARGET_REACHED") {
+            activeBot.status = "STOPPED";
+            this.addLog(activeBot, `Target volume Phase 2 (${cfg.vol_quote_stop_target}) tercapai! Bot berhenti otomatis.`, "INFO");
+            this.stopWorker(activeBot.id, true);
+            return;
+          }
+        } catch (err) {
+          runtime.consecutiveErrors++;
+          this.addLog(activeBot, `Error saat taker self-cross: ${err.message}`, "ERROR");
+          if (runtime.consecutiveErrors >= db.riskControls.maxConsecutiveErrors) {
+            activeBot.status = "RISK_HALTED";
+            activeBot.errorInfo = `Consecutive error threshold breached (${runtime.consecutiveErrors}).`;
+            this.stopWorker(activeBot.id, true);
+            return;
+          }
+        }
+        this.scheduleVolumeSpreadTick(runtime);
+      };
+      if (crossDelayMs === 0) {
+        finishCross();
+      } else {
+        runtime.crossTimer = setTimeout(() => {
+          runtime.crossTimer = null;
+          finishCross();
+        }, crossDelayMs);
+      }
+    } catch (err) {
+      runtime.consecutiveErrors++;
+      this.addLog(bot, `Error eksekusi Spread Volume tick: ${err.message}`, "ERROR");
+      if (runtime.consecutiveErrors >= db.riskControls.maxConsecutiveErrors) {
+        bot.status = "RISK_HALTED";
+        bot.errorInfo = `Consecutive error threshold breached (${runtime.consecutiveErrors}).`;
+        this.addLog(bot, bot.errorInfo, "RISK");
+        this.stopWorker(bot.id, true);
+        return;
+      }
+      this.scheduleVolumeSpreadTick(runtime);
+    }
+  }
+  /**
    * Price Follower Bot Scheduling Loop
    */
   schedulePriceFollowerTick(runtime) {
@@ -15660,13 +12894,9099 @@ var BotWorkerManager = class {
 };
 var botWorkerManager = new BotWorkerManager();
 
+// server/services/PriceThresholdService.ts
+var LADDER_CAPABLE_BOT_TYPES = /* @__PURE__ */ new Set([
+  "SMART_HFT_LADDER",
+  "DEPTH_LIQUIDITY",
+  "MOVEMENT_DEPTH_LIQUIDITY",
+  "QUANT_HFT_MM",
+  "ADVANCED_MM"
+]);
+var PriceThresholdService = class {
+  constructor() {
+    this.timer = null;
+    this.isTickRunning = false;
+  }
+  start() {
+    if (this.timer) return;
+    this.timer = setInterval(() => {
+      this.evaluateAll();
+    }, 1e3);
+    console.log("[DIMONEX PriceThresholdService] Monitor threshold harga MM aktif (interval 1000ms).");
+  }
+  stop() {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+  createTrigger(input) {
+    const pair = db.tradingPairs.get(input.pairId);
+    if (!pair) {
+      throw new Error(`Trading pair ${input.pairId} tidak ditemukan.`);
+    }
+    const quoteDecimals = pair.quoteDecimals !== void 0 && pair.quoteDecimals !== null ? pair.quoteDecimals : pair.quoteCurrency === "USDT" ? 6 : 2;
+    const thresholdPriceUnits = PrecisionMath.parseToUnits(input.thresholdPrice, quoteDecimals);
+    if (thresholdPriceUnits <= 0n) {
+      throw new Error("Harga threshold harus lebih besar dari 0.");
+    }
+    if (input.targetBotId) {
+      const targetBot = db.botInstances.get(input.targetBotId);
+      if (!targetBot) {
+        throw new Error(`Target bot ${input.targetBotId} tidak ditemukan.`);
+      }
+    }
+    const now = Date.now();
+    const trigger = {
+      id: `pt-${crypto14.randomUUID().slice(0, 8)}`,
+      name: (input.name || `${input.pairId} ${input.condition}`).trim(),
+      pairId: pair.id,
+      environment: input.environment || "DEMO",
+      condition: input.condition || "ABOVE_OR_EQUAL",
+      thresholdPrice: PrecisionMath.formatFromUnits(thresholdPriceUnits, quoteDecimals),
+      thresholdPriceUnits: thresholdPriceUnits.toString(),
+      quoteCurrency: pair.quoteCurrency,
+      quoteDecimals,
+      soundEnabled: input.soundEnabled !== false && input.soundTone !== "NONE",
+      soundTone: input.soundTone || "CHIME",
+      action: input.action || "NONE",
+      targetBotId: input.targetBotId || void 0,
+      adjustStepPct: Math.max(0.1, Math.min(25, Number(input.adjustStepPct ?? 1.5))),
+      cooldownSec: Math.max(5, Math.min(86400, Math.round(Number(input.cooldownSec ?? 30)))),
+      autoResetAfterCooldown: input.autoResetAfterCooldown !== false,
+      enabled: true,
+      status: "ARMED",
+      triggerCount: 0,
+      lastObservedPriceUnits: pair.lastPrice || "0",
+      createdBy: input.createdBy || "MM_OPERATOR",
+      createdAt: now,
+      updatedAt: now
+    };
+    db.priceThresholdTriggers.set(trigger.id, trigger);
+    db.auditLogs.push({
+      id: crypto14.randomUUID(),
+      actorId: trigger.createdBy,
+      action: "PRICE_THRESHOLD_CREATED",
+      resource: trigger.id,
+      details: `Threshold "${trigger.name}" pada ${trigger.pairId} (${trigger.condition} @ ${trigger.thresholdPrice} ${trigger.quoteCurrency}, aksi: ${trigger.action}).`,
+      createdAt: now
+    });
+    db.scheduleSave();
+    return trigger;
+  }
+  updateTrigger(id, patch) {
+    const existing = db.priceThresholdTriggers.get(id);
+    if (!existing) {
+      throw new Error("Aturan price threshold tidak ditemukan.");
+    }
+    const pair = db.tradingPairs.get(existing.pairId);
+    const quoteDecimals = pair?.quoteDecimals ?? existing.quoteDecimals;
+    if (patch.name !== void 0) existing.name = patch.name.trim() || existing.name;
+    if (patch.condition !== void 0) existing.condition = patch.condition;
+    if (patch.thresholdPrice !== void 0) {
+      const units = PrecisionMath.parseToUnits(patch.thresholdPrice, quoteDecimals);
+      if (units <= 0n) throw new Error("Harga threshold harus lebih besar dari 0.");
+      existing.thresholdPrice = PrecisionMath.formatFromUnits(units, quoteDecimals);
+      existing.thresholdPriceUnits = units.toString();
+      existing.quoteDecimals = quoteDecimals;
+    }
+    if (patch.soundEnabled !== void 0) existing.soundEnabled = Boolean(patch.soundEnabled);
+    if (patch.soundTone !== void 0) existing.soundTone = patch.soundTone;
+    if (patch.action !== void 0) existing.action = patch.action;
+    if (patch.targetBotId !== void 0) existing.targetBotId = patch.targetBotId || void 0;
+    if (patch.adjustStepPct !== void 0) {
+      existing.adjustStepPct = Math.max(0.1, Math.min(25, Number(patch.adjustStepPct)));
+    }
+    if (patch.cooldownSec !== void 0) {
+      existing.cooldownSec = Math.max(5, Math.min(86400, Math.round(Number(patch.cooldownSec))));
+    }
+    if (patch.autoResetAfterCooldown !== void 0) {
+      existing.autoResetAfterCooldown = Boolean(patch.autoResetAfterCooldown);
+    }
+    if (patch.enabled !== void 0) {
+      existing.enabled = Boolean(patch.enabled);
+      if (existing.enabled && existing.status === "TRIGGERED") {
+        existing.status = "ARMED";
+      }
+    }
+    if (patch.rearm) {
+      existing.enabled = true;
+      existing.status = "ARMED";
+      if (pair?.lastPrice) {
+        existing.lastObservedPriceUnits = pair.lastPrice;
+      }
+    }
+    existing.updatedAt = Date.now();
+    db.priceThresholdTriggers.set(existing.id, existing);
+    db.scheduleSave();
+    return existing;
+  }
+  deleteTrigger(id) {
+    const deleted = db.priceThresholdTriggers.delete(id);
+    if (deleted) db.scheduleSave();
+    return deleted;
+  }
+  listTriggers(environment, pairId) {
+    let items = Array.from(db.priceThresholdTriggers.values());
+    if (environment) items = items.filter((t) => t.environment === environment);
+    if (pairId) items = items.filter((t) => t.pairId === pairId);
+    return items.sort((a, b) => b.createdAt - a.createdAt);
+  }
+  listEvents(environment, limit = 60) {
+    let items = db.priceThresholdEvents;
+    if (environment) items = items.filter((e) => e.environment === environment);
+    return items.slice(-limit).reverse();
+  }
+  triggerManualTest(id, executeBotAdjustment = true) {
+    const trigger = db.priceThresholdTriggers.get(id);
+    if (!trigger) {
+      throw new Error("Aturan price threshold tidak ditemukan.");
+    }
+    const pair = db.tradingPairs.get(trigger.pairId);
+    const liveUnits = pair?.lastPrice || trigger.thresholdPriceUnits;
+    let adjustmentSummary = "Notifikasi suara uji coba dipicu (tanpa modifikasi bot).";
+    if (executeBotAdjustment && trigger.action !== "NONE") {
+      adjustmentSummary = this.executeLadderAction(trigger, BigInt(liveUnits), true);
+    }
+    const event = {
+      id: `pte-${crypto14.randomUUID().slice(0, 8)}`,
+      triggerId: trigger.id,
+      triggerName: trigger.name,
+      pairId: trigger.pairId,
+      environment: trigger.environment,
+      condition: trigger.condition,
+      thresholdPriceUnits: trigger.thresholdPriceUnits,
+      breachedPriceUnits: liveUnits,
+      quoteCurrency: trigger.quoteCurrency,
+      quoteDecimals: trigger.quoteDecimals,
+      soundEnabled: trigger.soundEnabled,
+      soundTone: trigger.soundTone,
+      action: trigger.action,
+      targetBotId: trigger.targetBotId,
+      adjustmentSummary,
+      timestamp: Date.now(),
+      isTest: true
+    };
+    this.recordEvent(event);
+    return event;
+  }
+  evaluateAll() {
+    if (this.isTickRunning) return;
+    this.isTickRunning = true;
+    try {
+      const now = Date.now();
+      for (const trigger of db.priceThresholdTriggers.values()) {
+        const pair = db.tradingPairs.get(trigger.pairId);
+        if (!pair || !pair.lastPrice) continue;
+        const currentUnits = BigInt(pair.lastPrice);
+        const thresholdUnits = BigInt(trigger.thresholdPriceUnits);
+        if (trigger.status === "COOLDOWN" && trigger.lastTriggeredAt) {
+          const elapsedMs = now - trigger.lastTriggeredAt;
+          if (elapsedMs >= trigger.cooldownSec * 1e3) {
+            if (trigger.autoResetAfterCooldown && trigger.enabled) {
+              trigger.status = "ARMED";
+              trigger.updatedAt = now;
+              db.priceThresholdTriggers.set(trigger.id, trigger);
+            }
+          } else {
+            trigger.lastObservedPriceUnits = currentUnits.toString();
+            continue;
+          }
+        }
+        if (!trigger.enabled || trigger.status !== "ARMED") {
+          trigger.lastObservedPriceUnits = currentUnits.toString();
+          continue;
+        }
+        const prevUnits = trigger.lastObservedPriceUnits ? BigInt(trigger.lastObservedPriceUnits) : currentUnits;
+        let breached = false;
+        if (trigger.condition === "ABOVE_OR_EQUAL") {
+          breached = currentUnits >= thresholdUnits;
+        } else if (trigger.condition === "BELOW_OR_EQUAL") {
+          breached = currentUnits <= thresholdUnits;
+        } else if (trigger.condition === "CROSS_EITHER") {
+          const crossedUp = prevUnits < thresholdUnits && currentUnits >= thresholdUnits;
+          const crossedDown = prevUnits > thresholdUnits && currentUnits <= thresholdUnits;
+          breached = crossedUp || crossedDown || currentUnits === thresholdUnits;
+        }
+        trigger.lastObservedPriceUnits = currentUnits.toString();
+        if (breached) {
+          this.fireTrigger(trigger, currentUnits, now);
+        }
+      }
+    } catch (err) {
+      console.error("[PriceThresholdService] Evaluation loop error:", err);
+    } finally {
+      this.isTickRunning = false;
+    }
+  }
+  fireTrigger(trigger, currentUnits, now) {
+    const adjustmentSummary = trigger.action !== "NONE" ? this.executeLadderAction(trigger, currentUnits, false) : `Alert threshold tercapai pada ${trigger.pairId} (Suara: ${trigger.soundEnabled ? trigger.soundTone : "OFF"}).`;
+    trigger.triggerCount += 1;
+    trigger.lastTriggeredAt = now;
+    trigger.updatedAt = now;
+    if (trigger.autoResetAfterCooldown) {
+      trigger.status = "COOLDOWN";
+    } else {
+      trigger.status = "TRIGGERED";
+      trigger.enabled = false;
+    }
+    db.priceThresholdTriggers.set(trigger.id, trigger);
+    const event = {
+      id: `pte-${crypto14.randomUUID().slice(0, 8)}`,
+      triggerId: trigger.id,
+      triggerName: trigger.name,
+      pairId: trigger.pairId,
+      environment: trigger.environment,
+      condition: trigger.condition,
+      thresholdPriceUnits: trigger.thresholdPriceUnits,
+      breachedPriceUnits: currentUnits.toString(),
+      quoteCurrency: trigger.quoteCurrency,
+      quoteDecimals: trigger.quoteDecimals,
+      soundEnabled: trigger.soundEnabled,
+      soundTone: trigger.soundTone,
+      action: trigger.action,
+      targetBotId: trigger.targetBotId,
+      adjustmentSummary,
+      timestamp: now
+    };
+    this.recordEvent(event);
+    db.auditLogs.push({
+      id: crypto14.randomUUID(),
+      actorId: "PRICE_THRESHOLD_ENGINE",
+      action: "PRICE_THRESHOLD_TRIGGERED",
+      resource: trigger.id,
+      details: `${trigger.name} (${trigger.pairId}): ${adjustmentSummary}`,
+      createdAt: now
+    });
+    db.scheduleSave();
+  }
+  recordEvent(event) {
+    db.priceThresholdEvents.push(event);
+    if (db.priceThresholdEvents.length > 500) {
+      db.priceThresholdEvents = db.priceThresholdEvents.slice(-500);
+    }
+    marketWsService.broadcast("ticker", {
+      type: "price_threshold_triggered",
+      event
+    });
+  }
+  resolveTargetBots(trigger) {
+    if (trigger.targetBotId) {
+      const bot = db.botInstances.get(trigger.targetBotId);
+      return bot ? [bot] : [];
+    }
+    return Array.from(db.botInstances.values()).filter(
+      (b) => b.pairId === trigger.pairId && b.environment === trigger.environment && LADDER_CAPABLE_BOT_TYPES.has(b.botType) && (b.status === "RUNNING" || b.status === "PAUSED" || b.status === "READY")
+    );
+  }
+  executeLadderAction(trigger, currentPriceUnits, isTest) {
+    const bots = this.resolveTargetBots(trigger);
+    if (bots.length === 0) {
+      return `Tidak ada bot ladder/MM aktif pada ${trigger.pairId} (${trigger.environment}) untuk disesuaikan.`;
+    }
+    const pair = db.tradingPairs.get(trigger.pairId);
+    const quoteDec = pair?.quoteDecimals ?? trigger.quoteDecimals;
+    const currentPriceFloat = Number(currentPriceUnits) / 10 ** quoteDec;
+    const stepRatio = Math.max(1e-3, trigger.adjustStepPct / 100);
+    const tag = isTest ? "[TEST THRESHOLD]" : "[PRICE THRESHOLD]";
+    let adjustedCount = 0;
+    const adjustedNames = [];
+    for (const bot of bots) {
+      const addLog = botWorkerManager.addLog.bind(botWorkerManager);
+      if (trigger.action === "PAUSE_BOT") {
+        if (bot.status === "RUNNING") {
+          botWorkerManager.pauseWorker(bot.id);
+          addLog(bot, `${tag} Bot dijeda otomatis oleh trigger "${trigger.name}".`, "RISK");
+          adjustedCount++;
+          adjustedNames.push(bot.name);
+        }
+        continue;
+      }
+      if (bot.botType === "SMART_HFT_LADDER" && bot.smartHftConfig) {
+        const cfg = bot.smartHftConfig;
+        const oldMin = parseFloat(String(cfg.min_price_bound || currentPriceFloat * 0.96));
+        const oldMax = parseFloat(String(cfg.max_price_bound || currentPriceFloat * 1.04));
+        const halfBandRatio = oldMin > 0 && oldMax > oldMin ? Math.min(0.15, Math.max(0.01, (oldMax - oldMin) / (2 * Math.max(1e-8, (oldMax + oldMin) / 2)))) : 0.04;
+        if (trigger.action === "LADDER_RECENTER") {
+          cfg.bound_percentage = void 0;
+          cfg.min_price_bound = (currentPriceFloat * (1 - halfBandRatio)).toFixed(quoteDec);
+          cfg.max_price_bound = (currentPriceFloat * (1 + halfBandRatio)).toFixed(quoteDec);
+          cfg.lastAnchorPrice = currentPriceFloat.toFixed(quoteDec);
+        } else if (trigger.action === "LADDER_WIDEN_SPREAD") {
+          const newHalf = Math.min(0.15, halfBandRatio * (1 + stepRatio * 4));
+          cfg.min_price_bound = (currentPriceFloat * (1 - newHalf)).toFixed(quoteDec);
+          cfg.max_price_bound = (currentPriceFloat * (1 + newHalf)).toFixed(quoteDec);
+          cfg.min_spread_bps = Math.min(500, Math.round((cfg.min_spread_bps || 20) * (1 + stepRatio * 2)));
+          cfg.spread_percentage = Number(((cfg.spread_percentage || 0.2) * (1 + stepRatio * 2)).toFixed(3));
+        } else if (trigger.action === "LADDER_SHIFT_UP") {
+          cfg.bound_percentage = void 0;
+          cfg.min_price_bound = (oldMin * (1 + stepRatio)).toFixed(quoteDec);
+          cfg.max_price_bound = (oldMax * (1 + stepRatio)).toFixed(quoteDec);
+        } else if (trigger.action === "LADDER_SHIFT_DOWN") {
+          cfg.bound_percentage = void 0;
+          cfg.min_price_bound = Math.max(1 / 10 ** quoteDec, oldMin * (1 - stepRatio)).toFixed(quoteDec);
+          cfg.max_price_bound = Math.max(2 / 10 ** quoteDec, oldMax * (1 - stepRatio)).toFixed(quoteDec);
+        }
+        cfg.lastRepriceTimestamp = 0;
+        addLog(
+          bot,
+          `${tag} Penyesuaian Smart HFT Ladder (${trigger.action}, step ${trigger.adjustStepPct}%) -> Bounds [${cfg.min_price_bound} .. ${cfg.max_price_bound}]`,
+          "ORDER"
+        );
+        if (bot.status === "RUNNING") {
+          SmartHftLadderBotExecutor.executeCycle(bot, addLog);
+        }
+        adjustedCount++;
+        adjustedNames.push(bot.name);
+      } else if (bot.botType === "DEPTH_LIQUIDITY" && bot.depthLiquidityConfig) {
+        const cfg = bot.depthLiquidityConfig;
+        if (trigger.action === "LADDER_RECENTER") {
+          cfg.min_limit_buy_price = (currentPriceFloat * (1 - stepRatio * 3)).toFixed(quoteDec);
+          cfg.max_limit_buy_price = (currentPriceFloat * (1 - stepRatio * 0.4)).toFixed(quoteDec);
+          cfg.min_limit_sell_price = (currentPriceFloat * (1 + stepRatio * 0.4)).toFixed(quoteDec);
+          cfg.max_limit_sell_price = (currentPriceFloat * (1 + stepRatio * 3)).toFixed(quoteDec);
+        } else if (trigger.action === "LADDER_WIDEN_SPREAD") {
+          cfg.bid_level_offsets_bps = cfg.bid_level_offsets_bps.map((b) => Math.round(b * (1 + stepRatio * 2)));
+          cfg.ask_level_offsets_bps = cfg.ask_level_offsets_bps.map((a) => Math.round(a * (1 + stepRatio * 2)));
+          if (cfg.min_limit_buy_price) cfg.min_limit_buy_price = (parseFloat(cfg.min_limit_buy_price) * (1 - stepRatio)).toFixed(quoteDec);
+          if (cfg.max_limit_sell_price) cfg.max_limit_sell_price = (parseFloat(cfg.max_limit_sell_price) * (1 + stepRatio)).toFixed(quoteDec);
+        } else if (trigger.action === "LADDER_SHIFT_UP" || trigger.action === "LADDER_SHIFT_DOWN") {
+          const factor = trigger.action === "LADDER_SHIFT_UP" ? 1 + stepRatio : Math.max(0.1, 1 - stepRatio);
+          if (cfg.min_limit_buy_price) cfg.min_limit_buy_price = (parseFloat(cfg.min_limit_buy_price) * factor).toFixed(quoteDec);
+          if (cfg.max_limit_buy_price) cfg.max_limit_buy_price = (parseFloat(cfg.max_limit_buy_price) * factor).toFixed(quoteDec);
+          if (cfg.min_limit_sell_price) cfg.min_limit_sell_price = (parseFloat(cfg.min_limit_sell_price) * factor).toFixed(quoteDec);
+          if (cfg.max_limit_sell_price) cfg.max_limit_sell_price = (parseFloat(cfg.max_limit_sell_price) * factor).toFixed(quoteDec);
+        }
+        cfg.last_refresh_timestamp = 0;
+        cfg.next_refresh_timestamp = 0;
+        addLog(
+          bot,
+          `${tag} Penyesuaian Depth Ladder (${trigger.action}, step ${trigger.adjustStepPct}%) diterapkan.`,
+          "ORDER"
+        );
+        if (bot.status === "RUNNING") {
+          DepthLiquidityBotExecutor.cancelOpenDepthOrders(bot, addLog, `${tag} ${trigger.action}`);
+          DepthLiquidityBotExecutor.executeCycle(bot, addLog);
+        }
+        adjustedCount++;
+        adjustedNames.push(bot.name);
+      } else if (bot.botType === "MOVEMENT_DEPTH_LIQUIDITY" && bot.movementDepthConfig) {
+        const cfg = bot.movementDepthConfig;
+        if (trigger.action === "LADDER_RECENTER") {
+          MovementDepthLiquidityBotExecutor.resetAnchor(bot, currentPriceFloat.toFixed(quoteDec), addLog);
+        } else if (trigger.action === "LADDER_WIDEN_SPREAD") {
+          cfg.spread_bps = Math.min(500, Math.round((cfg.spread_bps || 20) * (1 + stepRatio * 2)));
+          cfg.bid_level_offsets_bps = cfg.bid_level_offsets_bps.map((b) => Math.round(b * (1 + stepRatio * 2)));
+          cfg.ask_level_offsets_bps = cfg.ask_level_offsets_bps.map((a) => Math.round(a * (1 + stepRatio * 2)));
+        } else if (trigger.action === "LADDER_SHIFT_UP" || trigger.action === "LADDER_SHIFT_DOWN") {
+          const factor = trigger.action === "LADDER_SHIFT_UP" ? 1 + stepRatio : Math.max(0.1, 1 - stepRatio);
+          const nextAnchor = (parseFloat(cfg.anchor_local_price || String(currentPriceFloat)) * factor).toFixed(quoteDec);
+          MovementDepthLiquidityBotExecutor.resetAnchor(bot, nextAnchor, addLog);
+        }
+        cfg.last_refresh_timestamp = 0;
+        cfg.next_refresh_timestamp = 0;
+        addLog(
+          bot,
+          `${tag} Penyesuaian Movement Depth (${trigger.action}, step ${trigger.adjustStepPct}%) diterapkan.`,
+          "ORDER"
+        );
+        if (bot.status === "RUNNING") {
+          MovementDepthLiquidityBotExecutor.cancelOpenBotOrders(bot, addLog, `${tag} ${trigger.action}`);
+          MovementDepthLiquidityBotExecutor.executeCycle(bot, addLog);
+        }
+        adjustedCount++;
+        adjustedNames.push(bot.name);
+      } else if (bot.botType === "QUANT_HFT_MM" && bot.quantHftConfig) {
+        const cfg = bot.quantHftConfig;
+        if (trigger.action === "LADDER_WIDEN_SPREAD") {
+          cfg.target_spread_pct = Number((cfg.target_spread_pct * (1 + stepRatio * 2)).toFixed(4));
+          cfg.max_spread_pct = Number(Math.max(cfg.target_spread_pct * 2, cfg.max_spread_pct * (1 + stepRatio)).toFixed(4));
+        } else if (trigger.action === "LADDER_SHIFT_UP") {
+          cfg.inventory_skew_factor = Math.min(1, Number((cfg.inventory_skew_factor + 0.15).toFixed(2)));
+        } else if (trigger.action === "LADDER_SHIFT_DOWN") {
+          cfg.inventory_skew_factor = Math.max(-1, Number((cfg.inventory_skew_factor - 0.15).toFixed(2)));
+        }
+        addLog(bot, `${tag} Parameter Quant HFT disesuaikan (${trigger.action}).`, "ORDER");
+        if (bot.status === "RUNNING") {
+          QuantHftBotExecutor.executeCycle(bot, addLog);
+        }
+        adjustedCount++;
+        adjustedNames.push(bot.name);
+      } else if (bot.botType === "ADVANCED_MM" && bot.advancedMMConfig) {
+        const cfg = bot.advancedMMConfig;
+        if (trigger.action === "LADDER_WIDEN_SPREAD") {
+          cfg.spread_min_bps = Math.min(500, Math.round(cfg.spread_min_bps * (1 + stepRatio * 2)));
+          cfg.spread_max_bps = Math.min(1e3, Math.round(cfg.spread_max_bps * (1 + stepRatio * 2)));
+        } else if (trigger.action === "LADDER_SHIFT_UP") {
+          cfg.price_offset_bps = Math.min(500, Math.round((cfg.price_offset_bps || 0) + trigger.adjustStepPct * 100));
+        } else if (trigger.action === "LADDER_SHIFT_DOWN") {
+          cfg.price_offset_bps = Math.max(-500, Math.round((cfg.price_offset_bps || 0) - trigger.adjustStepPct * 100));
+        } else if (trigger.action === "LADDER_RECENTER") {
+          cfg.price_offset_bps = 0;
+        }
+        cfg.lastRepriceTimestamp = 0;
+        addLog(bot, `${tag} Parameter Advanced MM disesuaikan (${trigger.action}).`, "ORDER");
+        if (bot.status === "RUNNING") {
+          AdvancedMarketMakerBotExecutor.executeTick(bot, addLog);
+        }
+        adjustedCount++;
+        adjustedNames.push(bot.name);
+      }
+      bot.updatedAt = Date.now();
+      db.botInstances.set(bot.id, bot);
+      marketWsService.broadcastBotUpdate(bot);
+    }
+    if (adjustedCount === 0) {
+      return `Bot ditemukan (${bots.length}) tetapi tidak memerlukan perubahan status saat ini.`;
+    }
+    return `${trigger.action} (${trigger.adjustStepPct}%) dieksekusi pada ${adjustedCount} bot: ${adjustedNames.join(", ")}.`;
+  }
+};
+var priceThresholdService = new PriceThresholdService();
+
+// server/routes/trading.ts
+var tradingRouter = Router3();
+tradingRouter.get("/pairs", (req, res) => {
+  for (const market of db.markets.values()) {
+    if (market.status === "ACTIVE" && !db.tradingPairs.has(market.id)) {
+      const baseAsset = db.assets.get(market.baseAssetId);
+      const quoteAsset = db.assets.get(market.quoteAssetId);
+      if (baseAsset && quoteAsset) {
+        const pair = {
+          id: market.id,
+          baseCurrency: baseAsset.symbol,
+          quoteCurrency: quoteAsset.symbol,
+          baseDecimals: baseAsset.decimals,
+          quoteDecimals: quoteAsset.decimals,
+          minOrderSize: market.minQuantity || "100000000",
+          maxOrderSize: (10000000n * 10n ** BigInt(baseAsset.decimals)).toString(),
+          // 10,000,000 tokens
+          makerFeeBps: market.makerFeeBps,
+          takerFeeBps: market.takerFeeBps,
+          isActive: true,
+          isHalted: false,
+          lastPrice: "0",
+          high24h: "0",
+          low24h: "0",
+          volume24h: "0",
+          quoteVolume24h: "0",
+          priceChange24h: "+0.00",
+          priceChangePercent24h: "0.00"
+        };
+        db.tradingPairs.set(market.id, pair);
+      }
+    }
+  }
+  for (const listing of db.listingRequests.values()) {
+    if (listing.status === "SCHEDULED") {
+      ensureScheduledPairEntry(listing);
+    }
+  }
+  db.ensureAssetsForTradingPairs();
+  db.recalculatePair24hStats();
+  const assetsBySymbol = new Map(
+    Array.from(db.assets.values()).map((a) => [a.symbol.toUpperCase(), a])
+  );
+  const enrichedPairs = Array.from(db.tradingPairs.values()).map((pair) => {
+    const market = db.markets.get(pair.id);
+    const listing = market ? db.listingRequests.get(market.listingRequestId) : Array.from(db.listingRequests.values()).find((l) => {
+      const base = db.assets.get(l.assetId);
+      const quote = db.assets.get(l.quoteAssetId);
+      return base && base.symbol === pair.baseCurrency && (!quote || quote.symbol === pair.quoteCurrency);
+    });
+    const baseAsset = assetsBySymbol.get(pair.baseCurrency.toUpperCase());
+    const quoteAsset = assetsBySymbol.get(pair.quoteCurrency.toUpperCase());
+    const isNew = pair.baseCurrency === "SOL" || listing !== void 0;
+    const resolvedScheduledAt = listing?.status === "SCHEDULED" ? listing.scheduledAt || pair.scheduledAt : pair.scheduledAt;
+    const resolvedListingStatus = pair.isDelisted ? "DELISTED" : listing?.status === "SCHEDULED" && !pair.isActive ? "SCHEDULED" : listing?.status || (pair.isActive ? "ACTIVE" : "PREPARING");
+    return {
+      ...pair,
+      baseName: baseAsset?.name || pair.baseCurrency,
+      baseLogoUrl: baseAsset?.logoUrl || "",
+      quoteLogoUrl: quoteAsset?.logoUrl || "",
+      isNewListing: isNew,
+      listingStatus: resolvedListingStatus,
+      depositEnabled: baseAsset?.depositEnabled ?? true,
+      withdrawalEnabled: baseAsset?.withdrawalEnabled ?? true,
+      depositOpenedAt: baseAsset?.depositOpenedAt || listing?.depositOpenedAt,
+      withdrawalOpenedAt: baseAsset?.withdrawalOpenedAt || listing?.withdrawalOpenedAt,
+      scheduledAt: resolvedScheduledAt,
+      isDelisted: Boolean(pair.isDelisted),
+      delistedAt: pair.delistedAt,
+      delistScheduledAt: pair.delistScheduledAt,
+      delistReason: pair.delistReason
+    };
+  });
+  res.json(enrichedPairs);
+});
+tradingRouter.get("/ticker/:pairId", (req, res) => {
+  db.recalculatePair24hStats(req.params.pairId);
+  const pair = db.tradingPairs.get(req.params.pairId);
+  if (!pair) return res.status(404).json({ error: "Pair tidak ditemukan" });
+  res.json(pair);
+});
+tradingRouter.get("/depth/:pairId", (req, res) => {
+  try {
+    const book = matchingEngine.getOrderBook(req.params.pairId);
+    const depth = book.getDepth(100);
+    res.json(depth);
+  } catch (err) {
+    res.status(404).json({ error: err.message });
+  }
+});
+tradingRouter.get("/trades/:pairId", (req, res) => {
+  const pairTrades = db.trades.filter((t) => t.pairId === req.params.pairId).slice(-50).reverse();
+  res.json(pairTrades);
+});
+tradingRouter.get("/candles/:pairId", (req, res) => {
+  try {
+    const pairId = req.params.pairId;
+    const resOrTf = req.query.timeframe || req.query.resolution || "15m";
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : req.query.countback ? parseInt(req.query.countback, 10) : 300;
+    const fromSec = req.query.from ? parseInt(req.query.from, 10) : void 0;
+    const rawTo = req.query.to || req.query.before;
+    const toSec = rawTo ? parseInt(rawTo, 10) : void 0;
+    const candles = klineService.getBars(pairId, resOrTf, fromSec, toSec, limit);
+    if (req.query.format === "udf") {
+      if (!candles || candles.length === 0) {
+        return res.json({ s: "no_data", nextTime: void 0 });
+      }
+      return res.json({
+        s: "ok",
+        t: candles.map((c) => c.time),
+        o: candles.map((c) => c.open),
+        h: candles.map((c) => c.high),
+        l: candles.map((c) => c.low),
+        c: candles.map((c) => c.close),
+        v: candles.map((c) => c.volume)
+      });
+    }
+    if (req.query.paginated === "1" || req.query.paginated === "true") {
+      return res.json({
+        candles,
+        oldestTime: candles.length > 0 ? candles[0].time : null,
+        newestTime: candles.length > 0 ? candles[candles.length - 1].time : null,
+        hasMore: candles.length >= limit
+      });
+    }
+    res.json(candles);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+tradingRouter.get("/time", (_req, res) => {
+  res.send(Math.floor(Date.now() / 1e3).toString());
+});
+tradingRouter.get("/config", (_req, res) => {
+  res.json({
+    supports_search: true,
+    supports_group_request: false,
+    supports_marks: false,
+    supports_timescale_marks: false,
+    supports_time: true,
+    exchanges: [
+      { value: "DIMONEX", name: "DIMONEX Exchange", desc: "DIMONEX Centralized Exchange" }
+    ],
+    symbols_types: [
+      { name: "crypto", value: "crypto" }
+    ],
+    supported_resolutions: ["1", "3", "5", "15", "30", "60", "120", "240", "360", "720", "1D", "1W", "1M"]
+  });
+});
+function resolvePairFromSymbol(sym) {
+  let clean = (sym || "").replace(/^DIMONEX:/i, "").trim();
+  let pair = db.tradingPairs.get(clean);
+  if (pair) return pair;
+  clean = clean.replace("/", "-").replace("_", "-");
+  pair = db.tradingPairs.get(clean);
+  if (pair) return pair;
+  for (const p of db.tradingPairs.values()) {
+    if (p.id.toLowerCase() === clean.toLowerCase() || `${p.baseCurrency}/${p.quoteCurrency}`.toLowerCase() === sym.toLowerCase() || `${p.baseCurrency}${p.quoteCurrency}`.toLowerCase() === sym.toLowerCase()) {
+      return p;
+    }
+  }
+  return db.tradingPairs.get("BTC-IDR") || Array.from(db.tradingPairs.values())[0];
+}
+tradingRouter.get("/search", (req, res) => {
+  const query = (req.query.query || "").toLowerCase();
+  const results = Array.from(db.tradingPairs.values()).filter((p) => !query || p.id.toLowerCase().includes(query) || p.baseCurrency.toLowerCase().includes(query)).map((p) => ({
+    symbol: p.id,
+    full_name: `DIMONEX:${p.id}`,
+    description: `${p.baseCurrency}/${p.quoteCurrency} Spot`,
+    exchange: "DIMONEX",
+    ticker: p.id,
+    type: "crypto"
+  }));
+  res.json(results);
+});
+tradingRouter.get("/symbols", (req, res) => {
+  const symbol = req.query.symbol;
+  const pair = resolvePairFromSymbol(symbol);
+  if (!pair) {
+    return res.status(404).json({ s: "error", errmsg: "Unknown symbol" });
+  }
+  const baseAsset = db.assets.get(pair.baseCurrency) || Array.from(db.assets.values()).find((a) => a.symbol === pair.baseCurrency);
+  const minMov = 1;
+  const quoteDec = pair.quoteDecimals !== void 0 && pair.quoteDecimals !== null ? pair.quoteDecimals : pair.quoteCurrency === "IDR" ? 2 : 6;
+  const priceScale = pair.quoteCurrency === "IDR" ? 1 : Math.pow(10, Math.min(8, Math.max(2, quoteDec)));
+  res.json({
+    name: pair.id,
+    ticker: pair.id,
+    description: `${pair.baseCurrency}/${pair.quoteCurrency} Spot Market`,
+    type: "crypto",
+    session: "24x7",
+    exchange: "DIMONEX",
+    listed_exchange: "DIMONEX",
+    timezone: "Asia/Jakarta",
+    minmov: minMov,
+    pricescale: priceScale,
+    minmov2: 0,
+    fractional: false,
+    has_intraday: true,
+    supported_resolutions: ["1", "3", "5", "15", "30", "60", "120", "240", "360", "720", "1D", "1W", "1M"],
+    intraday_multipliers: ["1", "3", "5", "15", "30", "60", "120", "240", "360", "720"],
+    has_empty_bars: true,
+    has_no_volume: false,
+    volume_precision: baseAsset?.decimals || 4,
+    data_status: "streaming",
+    currency_code: pair.quoteCurrency
+  });
+});
+tradingRouter.get("/history", (req, res) => {
+  try {
+    const symbol = req.query.symbol || "BTC-IDR";
+    const pair = resolvePairFromSymbol(symbol);
+    if (!pair) {
+      return res.json({ s: "no_data" });
+    }
+    const resolution = req.query.resolution || "15";
+    const fromSec = req.query.from ? parseInt(req.query.from, 10) : void 0;
+    const toSec = req.query.to ? parseInt(req.query.to, 10) : void 0;
+    const countback = req.query.countback ? parseInt(req.query.countback, 10) : 300;
+    const candles = klineService.getBars(pair.id, resolution, fromSec, toSec, countback);
+    if (!candles || candles.length === 0) {
+      return res.json({ s: "no_data" });
+    }
+    res.json({
+      s: "ok",
+      t: candles.map((c) => c.time),
+      o: candles.map((c) => c.open),
+      h: candles.map((c) => c.high),
+      l: candles.map((c) => c.low),
+      c: candles.map((c) => c.close),
+      v: candles.map((c) => c.volume)
+    });
+  } catch (err) {
+    res.status(500).json({ s: "error", errmsg: err.message });
+  }
+});
+tradingRouter.post("/order", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const { pairId, side, orderType, timeInForce, price, quantity, clientOrderId } = req.body;
+    if (!pairId || !side || !orderType || !quantity) {
+      return res.status(400).json({ error: "Parameter order tidak lengkap" });
+    }
+    const targetPair = db.tradingPairs.get(pairId);
+    if (targetPair?.isDelisted) {
+      return res.status(400).json({
+        error: `Market ${pairId} telah di-delisting dari bursa dan tidak lagi menerima order baru.`
+      });
+    }
+    if (targetPair && !targetPair.isActive && targetPair.scheduledAt && targetPair.scheduledAt > Date.now()) {
+      return res.status(400).json({
+        error: `Market ${pairId} dijadwalkan listing pada ${new Date(targetPair.scheduledAt).toLocaleString("id-ID")}. Trading akan dibuka otomatis setelah countdown selesai.`
+      });
+    }
+    const result = matchingEngine.placeOrder({
+      userId: user.id,
+      pairId,
+      side,
+      orderType,
+      timeInForce: timeInForce || "GTC",
+      price: price ? String(price) : void 0,
+      quantity: String(quantity),
+      clientOrderId
+    });
+    for (const trade of result.trades) {
+      marketWsService.broadcastTrade(trade);
+    }
+    marketWsService.broadcastOrderUpdate(result.takerOrder);
+    for (const maker of result.makerOrdersUpdated) {
+      marketWsService.broadcastOrderUpdate(maker);
+    }
+    marketWsService.broadcastDepth(pairId);
+    db.scheduleSave();
+    res.json({
+      success: true,
+      order: result.takerOrder,
+      trades: result.trades,
+      cancelledOrders: result.cancelledOrders
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+function performCancelOrder(orderId, user, pairId) {
+  const existingOrder = db.orders.get(orderId);
+  const resolvedPairId = existingOrder?.pairId || pairId;
+  if (!resolvedPairId) {
+    throw new Error("orderId tidak ditemukan atau pairId tidak tersedia");
+  }
+  const cancelledOrder = matchingEngine.cancelOrder(orderId, user.id, resolvedPairId, user.role);
+  marketWsService.broadcastOrderUpdate(cancelledOrder);
+  marketWsService.broadcastDepth(resolvedPairId);
+  db.scheduleSave();
+  return cancelledOrder;
+}
+tradingRouter.delete("/order/:orderId", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const orderId = req.params.orderId;
+    const pairId = req.query.pairId || req.body?.pairId;
+    const cancelledOrder = performCancelOrder(orderId, user, pairId);
+    res.json({
+      success: true,
+      message: "Order berhasil dibatalkan",
+      order: cancelledOrder
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+tradingRouter.post("/order/cancel", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const { orderId, pairId } = req.body;
+    if (!orderId) {
+      return res.status(400).json({ error: "orderId wajib diisi" });
+    }
+    const cancelledOrder = performCancelOrder(orderId, user, pairId);
+    res.json({
+      success: true,
+      message: "Order berhasil dibatalkan",
+      order: cancelledOrder
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+tradingRouter.get("/orders/open", requireAuth, (req, res) => {
+  const user = req.user;
+  const role = (user.role || "").toUpperCase();
+  const isMMOrAdmin = role === "MM" || role === "ADMIN" || role === "SUPERADMIN";
+  const userOpenOrders = Array.from(db.orders.values()).filter((o) => {
+    const isOwner = o.userId === user.id;
+    const isMMBotOrder = isMMOrAdmin && (o.clientOrderId?.startsWith("bot-") || o.clientOrderId?.includes("-ord-") || o.clientOrderId?.includes("-vol-"));
+    return (isOwner || isMMBotOrder) && (o.status === "NEW" || o.status === "PARTIALLY_FILLED");
+  }).sort((a, b) => b.createdAt - a.createdAt);
+  res.json(userOpenOrders);
+});
+tradingRouter.get("/orders/history", requireAuth, (req, res) => {
+  const user = req.user;
+  const userOrders = Array.from(db.orders.values()).filter((o) => o.userId === user.id).sort((a, b) => b.createdAt - a.createdAt).slice(0, 100);
+  res.json(userOrders);
+});
+tradingRouter.get("/reference-price/:pairId", async (req, res) => {
+  try {
+    const { priceAggregatorService: priceAggregatorService2 } = await Promise.resolve().then(() => (init_PriceAggregatorService(), PriceAggregatorService_exports));
+    const ref = priceAggregatorService2.getReferencePrice(req.params.pairId);
+    res.json(ref);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+tradingRouter.get("/my-trades/:pairId", requireAuth, (req, res) => {
+  const user = req.user;
+  const pairId = req.params.pairId;
+  const pair = db.tradingPairs.get(pairId);
+  if (!pair) return res.status(404).json({ error: "Pair tidak ditemukan" });
+  const myTrades = db.trades.filter((t) => t.pairId === pairId && (t.makerUserId === user.id || t.takerUserId === user.id)).slice(-150);
+  let buyQtyUnits = 0n;
+  let buyQuoteUnits = 0n;
+  let sellQtyUnits = 0n;
+  const formattedTrades = myTrades.map((t) => {
+    const isTaker = t.takerUserId === user.id;
+    const side = isTaker ? t.takerSide : t.takerSide === "BUY" ? "SELL" : "BUY";
+    const qty = BigInt(t.quantity || "0");
+    const qVol = BigInt(t.quoteVolume || "0");
+    if (side === "BUY") {
+      buyQtyUnits += qty;
+      buyQuoteUnits += qVol;
+    } else {
+      sellQtyUnits += qty;
+    }
+    return {
+      id: t.id,
+      pairId: t.pairId,
+      side,
+      price: t.price,
+      quantity: t.quantity,
+      quoteVolume: t.quoteVolume,
+      createdAt: t.createdAt
+    };
+  });
+  const scale = 10n ** BigInt(pair.baseDecimals || 8);
+  const avgEntryPriceUnits = buyQtyUnits > 0n ? (buyQuoteUnits * scale / buyQtyUnits).toString() : "0";
+  const netPositionUnits = (buyQtyUnits - sellQtyUnits).toString();
+  res.json({
+    pairId,
+    trades: formattedTrades,
+    avgEntryPriceUnits,
+    netPositionUnits
+  });
+});
+var VALID_DRAWING_TOOLS = /* @__PURE__ */ new Set([
+  "TREND_LINE",
+  "HORIZONTAL_LINE",
+  "VERTICAL_LINE",
+  "RAY",
+  "RECTANGLE",
+  "BRUSH",
+  "TEXT",
+  "FIB_RETRACEMENT",
+  "FIB_EXTENSION",
+  "PRICE_RANGE"
+]);
+tradingRouter.get("/chart-drawings/:pairId", requireAuth, (req, res) => {
+  const user = req.user;
+  const key = `${user.id}:${req.params.pairId}`;
+  res.json(db.chartDrawings.get(key) || []);
+});
+tradingRouter.put("/chart-drawings/:pairId", requireAuth, (req, res) => {
+  const user = req.user;
+  const pairId = req.params.pairId;
+  const items = Array.isArray(req.body?.drawings) ? req.body.drawings : Array.isArray(req.body) ? req.body : null;
+  if (!items) {
+    return res.status(400).json({ error: "Payload drawings harus berupa array." });
+  }
+  if (items.length > 200) {
+    return res.status(400).json({ error: "Maksimal 200 drawing per pair." });
+  }
+  const now = Date.now();
+  const sanitized = [];
+  for (const raw of items) {
+    if (!raw || !VALID_DRAWING_TOOLS.has(raw.tool) || !Array.isArray(raw.points) || raw.points.length === 0) {
+      continue;
+    }
+    const cleanPoints = raw.points.slice(0, 500).filter((pt) => typeof pt?.time === "number" && Number.isFinite(pt.time) && typeof pt?.price === "number" && Number.isFinite(pt.price)).map((pt) => ({ time: Math.round(pt.time), price: pt.price }));
+    if (cleanPoints.length === 0) continue;
+    sanitized.push({
+      id: typeof raw.id === "string" && raw.id.length > 0 ? raw.id.slice(0, 64) : `drw-${now}-${sanitized.length}`,
+      userId: user.id,
+      pairId,
+      tool: raw.tool,
+      points: cleanPoints,
+      color: typeof raw.color === "string" ? raw.color.slice(0, 24) : "#8DA5B1",
+      lineWidth: typeof raw.lineWidth === "number" ? Math.max(1, Math.min(6, raw.lineWidth)) : 2,
+      text: typeof raw.text === "string" ? raw.text.slice(0, 120) : void 0,
+      createdAt: typeof raw.createdAt === "number" ? raw.createdAt : now,
+      updatedAt: now
+    });
+  }
+  db.chartDrawings.set(`${user.id}:${pairId}`, sanitized);
+  db.scheduleSave();
+  res.json({ success: true, drawings: sanitized });
+});
+tradingRouter.delete("/chart-drawings/:pairId", requireAuth, (req, res) => {
+  const user = req.user;
+  db.chartDrawings.delete(`${user.id}:${req.params.pairId}`);
+  db.scheduleSave();
+  res.json({ success: true, drawings: [] });
+});
+tradingRouter.get("/price-alerts/:pairId", requireAuth, (req, res) => {
+  const user = req.user;
+  const list = priceThresholdService.listTriggers(void 0, req.params.pairId).filter((t) => t.createdBy === user.id && t.action === "NONE");
+  res.json(list);
+});
+tradingRouter.post("/price-alerts", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const { pairId, condition, thresholdPrice, name } = req.body || {};
+    if (!pairId || !thresholdPrice) {
+      return res.status(400).json({ error: "pairId dan thresholdPrice wajib diisi." });
+    }
+    const trigger = priceThresholdService.createTrigger({
+      name: name || `Alert ${pairId} @ ${thresholdPrice}`,
+      pairId,
+      environment: "PRODUCTION",
+      condition: condition === "BELOW_OR_EQUAL" || condition === "CROSS_DOWN" || condition === "CROSS_UP" ? condition : "ABOVE_OR_EQUAL",
+      thresholdPrice: String(thresholdPrice),
+      soundEnabled: true,
+      soundTone: "CHIME",
+      action: "NONE",
+      // Regular user alerts NEVER manipulate MM bots
+      autoResetAfterCooldown: false,
+      createdBy: user.id
+    });
+    res.status(201).json({ success: true, alert: trigger });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "Gagal membuat price alert" });
+  }
+});
+tradingRouter.delete("/price-alerts/:id", requireAuth, (req, res) => {
+  const user = req.user;
+  const existing = priceThresholdService.listTriggers().find((t) => t.id === req.params.id);
+  if (!existing) return res.status(404).json({ error: "Alert tidak ditemukan." });
+  if (existing.createdBy !== user.id) {
+    return res.status(403).json({ error: "Tidak diizinkan menghapus alert pengguna lain." });
+  }
+  priceThresholdService.deleteTrigger(req.params.id);
+  res.json({ success: true });
+});
+
+// server/routes/wallet.ts
+import { Router as Router4 } from "express";
+import crypto15 from "crypto";
+init_database();
+init_PrecisionMath();
+var walletRouter = Router4();
+walletRouter.get("/balances", requireAuth, (req, res) => {
+  const user = req.user;
+  const accounts = db.getUserAccounts(user.id);
+  const formattedBalances = accounts.map((acc) => {
+    const availBig = BigInt(acc.balanceAvailable);
+    const lockedBig = BigInt(acc.balanceLocked);
+    const totalBig = availBig + lockedBig;
+    const decimals = acc.currency === "IDR" ? 2 : acc.currency === "USDT" ? 6 : 8;
+    const humanAvail = PrecisionMath.formatFromUnits(availBig, decimals);
+    const humanLocked = PrecisionMath.formatFromUnits(lockedBig, decimals);
+    const humanTotal = PrecisionMath.formatFromUnits(totalBig, decimals);
+    return {
+      currency: acc.currency,
+      balanceAvailable: acc.balanceAvailable,
+      balanceLocked: acc.balanceLocked,
+      balanceTotal: totalBig.toString(),
+      available: humanAvail,
+      locked: humanLocked,
+      total: humanTotal,
+      displayAvailable: acc.currency === "IDR" ? PrecisionMath.formatIDRDisplay(availBig) : PrecisionMath.formatCryptoDisplay(availBig, acc.currency),
+      displayLocked: acc.currency === "IDR" ? PrecisionMath.formatIDRDisplay(lockedBig) : PrecisionMath.formatCryptoDisplay(lockedBig, acc.currency),
+      displayTotal: acc.currency === "IDR" ? PrecisionMath.formatIDRDisplay(totalBig) : PrecisionMath.formatCryptoDisplay(totalBig, acc.currency)
+    };
+  });
+  res.json(formattedBalances);
+});
+walletRouter.post("/idr/deposit-va", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const { bankCode, amount } = req.body;
+    if (!bankCode || !amount) {
+      return res.status(400).json({ error: "Bank dan nominal deposit wajib diisi" });
+    }
+    const prefixes = {
+      BCA: "88001",
+      MANDIRI: "89001",
+      BRI: "80001"
+    };
+    const prefix = prefixes[bankCode.toUpperCase()] || "88801";
+    const userSuffix = user.id.replace(/\D/g, "").slice(0, 10).padEnd(10, "7");
+    const vaNumber = `${prefix}${userSuffix}`;
+    const amountUnits = PrecisionMath.parseToUnits(amount, 2);
+    res.json({
+      vaNumber,
+      bankName: bankCode.toUpperCase(),
+      amount: amountUnits.toString(),
+      formattedAmount: PrecisionMath.formatIDRDisplay(amountUnits),
+      instructions: [
+        `1. Buka aplikasi m-Banking ${bankCode.toUpperCase()}`,
+        "2. Pilih menu Transfer > Virtual Account",
+        `3. Masukkan nomor Virtual Account: ${vaNumber}`,
+        `4. Pastikan nama penerima adalah DIMONEX - ${user.email}`,
+        `5. Masukkan nominal tepat: ${PrecisionMath.formatIDRDisplay(amountUnits)}`,
+        "6. Konfirmasi pembayaran"
+      ]
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+walletRouter.post("/idr/simulate-deposit-payment", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const { bankCode, amount } = req.body;
+    const amountUnits = PrecisionMath.parseToUnits(amount, 2);
+    if (amountUnits <= 0n) {
+      return res.status(400).json({ error: "Nominal deposit harus lebih dari 0" });
+    }
+    const txId = crypto15.randomUUID();
+    const idempotencyKey = `dep-idr-${txId}`;
+    LedgerService.deposit(user.id, "IDR", amountUnits, txId, idempotencyKey);
+    const fiatTx = {
+      id: txId,
+      userId: user.id,
+      type: "DEPOSIT",
+      method: `${bankCode.toUpperCase()}_VA`,
+      amount: amountUnits.toString(),
+      status: "COMPLETED",
+      accountNumber: `VA-${bankCode}-${user.id.slice(0, 6)}`,
+      accountHolderName: user.email,
+      idempotencyKey,
+      createdAt: Date.now()
+    };
+    db.fiatTransactions.set(fiatTx.id, fiatTx);
+    res.json({
+      success: true,
+      message: `Deposit ${PrecisionMath.formatIDRDisplay(amountUnits)} via ${bankCode} berhasil masuk ke saldo IDR Anda!`,
+      transaction: fiatTx
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+walletRouter.post("/idr/withdraw", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const { bankName, accountNumber, accountHolderName, amount } = req.body;
+    if (!bankName || !accountNumber || !accountHolderName || !amount) {
+      return res.status(400).json({ error: "Seluruh data penarikan wajib diisi lengkap" });
+    }
+    const kyc = db.kyc.get(user.id);
+    if (!kyc || kyc.status !== "approved") {
+      return res.status(403).json({ error: "Penarikan dana memerlukan akun KYC yang telah terverifikasi" });
+    }
+    const cleanHolder = accountHolderName.trim().toLowerCase();
+    const cleanKyc = kyc.fullName.trim().toLowerCase();
+    if (cleanHolder !== cleanKyc) {
+      return res.status(400).json({
+        error: `Nama pemilik rekening bank (${accountHolderName}) TIDAK COCOK dengan nama KYC Anda (${kyc.fullName}). Penarikan ke rekening pihak ketiga dilarang keras demi kepatuhan regulasi.`
+      });
+    }
+    const amountUnits = PrecisionMath.parseToUnits(amount, 2);
+    const userAcc = db.createOrGetAccount(user.id, "IDR");
+    const avail = BigInt(userAcc.balanceAvailable);
+    if (avail < amountUnits) {
+      return res.status(400).json({ error: "Saldo IDR yang tersedia tidak mencukupi" });
+    }
+    LedgerService.lockBalance(user.id, "IDR", amountUnits);
+    const txId = crypto15.randomUUID();
+    const idempotencyKey = `wd-idr-${txId}`;
+    const isLarge = amountUnits > 1000000000n;
+    const status = isLarge ? "PENDING" : "COMPLETED";
+    if (!isLarge) {
+      const locked = BigInt(userAcc.balanceLocked);
+      userAcc.balanceLocked = (locked - amountUnits).toString();
+      userAcc.version += 1;
+      userAcc.updatedAt = Date.now();
+    }
+    const fiatTx = {
+      id: txId,
+      userId: user.id,
+      type: "WITHDRAW",
+      method: "BANK_TRANSFER",
+      amount: amountUnits.toString(),
+      status,
+      accountNumber,
+      accountHolderName: kyc.fullName,
+      idempotencyKey,
+      createdAt: Date.now()
+    };
+    db.fiatTransactions.set(fiatTx.id, fiatTx);
+    res.json({
+      success: true,
+      message: isLarge ? "Permintaan penarikan nominal besar telah masuk antrean persetujuan tim kepatuhan DIMONEX" : "Penarikan IDR berhasil diproses ke rekening bank Anda",
+      transaction: fiatTx
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+walletRouter.get("/supported-assets", (req, res) => {
+  const currencies = db.getAllCurrencies();
+  const assetsList = currencies.map((curr) => {
+    const clean = curr.toUpperCase();
+    const isFiat = clean === "IDR";
+    const decimals = getCurrencyDecimals2(clean);
+    const networks = getCurrencyNetworks(clean);
+    let name = clean;
+    for (const a of db.assets.values()) {
+      if (a.symbol.toUpperCase() === clean) {
+        name = a.name;
+        break;
+      }
+    }
+    if (name === clean) {
+      if (clean === "BTC") name = "Bitcoin";
+      else if (clean === "ETH") name = "Ethereum";
+      else if (clean === "USDT") name = "Tether USD";
+      else if (clean === "SOL") name = "Solana";
+      else if (clean === "TON") name = "The Open Network";
+      else if (clean === "DOGE") name = "Dogecoin";
+      else if (clean === "IDR") name = "Indonesian Rupiah";
+    }
+    let presets = [
+      { label: `1 ${clean}`, value: "1" },
+      { label: `5 ${clean}`, value: "5" },
+      { label: `10 ${clean}`, value: "10" },
+      { label: `50 ${clean}`, value: "50" }
+    ];
+    if (clean === "IDR") {
+      presets = [
+        { label: "Rp 5 Juta", value: "5000000" },
+        { label: "Rp 10 Juta", value: "10000000" },
+        { label: "Rp 50 Juta", value: "50000000" },
+        { label: "Rp 100 Juta", value: "100000000" }
+      ];
+    } else if (clean === "BTC") {
+      presets = [
+        { label: "0.01 BTC", value: "0.01" },
+        { label: "0.05 BTC", value: "0.05" },
+        { label: "0.1 BTC", value: "0.1" },
+        { label: "0.5 BTC", value: "0.5" }
+      ];
+    } else if (clean === "ETH") {
+      presets = [
+        { label: "0.2 ETH", value: "0.2" },
+        { label: "0.5 ETH", value: "0.5" },
+        { label: "1.0 ETH", value: "1.0" },
+        { label: "2.0 ETH", value: "2.0" }
+      ];
+    } else if (clean === "USDT") {
+      presets = [
+        { label: "100 USDT", value: "100" },
+        { label: "500 USDT", value: "500" },
+        { label: "1,000 USDT", value: "1000" },
+        { label: "5,000 USDT", value: "5000" }
+      ];
+    } else if (clean === "SOL") {
+      presets = [
+        { label: "2 SOL", value: "2" },
+        { label: "5 SOL", value: "5" },
+        { label: "10 SOL", value: "10" },
+        { label: "25 SOL", value: "25" }
+      ];
+    } else if (clean === "TON") {
+      presets = [
+        { label: "10 TON", value: "10" },
+        { label: "50 TON", value: "50" },
+        { label: "100 TON", value: "100" },
+        { label: "500 TON", value: "500" }
+      ];
+    } else if (clean === "DOGE") {
+      presets = [
+        { label: "500 DOGE", value: "500" },
+        { label: "1,000 DOGE", value: "1000" },
+        { label: "5,000 DOGE", value: "5000" },
+        { label: "10,000 DOGE", value: "10000" }
+      ];
+    }
+    return {
+      symbol: clean,
+      name,
+      isFiat,
+      decimals,
+      networks,
+      presets,
+      status: "ACTIVE",
+      depositEnabled: true,
+      withdrawalEnabled: true
+    };
+  });
+  res.json(assetsList);
+});
+function getCurrencyDecimals2(currency) {
+  const clean = currency.toUpperCase();
+  if (clean === "IDR") return 2;
+  if (clean === "USDT" || clean === "USDC") return 6;
+  for (const asset of db.assets.values()) {
+    if (asset.symbol.toUpperCase() === clean) return asset.decimals;
+  }
+  for (const pair of db.tradingPairs.values()) {
+    if (pair.baseCurrency.toUpperCase() === clean) return pair.baseDecimals;
+    if (pair.quoteCurrency.toUpperCase() === clean) return pair.quoteDecimals;
+  }
+  return 8;
+}
+function getCurrencyNetworks(currency) {
+  const clean = currency.toUpperCase();
+  if (clean === "IDR") {
+    return [
+      { id: "VA_BCA", name: "BCA Virtual Account", fee: "Rp 0", minDeposit: "Rp 50.000", confirmations: 1 },
+      { id: "VA_MANDIRI", name: "Mandiri Virtual Account", fee: "Rp 0", minDeposit: "Rp 50.000", confirmations: 1 },
+      { id: "VA_BRI", name: "BRI Virtual Account", fee: "Rp 0", minDeposit: "Rp 50.000", confirmations: 1 }
+    ];
+  }
+  if (clean === "USDT") {
+    return [
+      { id: "TRC20", name: "Tron (TRC20)", fee: "1.00 USDT", minDeposit: "10.00 USDT", confirmations: 1 },
+      { id: "ERC20", name: "Ethereum (ERC20)", fee: "3.50 USDT", minDeposit: "20.00 USDT", confirmations: 12 },
+      { id: "ARBITRUM", name: "Arbitrum One (L2)", fee: "0.20 USDT", minDeposit: "5.00 USDT", confirmations: 20 },
+      { id: "SOLANA", name: "Solana (SPL)", fee: "0.50 USDT", minDeposit: "5.00 USDT", confirmations: 32 }
+    ];
+  }
+  if (clean === "BTC") {
+    return [
+      { id: "BITCOIN", name: "Bitcoin (Native SegWit)", fee: "0.0001 BTC", minDeposit: "0.0005 BTC", confirmations: 2 },
+      { id: "LIGHTNING", name: "Lightning Network", fee: "0.00001 BTC", minDeposit: "0.0001 BTC", confirmations: 1 },
+      { id: "BEP20", name: "BNB Smart Chain (BEP20)", fee: "0.00005 BTC", minDeposit: "0.0002 BTC", confirmations: 15 }
+    ];
+  }
+  if (clean === "ETH") {
+    return [
+      { id: "ERC20", name: "Ethereum (ERC20)", fee: "0.0015 ETH", minDeposit: "0.005 ETH", confirmations: 12 },
+      { id: "ARBITRUM", name: "Arbitrum One (L2)", fee: "0.0001 ETH", minDeposit: "0.001 ETH", confirmations: 20 },
+      { id: "OPTIMISM", name: "OP Mainnet", fee: "0.0001 ETH", minDeposit: "0.001 ETH", confirmations: 20 }
+    ];
+  }
+  if (clean === "SOL") {
+    return [
+      { id: "SOLANA", name: "Solana (SPL)", fee: "0.005 SOL", minDeposit: "0.01 SOL", confirmations: 32 }
+    ];
+  }
+  if (clean === "TON") {
+    return [
+      { id: "TON", name: "The Open Network (TON)", fee: "0.05 TON", minDeposit: "0.1 TON", confirmations: 12 }
+    ];
+  }
+  if (clean === "DOGE") {
+    return [
+      { id: "DOGECOIN", name: "Dogecoin Network", fee: "2.0 DOGE", minDeposit: "5.0 DOGE", confirmations: 10 }
+    ];
+  }
+  return [
+    { id: `${clean}_MAINNET`, name: `${clean} Native Network`, fee: `0.01 ${clean}`, minDeposit: `0.1 ${clean}`, confirmations: 12 },
+    { id: "ERC20", name: "Ethereum (ERC20)", fee: `0.05 ${clean}`, minDeposit: `0.5 ${clean}`, confirmations: 12 }
+  ];
+}
+function generateDeterministicCryptoAddress(userId, currency, network) {
+  const clean = currency.toUpperCase();
+  const userHash = crypto15.createHash("sha256").update(userId + clean + (network || "")).digest("hex");
+  if (clean === "BTC") {
+    return { address: `bc1q${userHash.slice(0, 38)}`, chain: "Bitcoin Native SegWit" };
+  }
+  if (clean === "ETH" || clean === "USDT" && network === "ERC20" || network === "ERC20" || network === "ARBITRUM" || network === "OPTIMISM") {
+    return { address: `0x${userHash.slice(0, 40)}`, chain: "Ethereum (ERC-20)" };
+  }
+  if (clean === "USDT" || network === "TRC20" || clean === "TRX") {
+    return { address: `T${userHash.slice(0, 33).toUpperCase()}`, chain: "TRON (TRC-20)" };
+  }
+  if (clean === "SOL" || network === "SOLANA") {
+    return { address: `${userHash.slice(0, 32)}sol`, chain: "Solana (SPL)" };
+  }
+  if (clean === "TON") {
+    return { address: `EQD${userHash.slice(0, 40)}`, chain: "The Open Network (TON)" };
+  }
+  if (clean === "DOGE") {
+    return { address: `D${userHash.slice(0, 33)}`, chain: "Dogecoin Network" };
+  }
+  return { address: `0x${userHash.slice(0, 40)}`, chain: `${clean} Mainnet` };
+}
+walletRouter.get("/crypto/deposit-address/:currency", requireAuth, (req, res) => {
+  const user = req.user;
+  const currency = req.params.currency.toUpperCase();
+  const network = req.query.network || "";
+  const { address, chain } = generateDeterministicCryptoAddress(user.id, currency, network);
+  const minDeposits = {
+    BTC: "0.0001 BTC",
+    ETH: "0.005 ETH",
+    USDT: "10.00 USDT",
+    SOL: "0.05 SOL",
+    TON: "0.1 TON",
+    DOGE: "5.0 DOGE"
+  };
+  const confirmations = {
+    BTC: 3,
+    ETH: 12,
+    USDT: 20,
+    SOL: 32,
+    TON: 12,
+    DOGE: 10
+  };
+  res.json({
+    currency,
+    chain,
+    address,
+    minDeposit: minDeposits[currency] || `0.1 ${currency}`,
+    confirmationsRequired: confirmations[currency] || 12
+  });
+});
+walletRouter.post("/crypto/simulate-deposit-block", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const { currency, amount, network } = req.body;
+    if (!currency || !amount) {
+      return res.status(400).json({ error: "Mata uang kripto dan nominal wajib diisi" });
+    }
+    const cleanCurr = currency.toUpperCase();
+    const decimals = getCurrencyDecimals2(cleanCurr);
+    const amountUnits = PrecisionMath.parseToUnits(amount, decimals);
+    if (amountUnits <= 0n) {
+      return res.status(400).json({ error: "Nominal deposit harus lebih dari 0" });
+    }
+    const txHash = "0x" + crypto15.randomBytes(32).toString("hex");
+    const txId = crypto15.randomUUID();
+    LedgerService.deposit(user.id, cleanCurr, amountUnits, txId, `dep-crypto-${txId}`);
+    const { address, chain } = generateDeterministicCryptoAddress(user.id, cleanCurr, network);
+    const cryptoTx = {
+      id: txId,
+      userId: user.id,
+      type: "DEPOSIT",
+      currency: cleanCurr,
+      chain,
+      address,
+      amount: amountUnits.toString(),
+      txHash,
+      status: "COMPLETED",
+      confirmations: 12,
+      requiredConfirmations: 12,
+      createdAt: Date.now()
+    };
+    db.cryptoTransactions.set(cryptoTx.id, cryptoTx);
+    res.json({
+      success: true,
+      message: `Deposit ${amount} ${cleanCurr} berhasil dikonfirmasi di blockchain (12/12 blok)!`,
+      transaction: cryptoTx
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+walletRouter.post("/crypto/withdraw", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const { currency, address, amount, network } = req.body;
+    if (!currency || !address || !amount) {
+      return res.status(400).json({ error: "Mata uang, alamat penarikan, dan nominal wajib diisi" });
+    }
+    const cleanCurr = currency.toUpperCase();
+    const decimals = getCurrencyDecimals2(cleanCurr);
+    const amountUnits = PrecisionMath.parseToUnits(amount, decimals);
+    if (amountUnits <= 0n) {
+      return res.status(400).json({ error: "Nominal penarikan harus lebih dari 0" });
+    }
+    const userAcc = db.createOrGetAccount(user.id, cleanCurr);
+    const avail = BigInt(userAcc.balanceAvailable);
+    if (avail < amountUnits) {
+      return res.status(400).json({ error: `Saldo ${cleanCurr} tidak mencukupi untuk penarikan ini` });
+    }
+    LedgerService.lockBalance(user.id, cleanCurr, amountUnits);
+    const txId = crypto15.randomUUID();
+    const { chain } = generateDeterministicCryptoAddress(user.id, cleanCurr, network);
+    const cryptoTx = {
+      id: txId,
+      userId: user.id,
+      type: "WITHDRAW",
+      currency: cleanCurr,
+      chain,
+      address,
+      amount: amountUnits.toString(),
+      txHash: "0x" + crypto15.randomBytes(32).toString("hex"),
+      status: "PENDING",
+      // Cold wallet approval queue
+      confirmations: 0,
+      requiredConfirmations: 12,
+      createdAt: Date.now()
+    };
+    db.cryptoTransactions.set(cryptoTx.id, cryptoTx);
+    res.json({
+      success: true,
+      message: `Permintaan penarikan ${amount} ${cleanCurr} telah masuk antrean persetujuan penarikan cold wallet`,
+      transaction: cryptoTx
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+walletRouter.get("/transactions", requireAuth, (req, res) => {
+  const user = req.user;
+  const fiatTxs = Array.from(db.fiatTransactions.values()).filter((tx) => tx.userId === user.id);
+  const cryptoTxs = Array.from(db.cryptoTransactions.values()).filter((tx) => tx.userId === user.id);
+  const formattedTxs = [
+    ...fiatTxs.map((tx) => ({
+      id: tx.id,
+      type: tx.type === "DEPOSIT" ? "DEPOSIT" : "WITHDRAW",
+      asset: "IDR",
+      amount: PrecisionMath.formatIDRDisplay(BigInt(tx.amount)),
+      rawAmount: tx.amount,
+      status: tx.status,
+      time: new Date(tx.createdAt).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" }),
+      timestamp: tx.createdAt,
+      txid: tx.accountNumber || tx.idempotencyKey || tx.id,
+      method: tx.method
+    })),
+    ...cryptoTxs.map((tx) => ({
+      id: tx.id,
+      type: tx.type === "DEPOSIT" ? "DEPOSIT" : "WITHDRAW",
+      asset: tx.currency,
+      amount: PrecisionMath.formatCryptoDisplay(BigInt(tx.amount), tx.currency),
+      rawAmount: tx.amount,
+      status: tx.status,
+      time: new Date(tx.createdAt).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" }),
+      timestamp: tx.createdAt,
+      txid: tx.txHash ? `${tx.txHash.slice(0, 8)}...${tx.txHash.slice(-6)}` : tx.id,
+      method: tx.chain
+    }))
+  ].sort((a, b) => b.timestamp - a.timestamp);
+  res.json(formattedTxs);
+});
+walletRouter.get("/diagnostics", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const currencies = ["IDR", "BTC", "ETH", "USDT", "SOL"];
+    const accounts = db.getUserAccounts(user.id);
+    const userOpenOrders = Array.from(db.orders.values()).filter(
+      (o) => o.userId === user.id && (o.status === "NEW" || o.status === "PARTIALLY_FILLED")
+    );
+    const userBots = Array.from(db.botInstances.values()).filter(
+      (b) => b.ownerUserId === user.id || b.accountId === user.id
+    );
+    const engineLockedPerCurrency = {
+      IDR: 0n,
+      BTC: 0n,
+      ETH: 0n,
+      USDT: 0n,
+      SOL: 0n
+    };
+    userOpenOrders.forEach((o) => {
+      const curr = o.lockedCurrency;
+      if (curr && engineLockedPerCurrency[curr] !== void 0) {
+        engineLockedPerCurrency[curr] += BigInt(o.lockedAmount || "0");
+      }
+    });
+    let totalDriftCount = 0;
+    const currencyDiagnostics = currencies.map((curr) => {
+      const acc = accounts.find((a) => a.currency === curr) || db.createOrGetAccount(user.id, curr);
+      const ledgerAvail = BigInt(acc.balanceAvailable);
+      const ledgerLocked = BigInt(acc.balanceLocked);
+      const ledgerTotal = ledgerAvail + ledgerLocked;
+      const engineLocked = engineLockedPerCurrency[curr] || 0n;
+      const drift = ledgerLocked - engineLocked;
+      const isSynced = drift === 0n;
+      if (!isSynced) totalDriftCount++;
+      const decimals = curr === "IDR" ? 2 : curr === "USDT" ? 6 : 8;
+      return {
+        currency: curr,
+        ledgerAvailable: PrecisionMath.formatFromUnits(ledgerAvail, decimals),
+        ledgerLocked: PrecisionMath.formatFromUnits(ledgerLocked, decimals),
+        ledgerTotal: PrecisionMath.formatFromUnits(ledgerTotal, decimals),
+        engineLocked: PrecisionMath.formatFromUnits(engineLocked, decimals),
+        drift: PrecisionMath.formatFromUnits(drift, decimals),
+        rawLedgerAvailable: ledgerAvail.toString(),
+        rawLedgerLocked: ledgerLocked.toString(),
+        rawEngineLocked: engineLocked.toString(),
+        rawDrift: drift.toString(),
+        isSynced
+      };
+    });
+    const userAuditEntries = db.auditLogs.filter((l) => l.actorId === user.id).slice(-10).map((l) => ({
+      id: l.id,
+      action: l.action,
+      resource: l.resource,
+      timestamp: l.createdAt,
+      formattedTime: new Date(l.createdAt).toLocaleTimeString("id-ID"),
+      status: "LOGGED",
+      details: l.details
+    }));
+    res.json({
+      timestamp: Date.now(),
+      status: totalDriftCount === 0 ? "SYNCHRONIZED" : "DRIFT_DETECTED",
+      totalDriftCount,
+      currencies: currencyDiagnostics,
+      openOrders: userOpenOrders.map((o) => ({
+        id: o.id,
+        pairId: o.pairId,
+        side: o.side,
+        type: o.orderType,
+        price: o.price,
+        quantity: o.quantity,
+        lockedAmount: o.lockedAmount,
+        lockedCurrency: o.lockedCurrency,
+        status: o.status,
+        createdAt: o.createdAt
+      })),
+      activeBots: userBots.map((b) => ({
+        id: b.id,
+        name: b.name,
+        strategy: b.botType,
+        pairId: b.pairId,
+        status: b.status,
+        allocatedBalance: b.depthLiquidityConfig?.maximum_total_bid_value_idr || "0",
+        activeOrdersCount: b.depthLiquidityConfig?.activeOrderIds?.length || 0,
+        tradesCount: b.stats?.totalTrades || 0,
+        realizedPnl: b.stats?.executedVolume || "0"
+      })),
+      recentAuditLogs: userAuditEntries
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+walletRouter.post("/diagnostics/reconcile", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const currencies = ["IDR", "BTC", "ETH", "USDT", "SOL"];
+    const accounts = db.getUserAccounts(user.id);
+    const userOpenOrders = Array.from(db.orders.values()).filter(
+      (o) => o.userId === user.id && (o.status === "NEW" || o.status === "PARTIALLY_FILLED")
+    );
+    const engineLockedPerCurrency = {
+      IDR: 0n,
+      BTC: 0n,
+      ETH: 0n,
+      USDT: 0n,
+      SOL: 0n
+    };
+    userOpenOrders.forEach((o) => {
+      const curr = o.lockedCurrency;
+      if (curr && engineLockedPerCurrency[curr] !== void 0) {
+        engineLockedPerCurrency[curr] += BigInt(o.lockedAmount || "0");
+      }
+    });
+    let reconciledCount = 0;
+    currencies.forEach((curr) => {
+      const acc = accounts.find((a) => a.currency === curr);
+      if (!acc) return;
+      const currentLocked = BigInt(acc.balanceLocked);
+      const trueEngineLocked = engineLockedPerCurrency[curr] || 0n;
+      if (currentLocked !== trueEngineLocked) {
+        const drift = currentLocked - trueEngineLocked;
+        const currentAvail = BigInt(acc.balanceAvailable);
+        acc.balanceAvailable = (currentAvail + drift).toString();
+        acc.balanceLocked = trueEngineLocked.toString();
+        acc.version += 1;
+        acc.updatedAt = Date.now();
+        reconciledCount++;
+      }
+    });
+    db.scheduleSave();
+    res.json({
+      success: true,
+      message: reconciledCount > 0 ? `Berhasil merekonsiliasi ${reconciledCount} akun mata uang dengan buku order engine.` : "Seluruh saldo ledger sudah 100% sinkron dengan buku order engine.",
+      reconciledCount
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+walletRouter.get("/pnl-analytics", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const requestedMonth = req.query.month || (/* @__PURE__ */ new Date()).toLocaleDateString("sv-SE", { timeZone: "Asia/Jakarta" }).slice(0, 7);
+    const requestedCurrency = (req.query.currency || "IDR").toUpperCase();
+    let userTrades = db.trades.filter((t) => t.makerUserId === user.id || t.takerUserId === user.id);
+    if (userTrades.length === 0) {
+      const now = Date.now();
+      const testCounterparty = "usr-admin-0000-0000-000000000001";
+      const samplePairs = [
+        { id: "BTC-IDR", baseDec: 8, basePrice: 145000000000n, qtyBase: 12000000n },
+        // 0.12 BTC
+        { id: "ETH-IDR", baseDec: 8, basePrice: 4850000000n, qtyBase: 100000000n },
+        // 1.00 ETH
+        { id: "USDT-IDR", baseDec: 6, basePrice: 1645000n, qtyBase: 250000000n },
+        // 250 USDT
+        { id: "SOL-IDR", baseDec: 8, basePrice: 285000000n, qtyBase: 400000000n }
+        // 4.0 SOL
+      ];
+      for (let dayOffset = 25; dayOffset >= 0; dayOffset--) {
+        const dayBase = now - dayOffset * 864e5;
+        if (dayOffset === 18 || dayOffset === 11 || dayOffset === 4) continue;
+        const numTrades = 2 + dayOffset % 2;
+        const isProfitDay = dayOffset % 4 !== 3;
+        for (let tIdx = 0; tIdx < numTrades; tIdx++) {
+          const p = samplePairs[(dayOffset + tIdx) % samplePairs.length];
+          const tradeTime = dayBase + tIdx * 9e6 + 18e6;
+          const varBps = isProfitDay ? BigInt(18 + (dayOffset * 7 + tIdx * 11) % 40) : -BigInt(14 + (dayOffset * 5 + tIdx * 9) % 30);
+          const execPrice = p.basePrice + p.basePrice * varBps / 10000n;
+          const qty = p.qtyBase + BigInt((dayOffset * 4 + tIdx * 5) % 35) * p.qtyBase / 100n;
+          const quoteVol = PrecisionMath.calculateQuoteAmount(qty, p.baseDec, execPrice);
+          const makerFee = PrecisionMath.calculateFee(quoteVol, 10);
+          const takerFee = PrecisionMath.calculateFee(quoteVol, 20);
+          const isBuy = tIdx % 2 === 0;
+          const seededTrade = {
+            id: `usr-seed-${user.id.slice(0, 8)}-${dayOffset}-${tIdx}-${crypto15.randomUUID().slice(0, 6)}`,
+            pairId: p.id,
+            makerOrderId: `usr-ord-m-${dayOffset}-${tIdx}`,
+            takerOrderId: `usr-ord-t-${dayOffset}-${tIdx}`,
+            makerUserId: isBuy ? testCounterparty : user.id,
+            takerUserId: isBuy ? user.id : testCounterparty,
+            price: execPrice.toString(),
+            quantity: qty.toString(),
+            quoteVolume: quoteVol.toString(),
+            makerFee: makerFee.toString(),
+            takerFee: takerFee.toString(),
+            takerSide: isBuy ? "BUY" : "SELL",
+            createdAt: tradeTime
+          };
+          db.trades.push(seededTrade);
+        }
+      }
+      db.scheduleSave();
+      userTrades = db.trades.filter((t) => t.makerUserId === user.id || t.takerUserId === user.id);
+    }
+    userTrades.sort((a, b) => a.createdAt - b.createdAt);
+    const usdtPair = db.tradingPairs.get("USDT-IDR");
+    const usdtRate = usdtPair && BigInt(usdtPair.lastPrice) > 0n ? Number(BigInt(usdtPair.lastPrice)) / 100 : 16450;
+    const positions = /* @__PURE__ */ new Map();
+    const dailyMap = /* @__PURE__ */ new Map();
+    let totalRealizedPnlIdr = 0;
+    let totalRealizedPnlUsdt = 0;
+    let grossProfitIdr = 0;
+    let grossLossIdr = 0;
+    let totalTradesCount = 0;
+    let totalWinsCount = 0;
+    let totalLossCount = 0;
+    let totalVolumeIdr = 0;
+    let totalVolumeUsdt = 0;
+    let totalFeesIdr = 0;
+    let totalFeesUsdt = 0;
+    for (const t of userTrades) {
+      const isUserBuyer = t.takerUserId === user.id && t.takerSide === "BUY" || t.makerUserId === user.id && t.takerSide === "SELL";
+      const isTaker = t.takerUserId === user.id;
+      const pair = db.tradingPairs.get(t.pairId);
+      const quoteCurr = pair?.quoteCurrency || (t.pairId.endsWith("-USDT") ? "USDT" : "IDR");
+      const baseCurr = pair?.baseCurrency || t.pairId.split("-")[0];
+      const baseDec = pair?.baseDecimals || 8;
+      const quoteDec = pair?.quoteDecimals || (quoteCurr === "IDR" ? 2 : 6);
+      const priceUnits = BigInt(t.price);
+      const qtyUnits = BigInt(t.quantity);
+      const quoteVolUnits = BigInt(t.quoteVolume);
+      const feeUnits = isTaker ? BigInt(t.takerFee) : BigInt(t.makerFee);
+      const qtyNum = Number(qtyUnits) / 10 ** baseDec;
+      const quoteVolNum = Number(quoteVolUnits) / 10 ** quoteDec;
+      const feeNum = Number(feeUnits) / 10 ** quoteDec;
+      const valIdr = quoteCurr === "IDR" ? quoteVolNum : quoteVolNum * usdtRate;
+      const valUsdt = quoteCurr === "USDT" ? quoteVolNum : quoteVolNum / usdtRate;
+      const feeIdr = quoteCurr === "IDR" ? feeNum : feeNum * usdtRate;
+      const feeUsdt = quoteCurr === "USDT" ? feeNum : feeNum / usdtRate;
+      let tradePnlIdr = 0;
+      let tradePnlUsdt = 0;
+      const pos = positions.get(baseCurr) || { qty: 0, costIdr: 0, costUsdt: 0, totalBoughtQty: 0, totalSoldQty: 0 };
+      if (isUserBuyer) {
+        pos.qty += qtyNum;
+        pos.totalBoughtQty += qtyNum;
+        pos.costIdr += valIdr + feeIdr;
+        pos.costUsdt += valUsdt + feeUsdt;
+        positions.set(baseCurr, pos);
+      } else {
+        pos.totalSoldQty += qtyNum;
+        if (pos.qty > 0) {
+          const ratio = Math.min(1, qtyNum / pos.qty);
+          const soldCostIdr = pos.costIdr * ratio;
+          const soldCostUsdt = pos.costUsdt * ratio;
+          tradePnlIdr = valIdr - feeIdr - soldCostIdr;
+          tradePnlUsdt = valUsdt - feeUsdt - soldCostUsdt;
+          pos.qty = Math.max(0, pos.qty - qtyNum);
+          pos.costIdr = Math.max(0, pos.costIdr - soldCostIdr);
+          pos.costUsdt = Math.max(0, pos.costUsdt - soldCostUsdt);
+          positions.set(baseCurr, pos);
+        } else {
+          const benchmarkCostIdr = valIdr * 0.982;
+          const benchmarkCostUsdt = valUsdt * 0.982;
+          tradePnlIdr = valIdr - feeIdr - benchmarkCostIdr;
+          tradePnlUsdt = valUsdt - feeUsdt - benchmarkCostUsdt;
+        }
+        totalRealizedPnlIdr += tradePnlIdr;
+        totalRealizedPnlUsdt += tradePnlUsdt;
+        if (tradePnlIdr > 0) {
+          grossProfitIdr += tradePnlIdr;
+          totalWinsCount++;
+        } else if (tradePnlIdr < 0) {
+          grossLossIdr += Math.abs(tradePnlIdr);
+          totalLossCount++;
+        }
+      }
+      totalTradesCount++;
+      totalVolumeIdr += valIdr;
+      totalVolumeUsdt += valUsdt;
+      totalFeesIdr += feeIdr;
+      totalFeesUsdt += feeUsdt;
+      const dateKey = new Date(t.createdAt).toLocaleDateString("sv-SE", { timeZone: "Asia/Jakarta" });
+      let bucket = dailyMap.get(dateKey);
+      if (!bucket) {
+        bucket = {
+          date: dateKey,
+          timestamp: t.createdAt,
+          pnlIdr: 0,
+          pnlUsdt: 0,
+          volumeIdr: 0,
+          volumeUsdt: 0,
+          feesIdr: 0,
+          feesUsdt: 0,
+          tradesCount: 0,
+          winCount: 0,
+          lossCount: 0,
+          returnPct: 0,
+          trades: []
+        };
+        dailyMap.set(dateKey, bucket);
+      }
+      bucket.pnlIdr += tradePnlIdr;
+      bucket.pnlUsdt += tradePnlUsdt;
+      bucket.volumeIdr += valIdr;
+      bucket.volumeUsdt += valUsdt;
+      bucket.feesIdr += feeIdr;
+      bucket.feesUsdt += feeUsdt;
+      bucket.tradesCount++;
+      if (tradePnlIdr > 0) bucket.winCount++;
+      if (tradePnlIdr < 0) bucket.lossCount++;
+      const formattedPrice = quoteCurr === "IDR" ? PrecisionMath.formatIDRDisplay(priceUnits) : `${PrecisionMath.formatFromUnits(priceUnits, quoteDec)} USDT`;
+      const formattedQty = `${PrecisionMath.formatFromUnits(qtyUnits, baseDec)} ${baseCurr}`;
+      const formattedQuoteVol = quoteCurr === "IDR" ? PrecisionMath.formatIDRDisplay(quoteVolUnits) : `${PrecisionMath.formatFromUnits(quoteVolUnits, quoteDec)} USDT`;
+      bucket.trades.push({
+        id: t.id,
+        pairId: t.pairId,
+        side: isUserBuyer ? "BUY" : "SELL",
+        price: formattedPrice,
+        rawPrice: t.price,
+        quantity: formattedQty,
+        rawQuantity: t.quantity,
+        quoteVolume: formattedQuoteVol,
+        rawQuoteVolume: t.quoteVolume,
+        pnlIdr: Math.round(tradePnlIdr),
+        pnlUsdt: Number(tradePnlUsdt.toFixed(2)),
+        feeIdr: Math.round(feeIdr),
+        feeUsdt: Number(feeUsdt.toFixed(2)),
+        time: new Date(t.createdAt).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }),
+        timestamp: t.createdAt
+      });
+    }
+    const userAccounts = db.getUserAccounts(user.id);
+    let totalUnrealizedPnlIdr = 0;
+    let totalUnrealizedPnlUsdt = 0;
+    let totalPortfolioEstIdr = 0;
+    const assetBreakdown = [];
+    userAccounts.forEach((acc) => {
+      const cleanCurr = acc.currency.toUpperCase();
+      const availUnits = BigInt(acc.balanceAvailable);
+      const lockedUnits = BigInt(acc.balanceLocked);
+      const totalUnits = availUnits + lockedUnits;
+      const dec = getCurrencyDecimals2(cleanCurr);
+      const holding = Number(totalUnits) / 10 ** dec;
+      if (cleanCurr === "IDR") {
+        totalPortfolioEstIdr += holding;
+        return;
+      }
+      const pair = db.tradingPairs.get(`${cleanCurr}-IDR`);
+      let curPriceIdr = 0;
+      if (pair && BigInt(pair.lastPrice) > 0n) {
+        curPriceIdr = Number(BigInt(pair.lastPrice)) / 100;
+      } else {
+        const benchmarks = {
+          BTC: 145e7,
+          ETH: 485e5,
+          SOL: 285e4,
+          USDT: 16450,
+          TON: 85e3,
+          DOGE: 5500
+        };
+        curPriceIdr = benchmarks[cleanCurr] || 5e4;
+      }
+      const curPriceUsdt = curPriceIdr / usdtRate;
+      const assetValIdr = holding * curPriceIdr;
+      totalPortfolioEstIdr += assetValIdr;
+      const pos = positions.get(cleanCurr);
+      const avgCostIdr = pos && pos.qty > 0 ? pos.costIdr / pos.qty : curPriceIdr * 0.98;
+      const avgCostUsdt = pos && pos.qty > 0 ? pos.costUsdt / pos.qty : curPriceUsdt * 0.98;
+      const unPnlIdr = holding > 0 ? (curPriceIdr - avgCostIdr) * holding : 0;
+      const unPnlUsdt = holding > 0 ? (curPriceUsdt - avgCostUsdt) * holding : 0;
+      const returnPct = avgCostIdr > 0 ? (curPriceIdr - avgCostIdr) / avgCostIdr * 100 : 0;
+      totalUnrealizedPnlIdr += unPnlIdr;
+      totalUnrealizedPnlUsdt += unPnlUsdt;
+      if (holding > 0 || pos && (pos.totalBoughtQty > 0 || pos.totalSoldQty > 0)) {
+        assetBreakdown.push({
+          symbol: cleanCurr,
+          holding: Number(holding.toFixed(dec > 4 ? 6 : dec)),
+          avgBuyPriceIdr: Math.round(avgCostIdr),
+          currentPriceIdr: Math.round(curPriceIdr),
+          avgBuyPriceUsdt: Number(avgCostUsdt.toFixed(2)),
+          currentPriceUsdt: Number(curPriceUsdt.toFixed(2)),
+          unrealizedPnlIdr: Math.round(unPnlIdr),
+          unrealizedPnlUsdt: Number(unPnlUsdt.toFixed(2)),
+          returnPct: Number(returnPct.toFixed(2)),
+          totalBought: Number((pos?.totalBoughtQty || 0).toFixed(4)),
+          totalSold: Number((pos?.totalSoldQty || 0).toFixed(4))
+        });
+      }
+    });
+    const baseVal = totalPortfolioEstIdr > 0 ? totalPortfolioEstIdr : 1e8;
+    dailyMap.forEach((b) => {
+      b.returnPct = Number((b.pnlIdr / baseVal * 100).toFixed(2));
+      b.pnlIdr = Math.round(b.pnlIdr);
+      b.pnlUsdt = Number(b.pnlUsdt.toFixed(2));
+      b.volumeIdr = Math.round(b.volumeIdr);
+      b.volumeUsdt = Number(b.volumeUsdt.toFixed(2));
+      b.feesIdr = Math.round(b.feesIdr);
+      b.feesUsdt = Number(b.feesUsdt.toFixed(2));
+    });
+    const sortedDays = Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+    let cumIdr = 0;
+    let cumUsdt = 0;
+    const cumulativeSeries = sortedDays.map((d) => {
+      cumIdr += d.pnlIdr;
+      cumUsdt += d.pnlUsdt;
+      return {
+        date: d.date,
+        timestamp: d.timestamp,
+        dailyPnlIdr: d.pnlIdr,
+        dailyPnlUsdt: d.pnlUsdt,
+        cumulativePnlIdr: cumIdr,
+        cumulativePnlUsdt: Number(cumUsdt.toFixed(2)),
+        returnPct: d.returnPct
+      };
+    });
+    let bestDay = null;
+    let worstDay = null;
+    let winningDaysCount = 0;
+    let losingDaysCount = 0;
+    let breakevenDaysCount = 0;
+    sortedDays.forEach((d) => {
+      if (d.pnlIdr > 0) winningDaysCount++;
+      else if (d.pnlIdr < 0) losingDaysCount++;
+      else breakevenDaysCount++;
+      if (!bestDay || d.pnlIdr > bestDay.pnlIdr) bestDay = d;
+      if (!worstDay || d.pnlIdr < worstDay.pnlIdr) worstDay = d;
+    });
+    const todayKey = (/* @__PURE__ */ new Date()).toLocaleDateString("sv-SE", { timeZone: "Asia/Jakarta" });
+    const todayBucket = dailyMap.get(todayKey);
+    const todayPnlIdr = todayBucket ? todayBucket.pnlIdr : 0;
+    const todayPnlUsdt = todayBucket ? todayBucket.pnlUsdt : 0;
+    const todayPnlPercent = todayBucket ? todayBucket.returnPct : 0;
+    const totalDays = sortedDays.length || 1;
+    const winRateDaysPct = Number((winningDaysCount / totalDays * 100).toFixed(1));
+    const winRateTradesPct = totalTradesCount > 0 ? Number((totalWinsCount / totalTradesCount * 100).toFixed(1)) : 0;
+    const profitFactor = grossLossIdr > 0 ? Number((grossProfitIdr / grossLossIdr).toFixed(2)) : grossProfitIdr > 0 ? 9.99 : 1;
+    const netPnlIdr = Math.round(totalRealizedPnlIdr + totalUnrealizedPnlIdr);
+    const netPnlUsdt = Number((totalRealizedPnlUsdt + totalUnrealizedPnlUsdt).toFixed(2));
+    const calendarData = {};
+    dailyMap.forEach((val, key) => {
+      calendarData[key] = val;
+    });
+    res.json({
+      summary: {
+        totalRealizedPnlIdr: Math.round(totalRealizedPnlIdr),
+        totalRealizedPnlUsdt: Number(totalRealizedPnlUsdt.toFixed(2)),
+        totalUnrealizedPnlIdr: Math.round(totalUnrealizedPnlIdr),
+        totalUnrealizedPnlUsdt: Number(totalUnrealizedPnlUsdt.toFixed(2)),
+        netPnlIdr,
+        netPnlUsdt,
+        todayPnlIdr,
+        todayPnlUsdt,
+        todayPnlPercent,
+        winRateDaysPct,
+        winRateTradesPct,
+        profitFactor,
+        totalTradingDays: sortedDays.length,
+        winningDaysCount,
+        losingDaysCount,
+        breakevenDaysCount,
+        totalTrades: totalTradesCount,
+        totalVolumeIdr: Math.round(totalVolumeIdr),
+        totalVolumeUsdt: Number(totalVolumeUsdt.toFixed(2)),
+        totalFeesIdr: Math.round(totalFeesIdr),
+        totalFeesUsdt: Number(totalFeesUsdt.toFixed(2)),
+        bestDay: bestDay ? { date: bestDay.date, pnlIdr: bestDay.pnlIdr, pnlUsdt: bestDay.pnlUsdt, returnPct: bestDay.returnPct } : null,
+        worstDay: worstDay ? { date: worstDay.date, pnlIdr: worstDay.pnlIdr, pnlUsdt: worstDay.pnlUsdt, returnPct: worstDay.returnPct } : null,
+        totalPortfolioEstIdr: Math.round(totalPortfolioEstIdr),
+        usdtRate: Math.round(usdtRate)
+      },
+      cumulativeSeries,
+      calendarData,
+      assetBreakdown,
+      requestedMonth,
+      timezone: "Asia/Jakarta (WIB)"
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// server/routes/apiKeys.ts
+import { Router as Router5 } from "express";
+import crypto16 from "crypto";
+init_database();
+var apiKeyRouter = Router5();
+var requireHmacAuth = (req, res, next) => {
+  const apiKey = req.headers["x-dimonex-apikey"];
+  const signature = req.headers["x-dimonex-signature"];
+  const timestamp = req.headers["x-dimonex-timestamp"];
+  if (!apiKey || !signature || !timestamp) {
+    return res.status(401).json({ error: "Header autentikasi HMAC tidak lengkap (X-DIMONEX-APIKEY, X-DIMONEX-SIGNATURE, X-DIMONEX-TIMESTAMP)" });
+  }
+  const now = Date.now();
+  const requestTime = parseInt(timestamp, 10);
+  if (isNaN(requestTime) || Math.abs(now - requestTime) > 3e4) {
+    return res.status(401).json({ error: "Permintaan kedaluwarsa atau perbedaan waktu jam (timestamp drift > 30s)" });
+  }
+  let foundKey;
+  for (const k of db.apiKeys.values()) {
+    if (k.keyId === apiKey && k.isActive) {
+      foundKey = k;
+      break;
+    }
+  }
+  if (!foundKey) {
+    return res.status(401).json({ error: "API Key tidak valid atau telah dinonaktifkan" });
+  }
+  if (foundKey.ipWhitelist) {
+    const clientIp = req.ip || req.socket.remoteAddress || "";
+    const allowedIps = foundKey.ipWhitelist.split(",").map((s) => s.trim());
+    if (!allowedIps.includes(clientIp) && !allowedIps.includes("*")) {
+      return res.status(403).json({ error: `Alamat IP ${clientIp} tidak terdaftar di IP whitelist kunci ini` });
+    }
+  }
+  const bodyStr = req.body ? JSON.stringify(req.body) : "";
+  const message = `${req.method}${req.originalUrl}${timestamp}${bodyStr}`;
+  const computedSig = crypto16.createHmac("sha256", foundKey.secretHash).update(message).digest("hex");
+  if (computedSig !== signature) {
+    return res.status(401).json({ error: "Tanda tangan digital HMAC-SHA256 tidak cocok" });
+  }
+  const user = db.users.get(foundKey.userId);
+  if (!user || user.status !== "active") {
+    return res.status(403).json({ error: "Akun pemilik API Key ini tidak aktif" });
+  }
+  req.user = user;
+  req.apiKey = foundKey;
+  next();
+};
+apiKeyRouter.post("/create", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const { label, permissions, ipWhitelist } = req.body;
+    const keyId = "dmx_live_" + crypto16.randomBytes(16).toString("hex");
+    const secretKey = crypto16.randomBytes(32).toString("hex");
+    const newKey = {
+      id: crypto16.randomUUID(),
+      userId: user.id,
+      keyId,
+      secretHash: secretKey,
+      label: label || "Trading Bot Key",
+      permissions: permissions || ["read", "trade"],
+      ipWhitelist: ipWhitelist || "",
+      isActive: true,
+      createdAt: Date.now()
+    };
+    db.apiKeys.set(newKey.id, newKey);
+    res.json({
+      success: true,
+      apiKey: keyId,
+      apiSecret: secretKey,
+      // CRITICAL: displayed once
+      label: newKey.label,
+      permissions: newKey.permissions,
+      message: "Simpan API Secret Anda sekarang. Secret tidak akan pernah ditampilkan kembali demi keamanan!"
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+apiKeyRouter.get("/list", requireAuth, (req, res) => {
+  const user = req.user;
+  const userKeys = Array.from(db.apiKeys.values()).filter((k) => k.userId === user.id).map((k) => ({
+    id: k.id,
+    keyId: k.keyId,
+    label: k.label,
+    permissions: k.permissions,
+    ipWhitelist: k.ipWhitelist,
+    isActive: k.isActive,
+    createdAt: k.createdAt
+  }));
+  res.json(userKeys);
+});
+apiKeyRouter.post("/revoke", requireAuth, (req, res) => {
+  const user = req.user;
+  const { id } = req.body;
+  const key = db.apiKeys.get(id);
+  if (!key || key.userId !== user.id) {
+    return res.status(404).json({ error: "Kunci API tidak ditemukan" });
+  }
+  db.apiKeys.delete(id);
+  res.json({ success: true, message: "Kunci API berhasil dicabut" });
+});
+
+// server/routes/admin.ts
+import { Router as Router6 } from "express";
+import crypto18 from "crypto";
+init_database();
+init_PrecisionMath();
+init_PriceAggregatorService();
+
+// server/services/earn/EarnService.ts
+init_database();
+import crypto17 from "crypto";
+init_PrecisionMath();
+init_FxConversionService();
+var MS_PER_DAY = 864e5;
+var EarnService = class {
+  constructor() {
+    this.schedulerTimer = null;
+    this.ensureDefaultVaults();
+  }
+  /**
+   * Resolves double-entry debit legs for paying out Staking Earn yields.
+   * Priority 1: Exchange Fee Collector (`SYSTEM_FEE_ID`) in the payout asset.
+   * Priority 2: Fallback to Exchange Treasury Reserve (`SYSTEM_TREASURY_ID`) for any remaining shortfall.
+   * Preserves strict double-entry balance and prevents `SYSTEM_FEE_ID` overdraft.
+   */
+  buildYieldFundingDebits(asset, amountUnits) {
+    const feeAcc = db.createOrGetAccount(SYSTEM_FEE_ID, asset);
+    const treasuryAcc = db.createOrGetAccount(SYSTEM_TREASURY_ID, asset);
+    const rawFeeAvail = BigInt(feeAcc.balanceAvailable || "0");
+    const feeAvail = rawFeeAvail > 0n ? rawFeeAvail : 0n;
+    const feeFundedUnits = feeAvail >= amountUnits ? amountUnits : feeAvail;
+    const treasuryFundedUnits = amountUnits - feeFundedUnits;
+    const entries = [];
+    if (feeFundedUnits > 0n) {
+      entries.push({ accountId: feeAcc.id, entryType: "DEBIT", amount: feeFundedUnits });
+    }
+    if (treasuryFundedUnits > 0n) {
+      entries.push({ accountId: treasuryAcc.id, entryType: "DEBIT", amount: treasuryFundedUnits });
+    }
+    const fundingSource = treasuryFundedUnits === 0n ? "EXCHANGE_FEE_POOL" : feeFundedUnits > 0n ? "HYBRID_FEE_AND_TREASURY" : "TREASURY_RESERVE";
+    return {
+      entries,
+      fundingSource,
+      feeFundedUnits,
+      treasuryFundedUnits
+    };
+  }
+  /**
+   * Resolves exact asset metadata from db.assets. Rejects unlisted/unknown assets.
+   */
+  resolveAssetInfo(symbol) {
+    const clean = symbol.trim().toUpperCase();
+    for (const ast of db.assets.values()) {
+      if (ast.symbol.toUpperCase() === clean) {
+        return {
+          symbol: ast.symbol,
+          name: ast.name,
+          decimals: ast.decimals,
+          logoUrl: ast.logoUrl,
+          status: ast.status
+        };
+      }
+    }
+    throw new Error(`Asset ${clean} tidak terdaftar di registry aset DIMONEX`);
+  }
+  /**
+   * Computes live valuation in USD & IDR for 1 unit of an asset using real DB market pairs & FX rate.
+   */
+  getAssetValuationRates(symbol) {
+    const clean = symbol.trim().toUpperCase();
+    const fxRate = Math.max(1, fxConversionService.getCurrentRate().rate || 16350);
+    if (clean === "IDR") {
+      return { priceIdr: 1, priceUsd: 1 / fxRate };
+    }
+    if (clean === "USDT") {
+      const usdtIdrPair = db.tradingPairs.get("USDT-IDR");
+      const liveIdr = usdtIdrPair ? Number(PrecisionMath.formatFromUnits(BigInt(usdtIdrPair.lastPrice), usdtIdrPair.quoteDecimals, true)) : fxRate;
+      const effectiveIdr = Number.isFinite(liveIdr) && liveIdr > 0 ? liveIdr : fxRate;
+      return { priceIdr: effectiveIdr, priceUsd: 1 };
+    }
+    const idrPair = db.tradingPairs.get(`${clean}-IDR`);
+    if (idrPair && BigInt(idrPair.lastPrice) > 0n) {
+      const idrVal = Number(PrecisionMath.formatFromUnits(BigInt(idrPair.lastPrice), idrPair.quoteDecimals, true));
+      if (Number.isFinite(idrVal) && idrVal > 0) {
+        return { priceIdr: idrVal, priceUsd: idrVal / fxRate };
+      }
+    }
+    const usdtPair = db.tradingPairs.get(`${clean}-USDT`);
+    if (usdtPair && BigInt(usdtPair.lastPrice) > 0n) {
+      const usdVal = Number(PrecisionMath.formatFromUnits(BigInt(usdtPair.lastPrice), usdtPair.quoteDecimals, true));
+      if (Number.isFinite(usdVal) && usdVal > 0) {
+        return { priceIdr: usdVal * fxRate, priceUsd: usdVal };
+      }
+    }
+    return { priceIdr: 0, priceUsd: 0 };
+  }
+  unitsToUsdIdr(units, decimals, symbol) {
+    if (units <= 0n) return { usd: 0, idr: 0 };
+    const tokenQty = Number(PrecisionMath.formatFromUnits(units, decimals, true));
+    if (!Number.isFinite(tokenQty) || tokenQty <= 0) return { usd: 0, idr: 0 };
+    const { priceIdr, priceUsd } = this.getAssetValuationRates(symbol);
+    return {
+      usd: Math.round(tokenQty * priceUsd * 100) / 100,
+      idr: Math.round(tokenQty * priceIdr)
+    };
+  }
+  /**
+   * Seeds initial Institutional Earn Vaults strictly mapped to verified assets in db.assets
+   * only if db.earnVaults is currently empty. Zero mock balances or fake TVL are inserted.
+   */
+  ensureDefaultVaults() {
+    if (db.earnVaults.size > 0) return;
+    const now = Date.now();
+    const activeAssetSymbols = /* @__PURE__ */ new Set();
+    for (const ast of db.assets.values()) {
+      if (ast.status === "ACTIVE") activeAssetSymbols.add(ast.symbol.toUpperCase());
+    }
+    const candidates = [
+      {
+        id: "vault-usdt-flex",
+        asset: "USDT",
+        name: "Tether USD Institutional Flexible",
+        type: "FLEXIBLE",
+        durationDays: 0,
+        apyBps: 720,
+        // 7.20% APY
+        minStakeUnits: PrecisionMath.parseToUnits("10", 6).toString(),
+        maxStakeUnits: PrecisionMath.parseToUnits("250000", 6).toString(),
+        totalCapUnits: PrecisionMath.parseToUnits("5000000", 6).toString(),
+        earlyRedeemAllowed: true,
+        earlyRedeemPenaltyBps: 0,
+        autoCompoundSupported: true,
+        status: "ACTIVE",
+        isFeatured: true,
+        custodyNote: "Segregated Earn Custody Account \xB7 Daily 00:00 UTC Yield Distribution"
+      },
+      {
+        id: "vault-usdt-90d",
+        asset: "USDT",
+        name: "Tether USD 90-Day Prime Term",
+        type: "FIXED",
+        durationDays: 90,
+        apyBps: 1150,
+        // 11.50% APY
+        minStakeUnits: PrecisionMath.parseToUnits("100", 6).toString(),
+        maxStakeUnits: PrecisionMath.parseToUnits("500000", 6).toString(),
+        totalCapUnits: PrecisionMath.parseToUnits("10000000", 6).toString(),
+        earlyRedeemAllowed: true,
+        earlyRedeemPenaltyBps: 150,
+        // 1.50% principal penalty if redeemed before maturity
+        autoCompoundSupported: false,
+        status: "ACTIVE",
+        isFeatured: true,
+        custodyNote: "Locked Institutional Term Custody \xB7 Accrued Yield Daily UTC"
+      },
+      {
+        id: "vault-idr-flex",
+        asset: "IDR",
+        name: "Rupiah Treasury Flexible Yield",
+        type: "FLEXIBLE",
+        durationDays: 0,
+        apyBps: 580,
+        // 5.80% APY
+        minStakeUnits: PrecisionMath.parseToUnits("100000", 2).toString(),
+        // Rp 100,000
+        maxStakeUnits: PrecisionMath.parseToUnits("2000000000", 2).toString(),
+        // Rp 2B
+        totalCapUnits: PrecisionMath.parseToUnits("50000000000", 2).toString(),
+        // Rp 50B
+        earlyRedeemAllowed: true,
+        earlyRedeemPenaltyBps: 0,
+        autoCompoundSupported: true,
+        status: "ACTIVE",
+        isFeatured: false,
+        custodyNote: "IDR Segregated Liquidity Reserve \xB7 Instant Flexible Redemption"
+      },
+      {
+        id: "vault-btc-60d",
+        asset: "BTC",
+        name: "Bitcoin Prime 60-Day Vault",
+        type: "FIXED",
+        durationDays: 60,
+        apyBps: 425,
+        // 4.25% APY
+        minStakeUnits: PrecisionMath.parseToUnits("0.001", 8).toString(),
+        maxStakeUnits: PrecisionMath.parseToUnits("25", 8).toString(),
+        totalCapUnits: PrecisionMath.parseToUnits("250", 8).toString(),
+        earlyRedeemAllowed: true,
+        earlyRedeemPenaltyBps: 100,
+        // 1.00%
+        autoCompoundSupported: false,
+        status: "ACTIVE",
+        isFeatured: true,
+        custodyNote: "Cold-Vault Segregated Custody \xB7 Guaranteed Principal Return"
+      },
+      {
+        id: "vault-eth-flex",
+        asset: "ETH",
+        name: "Ethereum Validator Liquid Staking",
+        type: "STAKING",
+        durationDays: 0,
+        apyBps: 540,
+        // 5.40% APY
+        minStakeUnits: PrecisionMath.parseToUnits("0.01", 8).toString(),
+        maxStakeUnits: PrecisionMath.parseToUnits("500", 8).toString(),
+        totalCapUnits: PrecisionMath.parseToUnits("5000", 8).toString(),
+        earlyRedeemAllowed: true,
+        earlyRedeemPenaltyBps: 0,
+        autoCompoundSupported: true,
+        status: "ACTIVE",
+        isFeatured: false,
+        custodyNote: "On-Chain Validator Delegation Pool \xB7 Compounding Supported"
+      },
+      {
+        id: "vault-sol-30d",
+        asset: "SOL",
+        name: "Solana 30-Day Validator Staking",
+        type: "STAKING",
+        durationDays: 30,
+        apyBps: 780,
+        // 7.80% APY
+        minStakeUnits: PrecisionMath.parseToUnits("0.5", 8).toString(),
+        maxStakeUnits: PrecisionMath.parseToUnits("5000", 8).toString(),
+        totalCapUnits: PrecisionMath.parseToUnits("50000", 8).toString(),
+        earlyRedeemAllowed: true,
+        earlyRedeemPenaltyBps: 120,
+        autoCompoundSupported: false,
+        status: "ACTIVE",
+        isFeatured: false,
+        custodyNote: "Delegated Solana Epoch Staking \xB7 30-Day Institutional Term"
+      },
+      {
+        id: "vault-ton-launch",
+        asset: "TON",
+        name: "TON Network Ecosystem Launchpool",
+        type: "LAUNCHPOOL",
+        durationDays: 0,
+        apyBps: 1240,
+        // 12.40% APY
+        minStakeUnits: PrecisionMath.parseToUnits("5", 8).toString(),
+        maxStakeUnits: PrecisionMath.parseToUnits("25000", 8).toString(),
+        totalCapUnits: PrecisionMath.parseToUnits("250000", 8).toString(),
+        earlyRedeemAllowed: true,
+        earlyRedeemPenaltyBps: 0,
+        autoCompoundSupported: true,
+        status: "ACTIVE",
+        isFeatured: true,
+        custodyNote: "Ecosystem Staking Pool \xB7 Flexible Unstake Anytime"
+      }
+    ];
+    for (const c of candidates) {
+      if (!activeAssetSymbols.has(c.asset)) continue;
+      db.earnVaults.set(c.id, {
+        ...c,
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+    db.scheduleSave();
+  }
+  /**
+   * Aggregates live TVL & staker counts directly from persisted EarnPosition entries.
+   */
+  getVaultLiveStats(vaultId) {
+    let totalStakedUnits = 0n;
+    const stakerUsers = /* @__PURE__ */ new Set();
+    let activePositionsCount = 0;
+    for (const pos of db.earnPositions.values()) {
+      if (pos.vaultId !== vaultId) continue;
+      if (pos.status === "REDEEMED") continue;
+      const pUnits = BigInt(pos.principalUnits || "0");
+      if (pUnits > 0n) {
+        totalStakedUnits += pUnits;
+        stakerUsers.add(pos.userId);
+        activePositionsCount += 1;
+      }
+    }
+    return {
+      totalStakedUnits,
+      activeStakersCount: stakerUsers.size,
+      activePositionsCount
+    };
+  }
+  enrichVault(vault) {
+    const assetInfo = this.resolveAssetInfo(vault.asset);
+    const stats = this.getVaultLiveStats(vault.id);
+    const capUnits = BigInt(vault.totalCapUnits || "0");
+    const remainingCapUnits = capUnits > 0n ? capUnits > stats.totalStakedUnits ? capUnits - stats.totalStakedUnits : 0n : 0n;
+    let utilizationBps = 0;
+    if (capUnits > 0n) {
+      utilizationBps = Number(stats.totalStakedUnits * 10000n / capUnits);
+      if (utilizationBps > 1e4) utilizationBps = 1e4;
+    }
+    const vals = this.unitsToUsdIdr(stats.totalStakedUnits, assetInfo.decimals, vault.asset);
+    return {
+      ...vault,
+      decimals: assetInfo.decimals,
+      assetName: assetInfo.name,
+      assetLogoUrl: assetInfo.logoUrl,
+      apyPct: vault.apyBps / 100,
+      totalStakedUnits: stats.totalStakedUnits.toString(),
+      totalStakedDisplay: PrecisionMath.formatFromUnits(stats.totalStakedUnits, assetInfo.decimals, true),
+      totalStakedUsd: vals.usd,
+      totalStakedIdr: vals.idr,
+      remainingCapUnits: remainingCapUnits.toString(),
+      utilizationBps,
+      activeStakersCount: stats.activeStakersCount,
+      activePositionsCount: stats.activePositionsCount
+    };
+  }
+  listPublicVaults() {
+    this.ensureDefaultVaults();
+    const vaults = Array.from(db.earnVaults.values()).filter((v) => v.status !== "CLOSED").map((v) => this.enrichVault(v)).sort((a, b) => Number(b.isFeatured) - Number(a.isFeatured) || b.apyBps - a.apyBps);
+    const uniqueStakers = /* @__PURE__ */ new Set();
+    let totalTvlUsd = 0;
+    let totalTvlIdr = 0;
+    for (const pos of db.earnPositions.values()) {
+      if (pos.status !== "REDEEMED" && BigInt(pos.principalUnits || "0") > 0n) {
+        uniqueStakers.add(pos.userId);
+      }
+    }
+    for (const v of vaults) {
+      totalTvlUsd += v.totalStakedUsd;
+      totalTvlIdr += v.totalStakedIdr;
+    }
+    let totalYieldDistributedUsd = 0;
+    for (const payout of db.earnPayouts) {
+      const vals = this.unitsToUsdIdr(BigInt(payout.amountUnits || "0"), payout.decimals, payout.asset);
+      totalYieldDistributedUsd += vals.usd;
+    }
+    return {
+      vaults,
+      platformStats: {
+        totalVaults: vaults.length,
+        activeVaults: vaults.filter((v) => v.status === "ACTIVE").length,
+        totalStakersCount: uniqueStakers.size,
+        totalValueLockedUsd: Math.round(totalTvlUsd * 100) / 100,
+        totalValueLockedIdr: Math.round(totalTvlIdr),
+        totalYieldDistributedUsd: Math.round(totalYieldDistributedUsd * 100) / 100
+      }
+    };
+  }
+  listAdminVaults() {
+    this.ensureDefaultVaults();
+    return Array.from(db.earnVaults.values()).map((v) => this.enrichVault(v)).sort((a, b) => b.createdAt - a.createdAt);
+  }
+  calculateDailyYieldUnits(principalUnits, apyBps) {
+    if (principalUnits <= 0n || apyBps <= 0) return 0n;
+    return principalUnits * BigInt(apyBps) / 3650000n;
+  }
+  enrichPosition(pos, nowMs = Date.now()) {
+    const vault = db.earnVaults.get(pos.vaultId);
+    const effectiveApyBps = vault && vault.durationDays === 0 ? vault.apyBps : pos.apyBps;
+    const principalUnits = BigInt(pos.principalUnits || "0");
+    const accruedUnits = BigInt(pos.accruedYieldUnits || "0");
+    const claimedUnits = BigInt(pos.claimedYieldUnits || "0");
+    const totalEarnedUnits = BigInt(pos.totalYieldEarnedUnits || "0");
+    const dailyEstUnits = pos.status === "REDEEMED" ? 0n : this.calculateDailyYieldUnits(principalUnits, effectiveApyBps);
+    const elapsedMs = pos.status === "ACTIVE" && nowMs > pos.lastAccruedAt ? BigInt(Math.min(MS_PER_DAY, nowMs - pos.lastAccruedAt)) : 0n;
+    const liveAccruingUnits = pos.status === "ACTIVE" && elapsedMs > 0n ? principalUnits * BigInt(effectiveApyBps) * elapsedMs / (3650000n * BigInt(MS_PER_DAY)) : 0n;
+    const principalVals = this.unitsToUsdIdr(principalUnits, pos.decimals, pos.asset);
+    const isMatured = pos.maturesAt !== null ? nowMs >= pos.maturesAt : true;
+    return {
+      ...pos,
+      apyBps: effectiveApyBps,
+      vaultName: vault?.name || `${pos.asset} Vault`,
+      vaultType: vault?.type || (pos.durationDays === 0 ? "FLEXIBLE" : "FIXED"),
+      vaultStatus: vault?.status || "ACTIVE",
+      earlyRedeemAllowed: vault ? vault.earlyRedeemAllowed : true,
+      earlyRedeemPenaltyBps: vault ? vault.earlyRedeemPenaltyBps : 0,
+      autoCompoundSupported: vault ? vault.autoCompoundSupported : false,
+      apyPct: effectiveApyBps / 100,
+      principalDisplay: PrecisionMath.formatFromUnits(principalUnits, pos.decimals, true),
+      principalUsd: principalVals.usd,
+      principalIdr: principalVals.idr,
+      accruedYieldDisplay: PrecisionMath.formatFromUnits(accruedUnits, pos.decimals, true),
+      claimedYieldDisplay: PrecisionMath.formatFromUnits(claimedUnits, pos.decimals, true),
+      totalYieldEarnedDisplay: PrecisionMath.formatFromUnits(totalEarnedUnits, pos.decimals, true),
+      liveAccruingYieldUnits: liveAccruingUnits.toString(),
+      liveAccruingYieldDisplay: PrecisionMath.formatFromUnits(liveAccruingUnits, pos.decimals, true),
+      dailyEstimatedYieldUnits: dailyEstUnits.toString(),
+      dailyEstimatedYieldDisplay: PrecisionMath.formatFromUnits(dailyEstUnits, pos.decimals, true),
+      isMatured,
+      canClaim: pos.status !== "REDEEMED" && accruedUnits > 0n,
+      canRedeem: pos.status !== "REDEEMED" && principalUnits > 0n && (isMatured || Boolean(vault?.earlyRedeemAllowed))
+    };
+  }
+  getUserSummary(userId) {
+    this.ensureDefaultVaults();
+    const now = Date.now();
+    this.runDailyYieldSettlement(now);
+    const vaults = this.listPublicVaults();
+    const positions = Array.from(db.earnPositions.values()).filter((p) => p.userId === userId).sort((a, b) => b.startedAt - a.startedAt).map((p) => this.enrichPosition(p, now));
+    const activePositions = positions.filter((p) => p.status !== "REDEEMED");
+    let totalUserStakedUsd = 0;
+    let totalUserStakedIdr = 0;
+    let totalUserClaimableUsd = 0;
+    let totalUserEarnedUsd = 0;
+    let weightedApyNumerator = 0;
+    for (const p of activePositions) {
+      totalUserStakedUsd += p.principalUsd;
+      totalUserStakedIdr += p.principalIdr;
+      weightedApyNumerator += p.principalUsd * p.apyPct;
+      totalUserClaimableUsd += this.unitsToUsdIdr(BigInt(p.accruedYieldUnits), p.decimals, p.asset).usd;
+    }
+    for (const p of positions) {
+      totalUserEarnedUsd += this.unitsToUsdIdr(BigInt(p.totalYieldEarnedUnits), p.decimals, p.asset).usd;
+    }
+    const avgApyPct = totalUserStakedUsd > 0 ? Math.round(weightedApyNumerator / totalUserStakedUsd * 100) / 100 : 0;
+    const walletBalances = {};
+    for (const v of vaults.vaults) {
+      if (walletBalances[v.asset]) continue;
+      const acc = db.getAccount(userId, v.asset);
+      const avail = acc ? BigInt(acc.balanceAvailable) : 0n;
+      walletBalances[v.asset] = {
+        availableUnits: avail.toString(),
+        availableDisplay: PrecisionMath.formatFromUnits(avail, v.decimals, true),
+        decimals: v.decimals
+      };
+    }
+    const payouts = db.earnPayouts.filter((r) => r.userId === userId).sort((a, b) => b.createdAt - a.createdAt).slice(0, 100).map((r) => ({
+      ...r,
+      amountDisplay: PrecisionMath.formatFromUnits(BigInt(r.amountUnits || "0"), r.decimals, true),
+      apyPct: r.apyBps / 100
+    }));
+    return {
+      ...vaults,
+      walletBalances,
+      portfolio: {
+        activePositionsCount: activePositions.length,
+        totalStakedUsd: Math.round(totalUserStakedUsd * 100) / 100,
+        totalStakedIdr: Math.round(totalUserStakedIdr),
+        totalClaimableUsd: Math.round(totalUserClaimableUsd * 100) / 100,
+        totalYieldEarnedUsd: Math.round(totalUserEarnedUsd * 100) / 100,
+        weightedAvgApyPct: avgApyPct
+      },
+      positions,
+      payouts
+    };
+  }
+  /**
+   * Subscribes user principal into a vault using atomic double-entry custody transfer.
+   */
+  subscribeToVault(params) {
+    this.ensureDefaultVaults();
+    const { userId, vaultId, amount, autoCompound, idempotencyKey } = params;
+    const user = db.users.get(userId);
+    if (!user) throw new Error("Akun pengguna tidak ditemukan");
+    if (user.status === "frozen" || user.status === "suspended") {
+      throw new Error("Akun Anda dibatasi/dibekukan. Subscription Earn tidak diizinkan.");
+    }
+    const vault = db.earnVaults.get(vaultId);
+    if (!vault) throw new Error("Vault Earn tidak ditemukan");
+    if (vault.status !== "ACTIVE") {
+      throw new Error(`Vault ${vault.name} sedang tidak aktif (${vault.status})`);
+    }
+    const assetInfo = this.resolveAssetInfo(vault.asset);
+    if (assetInfo.status !== "ACTIVE") {
+      throw new Error(`Aset ${vault.asset} tidak berstatus ACTIVE untuk staking`);
+    }
+    if (idempotencyKey) {
+      for (const existing of db.earnPositions.values()) {
+        if (existing.userId === userId && existing.idempotencyKey === idempotencyKey) {
+          return this.enrichPosition(existing);
+        }
+      }
+    }
+    const amountUnits = PrecisionMath.parseToUnits(String(amount).trim(), assetInfo.decimals);
+    if (amountUnits <= 0n) {
+      throw new Error("Jumlah stake harus lebih besar dari 0");
+    }
+    const minUnits = BigInt(vault.minStakeUnits || "0");
+    if (amountUnits < minUnits) {
+      throw new Error(
+        `Minimum stake untuk vault ini adalah ${PrecisionMath.formatFromUnits(minUnits, assetInfo.decimals, true)} ${vault.asset}`
+      );
+    }
+    const maxUnits = BigInt(vault.maxStakeUnits || "0");
+    if (maxUnits > 0n && amountUnits > maxUnits) {
+      throw new Error(
+        `Maksimum stake per transaksi adalah ${PrecisionMath.formatFromUnits(maxUnits, assetInfo.decimals, true)} ${vault.asset}`
+      );
+    }
+    const liveStats = this.getVaultLiveStats(vault.id);
+    const totalCapUnits = BigInt(vault.totalCapUnits || "0");
+    if (totalCapUnits > 0n && liveStats.totalStakedUnits + amountUnits > totalCapUnits) {
+      const rem = totalCapUnits > liveStats.totalStakedUnits ? totalCapUnits - liveStats.totalStakedUnits : 0n;
+      throw new Error(
+        `Kuota kapasitas vault tidak mencukupi. Sisa kapasitas: ${PrecisionMath.formatFromUnits(rem, assetInfo.decimals, true)} ${vault.asset}`
+      );
+    }
+    const userAcc = db.getAccount(userId, vault.asset);
+    const availUnits = userAcc ? BigInt(userAcc.balanceAvailable) : 0n;
+    if (!userAcc || availUnits < amountUnits) {
+      throw new Error(
+        `Saldo ${vault.asset} tersedia tidak mencukupi. Tersedia: ${PrecisionMath.formatFromUnits(availUnits, assetInfo.decimals, true)} ${vault.asset}`
+      );
+    }
+    const custodyAcc = db.createOrGetAccount(SYSTEM_EARN_CUSTODY_ID, vault.asset);
+    const positionId = `earn-pos-${crypto17.randomUUID().slice(0, 12)}`;
+    const now = Date.now();
+    const journalKey = idempotencyKey ? `earn-stake:${userId}:${idempotencyKey}` : `earn-stake:${positionId}`;
+    const { journal } = LedgerService.executeJournal({
+      idempotencyKey: journalKey,
+      txType: "EARN_STAKE",
+      referenceId: positionId,
+      description: `Earn Stake ${PrecisionMath.formatFromUnits(amountUnits, assetInfo.decimals, true)} ${vault.asset} into ${vault.name}`,
+      entries: [
+        { accountId: userAcc.id, entryType: "DEBIT", amount: amountUnits },
+        { accountId: custodyAcc.id, entryType: "CREDIT", amount: amountUnits }
+      ]
+    });
+    const position = {
+      id: positionId,
+      userId,
+      vaultId: vault.id,
+      asset: vault.asset,
+      decimals: assetInfo.decimals,
+      principalUnits: amountUnits.toString(),
+      initialPrincipalUnits: amountUnits.toString(),
+      apyBps: vault.apyBps,
+      durationDays: vault.durationDays,
+      autoCompound: vault.autoCompoundSupported ? Boolean(autoCompound) : false,
+      status: "ACTIVE",
+      accruedYieldUnits: "0",
+      claimedYieldUnits: "0",
+      totalYieldEarnedUnits: "0",
+      lastSettlementDayIndex: Math.floor(now / MS_PER_DAY),
+      lastAccruedAt: now,
+      startedAt: now,
+      maturesAt: vault.durationDays > 0 ? now + vault.durationDays * MS_PER_DAY : null,
+      stakeJournalId: journal.id,
+      idempotencyKey,
+      updatedAt: now
+    };
+    db.earnPositions.set(position.id, position);
+    db.auditLogs.push({
+      id: crypto17.randomUUID(),
+      actorId: userId,
+      action: "EARN_POSITION_CREATED",
+      resource: `earn_pos:${position.id}`,
+      details: `User ${user.email} staked ${PrecisionMath.formatFromUnits(amountUnits, assetInfo.decimals, true)} ${vault.asset} in ${vault.id} (APY ${vault.apyBps / 100}%, Journal ${journal.id})`,
+      createdAt: now
+    });
+    db.scheduleSave();
+    return this.enrichPosition(position, now);
+  }
+  /**
+   * Distributes daily UTC yield across eligible positions.
+   * Safe & idempotent: duplicate runs on the same day index never double-credit.
+   */
+  runDailyYieldSettlement(nowMs = Date.now(), options) {
+    this.ensureDefaultVaults();
+    const currentDayIndex = Math.floor(nowMs / MS_PER_DAY);
+    let settledPositions = 0;
+    let payoutsCreated = 0;
+    let autoCompoundedCount = 0;
+    for (const pos of db.earnPositions.values()) {
+      if (pos.status === "REDEEMED") continue;
+      const vault = db.earnVaults.get(pos.vaultId);
+      const effectiveApyBps = vault && vault.durationDays === 0 ? vault.apyBps : pos.apyBps;
+      let principalUnits = BigInt(pos.principalUnits || "0");
+      if (principalUnits <= 0n) continue;
+      const maturityDayIndex = pos.maturesAt !== null ? Math.floor(pos.maturesAt / MS_PER_DAY) : currentDayIndex;
+      const targetDayIndex = options?.forceCycle ? pos.lastSettlementDayIndex + 1 : Math.min(currentDayIndex, maturityDayIndex);
+      let positionUpdated = false;
+      if (targetDayIndex > pos.lastSettlementDayIndex) {
+        const startDay = pos.lastSettlementDayIndex + 1;
+        const endDay = Math.min(targetDayIndex, startDay + 365);
+        for (let dayIdx = startDay; dayIdx <= endDay; dayIdx++) {
+          const dailyYield = this.calculateDailyYieldUnits(principalUnits, effectiveApyBps);
+          if (dailyYield <= 0n) {
+            pos.lastSettlementDayIndex = dayIdx;
+            pos.lastAccruedAt = nowMs;
+            positionUpdated = true;
+            continue;
+          }
+          if (pos.autoCompound && vault?.autoCompoundSupported) {
+            const custodyAcc = db.createOrGetAccount(SYSTEM_EARN_CUSTODY_ID, pos.asset);
+            const idemKey = `earn-settle:${pos.id}:day:${dayIdx}`;
+            const alreadySettled = db.journalIdempotencyIndex.has(idemKey);
+            if (!alreadySettled) {
+              const funding = this.buildYieldFundingDebits(pos.asset, dailyYield);
+              const { journal } = LedgerService.executeJournal({
+                idempotencyKey: idemKey,
+                txType: "EARN_YIELD",
+                referenceId: pos.id,
+                description: `Earn Auto-Compound Yield Day #${dayIdx} for ${pos.id} (${pos.asset}) [${funding.fundingSource}]`,
+                entries: [
+                  ...funding.entries,
+                  { accountId: custodyAcc.id, entryType: "CREDIT", amount: dailyYield }
+                ]
+              });
+              principalUnits += dailyYield;
+              pos.principalUnits = principalUnits.toString();
+              pos.totalYieldEarnedUnits = (BigInt(pos.totalYieldEarnedUnits || "0") + dailyYield).toString();
+              db.earnPayouts.push({
+                id: `earn-pay-${crypto17.randomUUID().slice(0, 12)}`,
+                userId: pos.userId,
+                positionId: pos.id,
+                vaultId: pos.vaultId,
+                asset: pos.asset,
+                decimals: pos.decimals,
+                payoutType: "AUTO_COMPOUND",
+                amountUnits: dailyYield.toString(),
+                apyBps: effectiveApyBps,
+                settlementDayIndex: dayIdx,
+                journalId: journal.id,
+                fundingSource: funding.fundingSource,
+                feeFundedUnits: funding.feeFundedUnits.toString(),
+                treasuryFundedUnits: funding.treasuryFundedUnits.toString(),
+                createdAt: nowMs
+              });
+              payoutsCreated += 1;
+              autoCompoundedCount += 1;
+            }
+          } else {
+            const payoutKey = `earn-accrual:${pos.id}:day:${dayIdx}`;
+            const alreadyRecorded = db.earnPayouts.some(
+              (p) => p.positionId === pos.id && p.payoutType === "DAILY_SETTLEMENT" && p.settlementDayIndex === dayIdx
+            );
+            if (!alreadyRecorded) {
+              pos.accruedYieldUnits = (BigInt(pos.accruedYieldUnits || "0") + dailyYield).toString();
+              pos.totalYieldEarnedUnits = (BigInt(pos.totalYieldEarnedUnits || "0") + dailyYield).toString();
+              db.earnPayouts.push({
+                id: `earn-pay-${crypto17.randomUUID().slice(0, 12)}`,
+                userId: pos.userId,
+                positionId: pos.id,
+                vaultId: pos.vaultId,
+                asset: pos.asset,
+                decimals: pos.decimals,
+                payoutType: "DAILY_SETTLEMENT",
+                amountUnits: dailyYield.toString(),
+                apyBps: effectiveApyBps,
+                settlementDayIndex: dayIdx,
+                journalId: payoutKey,
+                fundingSource: "ACCRUAL_LEDGER",
+                feeFundedUnits: "0",
+                treasuryFundedUnits: "0",
+                createdAt: nowMs
+              });
+              payoutsCreated += 1;
+            }
+          }
+          pos.lastSettlementDayIndex = dayIdx;
+          pos.lastAccruedAt = nowMs;
+          positionUpdated = true;
+        }
+      }
+      if (pos.maturesAt !== null && nowMs >= pos.maturesAt && pos.status === "ACTIVE") {
+        pos.status = "MATURED";
+        positionUpdated = true;
+      }
+      if (positionUpdated) {
+        pos.updatedAt = nowMs;
+        db.earnPositions.set(pos.id, pos);
+        settledPositions += 1;
+      }
+    }
+    if (options?.actorId) {
+      db.auditLogs.push({
+        id: crypto17.randomUUID(),
+        actorId: options.actorId,
+        action: "EARN_YIELD_SETTLEMENT_RUN",
+        resource: "earn:yield-settlement",
+        details: `Yield settlement completed (${options.forceCycle ? "Manual Epoch" : "UTC Daily"}): ${settledPositions} positions updated, ${payoutsCreated} payouts (${autoCompoundedCount} auto-compounded).`,
+        createdAt: nowMs
+      });
+    }
+    if (settledPositions > 0 || options?.actorId) {
+      db.scheduleSave();
+    }
+    return { settledPositions, payoutsCreated, autoCompoundedCount };
+  }
+  /**
+   * Claims settled accrued yield to user's Spot account atomically.
+   */
+  claimPositionYield(params) {
+    const { userId, positionId } = params;
+    const pos = db.earnPositions.get(positionId);
+    if (!pos) throw new Error("Posisi Earn tidak ditemukan");
+    if (pos.userId !== userId) throw new Error("Anda tidak memiliki otorisasi atas posisi Earn ini");
+    if (pos.status === "REDEEMED") throw new Error("Posisi Earn ini sudah dicairkan");
+    const now = Date.now();
+    this.runDailyYieldSettlement(now);
+    const claimableUnits = BigInt(pos.accruedYieldUnits || "0");
+    if (claimableUnits <= 0n) {
+      throw new Error(
+        "Belum ada imbal hasil terselesaikan yang tersedia untuk diklaim. Distribusi imbal hasil dicatat setiap siklus harian UTC."
+      );
+    }
+    const vault = db.earnVaults.get(pos.vaultId);
+    const effectiveApyBps = vault && vault.durationDays === 0 ? vault.apyBps : pos.apyBps;
+    const userAcc = db.createOrGetAccount(userId, pos.asset);
+    const funding = this.buildYieldFundingDebits(pos.asset, claimableUnits);
+    const { journal } = LedgerService.executeJournal({
+      idempotencyKey: `earn-claim:${pos.id}:${pos.claimedYieldUnits}:${now}`,
+      txType: "EARN_YIELD",
+      referenceId: pos.id,
+      description: `Manual Yield Claim ${PrecisionMath.formatFromUnits(claimableUnits, pos.decimals, true)} ${pos.asset} from ${pos.id} [${funding.fundingSource}]`,
+      entries: [
+        ...funding.entries,
+        { accountId: userAcc.id, entryType: "CREDIT", amount: claimableUnits }
+      ]
+    });
+    pos.accruedYieldUnits = "0";
+    pos.claimedYieldUnits = (BigInt(pos.claimedYieldUnits || "0") + claimableUnits).toString();
+    pos.updatedAt = now;
+    db.earnPositions.set(pos.id, pos);
+    const payout = {
+      id: `earn-pay-${crypto17.randomUUID().slice(0, 12)}`,
+      userId,
+      positionId: pos.id,
+      vaultId: pos.vaultId,
+      asset: pos.asset,
+      decimals: pos.decimals,
+      payoutType: "MANUAL_CLAIM",
+      amountUnits: claimableUnits.toString(),
+      apyBps: effectiveApyBps,
+      journalId: journal.id,
+      fundingSource: funding.fundingSource,
+      feeFundedUnits: funding.feeFundedUnits.toString(),
+      treasuryFundedUnits: funding.treasuryFundedUnits.toString(),
+      createdAt: now
+    };
+    db.earnPayouts.push(payout);
+    db.auditLogs.push({
+      id: crypto17.randomUUID(),
+      actorId: userId,
+      action: "EARN_YIELD_CLAIMED",
+      resource: `earn_pos:${pos.id}`,
+      details: `Claimed ${PrecisionMath.formatFromUnits(claimableUnits, pos.decimals, true)} ${pos.asset} yield (${funding.fundingSource}: Fee Pool ${PrecisionMath.formatFromUnits(funding.feeFundedUnits, pos.decimals, true)}, Treasury ${PrecisionMath.formatFromUnits(funding.treasuryFundedUnits, pos.decimals, true)}, Journal ${journal.id})`,
+      createdAt: now
+    });
+    db.scheduleSave();
+    return {
+      payout,
+      position: this.enrichPosition(pos, now)
+    };
+  }
+  /**
+   * Redeems principal (partial for flexible, full for fixed/matured or early-exit).
+   */
+  redeemPosition(params) {
+    const { userId, positionId, amount, confirmEarlyRedeem } = params;
+    const pos = db.earnPositions.get(positionId);
+    if (!pos) throw new Error("Posisi Earn tidak ditemukan");
+    if (pos.userId !== userId) throw new Error("Anda tidak memiliki otorisasi atas posisi Earn ini");
+    if (pos.status === "REDEEMED") throw new Error("Posisi Earn sudah diredeem sebelumnya");
+    const now = Date.now();
+    this.runDailyYieldSettlement(now);
+    const vault = db.earnVaults.get(pos.vaultId);
+    const currentPrincipal = BigInt(pos.principalUnits || "0");
+    if (currentPrincipal <= 0n) throw new Error("Saldo pokok posisi kosong");
+    const isEarly = pos.maturesAt !== null && now < pos.maturesAt;
+    if (isEarly) {
+      if (!vault?.earlyRedeemAllowed) {
+        throw new Error(
+          `Posisi terkunci hingga jatuh tempo (${new Date(pos.maturesAt).toISOString()}) dan pencairan dini tidak diizinkan.`
+        );
+      }
+      if (!confirmEarlyRedeem) {
+        throw new Error(
+          `Konfirmasi pencairan dini diperlukan. Penalti ${((vault.earlyRedeemPenaltyBps || 0) / 100).toFixed(2)}% akan dikenakan.`
+        );
+      }
+    }
+    let redeemUnits = currentPrincipal;
+    if (amount !== void 0 && String(amount).trim() !== "") {
+      if (pos.durationDays > 0 || isEarly) {
+        throw new Error("Pencairan sebagian hanya tersedia untuk produk Flexible.");
+      }
+      redeemUnits = PrecisionMath.parseToUnits(String(amount).trim(), pos.decimals);
+      if (redeemUnits <= 0n || redeemUnits > currentPrincipal) {
+        throw new Error("Nominal pencairan tidak valid atau melebihi saldo posisi");
+      }
+      const remaining = currentPrincipal - redeemUnits;
+      const minUnits = BigInt(vault?.minStakeUnits || "0");
+      if (remaining > 0n && remaining < minUnits) {
+        throw new Error(
+          `Sisa pokok setelah pencairan sebagian harus minimal ${PrecisionMath.formatFromUnits(minUnits, pos.decimals, true)} ${pos.asset} atau cairkan penuh.`
+        );
+      }
+    }
+    const fullRedeem = redeemUnits === currentPrincipal;
+    const custodyAcc = db.createOrGetAccount(SYSTEM_EARN_CUSTODY_ID, pos.asset);
+    const userAcc = db.createOrGetAccount(userId, pos.asset);
+    const treasuryAcc = db.createOrGetAccount(SYSTEM_TREASURY_ID, pos.asset);
+    const penaltyBps = isEarly ? vault?.earlyRedeemPenaltyBps || 0 : 0;
+    const penaltyUnits = penaltyBps > 0 ? PrecisionMath.calculateFee(redeemUnits, penaltyBps) : 0n;
+    const returnedPrincipalUnits = redeemUnits - penaltyUnits;
+    const entries = [
+      { accountId: custodyAcc.id, entryType: "DEBIT", amount: redeemUnits }
+    ];
+    if (returnedPrincipalUnits > 0n) {
+      entries.push({ accountId: userAcc.id, entryType: "CREDIT", amount: returnedPrincipalUnits });
+    }
+    if (penaltyUnits > 0n) {
+      entries.push({ accountId: treasuryAcc.id, entryType: "CREDIT", amount: penaltyUnits });
+    }
+    const { journal } = LedgerService.executeJournal({
+      idempotencyKey: `earn-redeem:${pos.id}:${currentPrincipal.toString()}:${redeemUnits.toString()}:${now}`,
+      txType: "EARN_REDEEM",
+      referenceId: pos.id,
+      description: `Earn Redemption ${PrecisionMath.formatFromUnits(returnedPrincipalUnits, pos.decimals, true)} ${pos.asset} from ${pos.id}${isEarly ? " (Early Redeem)" : ""}`,
+      entries
+    });
+    let settledYieldUnits = 0n;
+    if (isEarly) {
+      pos.accruedYieldUnits = "0";
+    } else if (fullRedeem && BigInt(pos.accruedYieldUnits || "0") > 0n) {
+      settledYieldUnits = BigInt(pos.accruedYieldUnits);
+      const yieldFunding = this.buildYieldFundingDebits(pos.asset, settledYieldUnits);
+      const { journal: yieldJournal } = LedgerService.executeJournal({
+        idempotencyKey: `earn-redeem-yield:${pos.id}:${now}`,
+        txType: "EARN_YIELD",
+        referenceId: pos.id,
+        description: `Final Yield Settlement on Redemption ${PrecisionMath.formatFromUnits(settledYieldUnits, pos.decimals, true)} ${pos.asset} [${yieldFunding.fundingSource}]`,
+        entries: [
+          ...yieldFunding.entries,
+          { accountId: userAcc.id, entryType: "CREDIT", amount: settledYieldUnits }
+        ]
+      });
+      pos.accruedYieldUnits = "0";
+      pos.claimedYieldUnits = (BigInt(pos.claimedYieldUnits || "0") + settledYieldUnits).toString();
+      db.earnPayouts.push({
+        id: `earn-pay-${crypto17.randomUUID().slice(0, 12)}`,
+        userId,
+        positionId: pos.id,
+        vaultId: pos.vaultId,
+        asset: pos.asset,
+        decimals: pos.decimals,
+        payoutType: "REDEMPTION_SETTLEMENT",
+        amountUnits: settledYieldUnits.toString(),
+        apyBps: vault && vault.durationDays === 0 ? vault.apyBps : pos.apyBps,
+        journalId: yieldJournal.id,
+        fundingSource: yieldFunding.fundingSource,
+        feeFundedUnits: yieldFunding.feeFundedUnits.toString(),
+        treasuryFundedUnits: yieldFunding.treasuryFundedUnits.toString(),
+        createdAt: now
+      });
+    }
+    const remainingAfter = currentPrincipal - redeemUnits;
+    pos.principalUnits = remainingAfter.toString();
+    pos.updatedAt = now;
+    if (remainingAfter === 0n) {
+      pos.status = "REDEEMED";
+      pos.redeemedAt = now;
+      pos.redeemJournalId = journal.id;
+    }
+    db.earnPositions.set(pos.id, pos);
+    db.auditLogs.push({
+      id: crypto17.randomUUID(),
+      actorId: userId,
+      action: isEarly ? "EARN_POSITION_EARLY_REDEEMED" : "EARN_POSITION_REDEEMED",
+      resource: `earn_pos:${pos.id}`,
+      details: `Redeemed ${PrecisionMath.formatFromUnits(redeemUnits, pos.decimals, true)} ${pos.asset} (Returned ${PrecisionMath.formatFromUnits(returnedPrincipalUnits, pos.decimals, true)}, Penalty ${PrecisionMath.formatFromUnits(penaltyUnits, pos.decimals, true)}, Yield ${PrecisionMath.formatFromUnits(settledYieldUnits, pos.decimals, true)}, Journal ${journal.id})`,
+      createdAt: now
+    });
+    db.scheduleSave();
+    return {
+      position: this.enrichPosition(pos, now),
+      returnedPrincipalUnits: returnedPrincipalUnits.toString(),
+      penaltyUnits: penaltyUnits.toString(),
+      settledYieldUnits: settledYieldUnits.toString(),
+      earlyRedemption: isEarly
+    };
+  }
+  toggleAutoCompound(params) {
+    const { userId, positionId, autoCompound } = params;
+    const pos = db.earnPositions.get(positionId);
+    if (!pos) throw new Error("Posisi Earn tidak ditemukan");
+    if (pos.userId !== userId) throw new Error("Anda tidak memiliki otorisasi atas posisi Earn ini");
+    if (pos.status === "REDEEMED") throw new Error("Posisi Earn sudah dicairkan");
+    const vault = db.earnVaults.get(pos.vaultId);
+    if (autoCompound && !vault?.autoCompoundSupported) {
+      throw new Error("Vault ini tidak mendukung Auto-Compound");
+    }
+    pos.autoCompound = Boolean(autoCompound);
+    pos.updatedAt = Date.now();
+    db.earnPositions.set(pos.id, pos);
+    db.scheduleSave();
+    return this.enrichPosition(pos);
+  }
+  // ===========================================================================
+  // ADMIN CONSOLE CONTROLS
+  // ===========================================================================
+  createVault(input, adminId) {
+    this.ensureDefaultVaults();
+    const assetInfo = this.resolveAssetInfo(input.asset);
+    if (assetInfo.status !== "ACTIVE") {
+      throw new Error(`Aset ${assetInfo.symbol} harus berstatus ACTIVE sebelum dibuatkan Earn Vault`);
+    }
+    const name = String(input.name || "").trim();
+    if (name.length < 3 || name.length > 96) {
+      throw new Error("Nama vault harus antara 3 hingga 96 karakter");
+    }
+    const validTypes = ["FLEXIBLE", "FIXED", "STAKING", "LAUNCHPOOL"];
+    if (!validTypes.includes(input.type)) {
+      throw new Error("Tipe vault tidak valid");
+    }
+    const durationDays = Math.max(0, Math.floor(Number(input.durationDays) || 0));
+    if (input.type === "FLEXIBLE" && durationDays !== 0) {
+      throw new Error("Vault FLEXIBLE harus berdurasi 0 hari");
+    }
+    const apyBps = Math.round(Number(input.apyPct) * 100);
+    if (!Number.isFinite(apyBps) || apyBps < 0 || apyBps > 5e4) {
+      throw new Error("APY harus antara 0% hingga 500%");
+    }
+    const minStakeUnits = PrecisionMath.parseToUnits(String(input.minStakeTokens || "0"), assetInfo.decimals);
+    const maxStakeUnits = input.maxStakeTokens ? PrecisionMath.parseToUnits(String(input.maxStakeTokens), assetInfo.decimals) : 0n;
+    const totalCapUnits = PrecisionMath.parseToUnits(String(input.totalCapTokens || "0"), assetInfo.decimals);
+    if (minStakeUnits <= 0n) throw new Error("Minimum stake harus lebih besar dari 0");
+    if (maxStakeUnits > 0n && maxStakeUnits < minStakeUnits) {
+      throw new Error("Maksimum stake per transaksi tidak boleh lebih kecil dari minimum stake");
+    }
+    if (totalCapUnits <= 0n || totalCapUnits < minStakeUnits) {
+      throw new Error("Total kapasitas vault harus >= minimum stake");
+    }
+    const penaltyBps = Math.max(0, Math.min(2500, Math.round(Number(input.earlyRedeemPenaltyPct || 0) * 100)));
+    const slug = `${assetInfo.symbol.toLowerCase()}-${durationDays}d-${crypto17.randomBytes(2).toString("hex")}`;
+    const vaultId = input.id && /^[a-zA-Z0-9_-]{3,48}$/.test(input.id.trim()) ? input.id.trim().toLowerCase() : `vault-${slug}`;
+    if (db.earnVaults.has(vaultId)) {
+      throw new Error(`Vault ID ${vaultId} sudah terdaftar`);
+    }
+    const now = Date.now();
+    const vault = {
+      id: vaultId,
+      asset: assetInfo.symbol,
+      name,
+      type: input.type,
+      durationDays,
+      apyBps,
+      minStakeUnits: minStakeUnits.toString(),
+      maxStakeUnits: maxStakeUnits.toString(),
+      totalCapUnits: totalCapUnits.toString(),
+      earlyRedeemAllowed: input.earlyRedeemAllowed !== void 0 ? Boolean(input.earlyRedeemAllowed) : true,
+      earlyRedeemPenaltyBps: durationDays === 0 ? 0 : penaltyBps,
+      autoCompoundSupported: input.autoCompoundSupported !== void 0 ? Boolean(input.autoCompoundSupported) : durationDays === 0,
+      status: "ACTIVE",
+      isFeatured: Boolean(input.isFeatured),
+      custodyNote: String(input.custodyNote || "Segregated Institutional Earn Custody").trim(),
+      createdAt: now,
+      updatedAt: now
+    };
+    db.earnVaults.set(vault.id, vault);
+    db.auditLogs.push({
+      id: crypto17.randomUUID(),
+      actorId: adminId,
+      action: "EARN_VAULT_CREATED",
+      resource: `earn_vault:${vault.id}`,
+      details: `Created Earn Vault ${vault.id} (${vault.asset}, ${vault.type}, APY ${vault.apyBps / 100}%, Duration ${vault.durationDays}d, Cap ${PrecisionMath.formatFromUnits(totalCapUnits, assetInfo.decimals, true)} ${vault.asset})`,
+      createdAt: now
+    });
+    db.scheduleSave();
+    return this.enrichVault(vault);
+  }
+  updateVault(vaultId, patch, adminId) {
+    this.ensureDefaultVaults();
+    const vault = db.earnVaults.get(vaultId);
+    if (!vault) throw new Error("Staking pool / Earn vault tidak ditemukan");
+    const assetInfo = this.resolveAssetInfo(vault.asset);
+    const apyVal = patch.apyPct !== void 0 ? patch.apyPct : patch.apy;
+    if (apyVal !== void 0) {
+      const nextApyBps = Math.round(Number(apyVal) * 100);
+      if (!Number.isFinite(nextApyBps) || nextApyBps < 0 || nextApyBps > 5e4) {
+        throw new Error("APY tidak valid (0% - 500%)");
+      }
+      vault.apyBps = nextApyBps;
+    }
+    if (patch.status !== void 0) {
+      if (!["ACTIVE", "PAUSED", "CLOSED"].includes(patch.status)) {
+        throw new Error("Status vault tidak valid");
+      }
+      vault.status = patch.status;
+    }
+    if (patch.totalCapTokens !== void 0 && String(patch.totalCapTokens).trim() !== "") {
+      const capUnits = PrecisionMath.parseToUnits(String(patch.totalCapTokens), assetInfo.decimals);
+      if (capUnits <= 0n) throw new Error("Total kapasitas vault harus > 0");
+      vault.totalCapUnits = capUnits.toString();
+    }
+    if (patch.minStakeTokens !== void 0 && String(patch.minStakeTokens).trim() !== "") {
+      const minUnits = PrecisionMath.parseToUnits(String(patch.minStakeTokens), assetInfo.decimals);
+      if (minUnits <= 0n) throw new Error("Minimum stake harus > 0");
+      vault.minStakeUnits = minUnits.toString();
+    }
+    if (patch.maxStakeTokens !== void 0 && String(patch.maxStakeTokens).trim() !== "") {
+      const maxUnits = PrecisionMath.parseToUnits(String(patch.maxStakeTokens), assetInfo.decimals);
+      if (maxUnits < 0n) throw new Error("Maksimum stake tidak valid");
+      if (maxUnits > 0n && maxUnits < BigInt(vault.minStakeUnits)) {
+        throw new Error("Maksimum stake per transaksi tidak boleh lebih kecil dari minimum stake");
+      }
+      vault.maxStakeUnits = maxUnits.toString();
+    }
+    if (patch.earlyRedeemAllowed !== void 0) vault.earlyRedeemAllowed = Boolean(patch.earlyRedeemAllowed);
+    if (patch.earlyRedeemPenaltyPct !== void 0) {
+      vault.earlyRedeemPenaltyBps = Math.max(0, Math.min(2500, Math.round(Number(patch.earlyRedeemPenaltyPct) * 100)));
+    }
+    if (patch.autoCompoundSupported !== void 0) vault.autoCompoundSupported = Boolean(patch.autoCompoundSupported);
+    if (patch.isFeatured !== void 0) vault.isFeatured = Boolean(patch.isFeatured);
+    if (patch.name !== void 0 && patch.name.trim().length >= 3) vault.name = patch.name.trim();
+    if (patch.custodyNote !== void 0 && patch.custodyNote.trim().length >= 3) vault.custodyNote = patch.custodyNote.trim();
+    vault.updatedAt = Date.now();
+    db.earnVaults.set(vault.id, vault);
+    db.auditLogs.push({
+      id: crypto17.randomUUID(),
+      actorId: adminId,
+      action: "EARN_POOL_UPDATED",
+      resource: `earn_vault:${vault.id}`,
+      details: `Updated Earn Vault ${vault.id}: APY ${vault.apyBps / 100}%, Status ${vault.status}, Cap ${PrecisionMath.formatFromUnits(BigInt(vault.totalCapUnits), assetInfo.decimals, true)} ${vault.asset}`,
+      createdAt: vault.updatedAt
+    });
+    db.scheduleSave();
+    return this.enrichVault(vault);
+  }
+  listActiveAssetsForEarn() {
+    return Array.from(db.assets.values()).filter((a) => a.status === "ACTIVE").sort((a, b) => a.symbol.localeCompare(b.symbol)).map((a) => ({
+      symbol: a.symbol,
+      name: a.name,
+      decimals: a.decimals,
+      network: a.network,
+      logoUrl: a.logoUrl
+    }));
+  }
+  listAllPositions(limit = 100) {
+    const now = Date.now();
+    return Array.from(db.earnPositions.values()).sort((a, b) => b.startedAt - a.startedAt).slice(0, limit).map((pos) => {
+      const user = db.users.get(pos.userId);
+      return {
+        ...this.enrichPosition(pos, now),
+        userEmail: user?.email || pos.userId
+      };
+    });
+  }
+  listAdminPayouts(limit = 120) {
+    return [...db.earnPayouts].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit).map((row) => {
+      const user = db.users.get(row.userId);
+      const vault = db.earnVaults.get(row.vaultId);
+      return {
+        ...row,
+        amountDisplay: PrecisionMath.formatFromUnits(BigInt(row.amountUnits || "0"), row.decimals, true),
+        apyPct: row.apyBps / 100,
+        userEmail: user?.email || row.userId,
+        vaultName: vault?.name || row.vaultId
+      };
+    });
+  }
+  adminUnlockPosition(positionId, adminId, reason) {
+    const pos = db.earnPositions.get(positionId);
+    if (!pos) throw new Error("Posisi staking tidak ditemukan");
+    if (pos.status === "REDEEMED") throw new Error("Posisi sudah dicairkan sebelumnya");
+    const now = Date.now();
+    this.runDailyYieldSettlement(now);
+    pos.status = "MATURED";
+    pos.maturesAt = now;
+    pos.updatedAt = now;
+    db.earnPositions.set(pos.id, pos);
+    db.auditLogs.push({
+      id: crypto17.randomUUID(),
+      actorId: adminId,
+      action: "EARN_POSITION_UNLOCKED",
+      resource: `earn_pos:${pos.id}`,
+      details: `Admin unlocked fixed lockup for position ${pos.id} (${pos.asset}). Reason: ${String(reason || "Operational compliance unlock").trim()}`,
+      createdAt: now
+    });
+    db.scheduleSave();
+    const user = db.users.get(pos.userId);
+    return {
+      ...this.enrichPosition(pos, now),
+      userEmail: user?.email || pos.userId
+    };
+  }
+  /**
+   * Cryptographically verifies that SYSTEM_EARN_CUSTODY_ID ledger balances
+   * strictly equal the sum of active EarnPosition principals per asset.
+   */
+  getCustodySolvencyReport() {
+    const assetsSet = /* @__PURE__ */ new Set();
+    for (const v of db.earnVaults.values()) assetsSet.add(v.asset);
+    for (const p of db.earnPositions.values()) assetsSet.add(p.asset);
+    const rows = [];
+    let isFullySolvent = true;
+    for (const sym of Array.from(assetsSet).sort()) {
+      const assetInfo = this.resolveAssetInfo(sym);
+      const custodyAcc = db.getAccount(SYSTEM_EARN_CUSTODY_ID, sym);
+      const custodyUnits = custodyAcc ? BigInt(custodyAcc.balanceAvailable) + BigInt(custodyAcc.balanceLocked) : 0n;
+      let activePrincipalUnits = 0n;
+      let accruedLiabilityUnits = 0n;
+      for (const pos of db.earnPositions.values()) {
+        if (pos.asset !== sym || pos.status === "REDEEMED") continue;
+        activePrincipalUnits += BigInt(pos.principalUnits || "0");
+        accruedLiabilityUnits += BigInt(pos.accruedYieldUnits || "0");
+      }
+      const deltaUnits = custodyUnits - activePrincipalUnits;
+      const isBalanced = deltaUnits === 0n;
+      if (!isBalanced) isFullySolvent = false;
+      rows.push({
+        asset: sym,
+        decimals: assetInfo.decimals,
+        custodyLedgerUnits: custodyUnits.toString(),
+        custodyLedgerDisplay: PrecisionMath.formatFromUnits(custodyUnits, assetInfo.decimals, true),
+        activePrincipalUnits: activePrincipalUnits.toString(),
+        activePrincipalDisplay: PrecisionMath.formatFromUnits(activePrincipalUnits, assetInfo.decimals, true),
+        deltaUnits: deltaUnits.toString(),
+        accruedLiabilityUnits: accruedLiabilityUnits.toString(),
+        accruedLiabilityDisplay: PrecisionMath.formatFromUnits(accruedLiabilityUnits, assetInfo.decimals, true),
+        isBalanced
+      });
+    }
+    return {
+      isFullySolvent,
+      checkedAt: Date.now(),
+      assets: rows
+    };
+  }
+  resolveCurrencyDecimals(symbol) {
+    const upper = symbol.trim().toUpperCase();
+    for (const ast of db.assets.values()) {
+      if (ast.symbol.toUpperCase() === upper) return ast.decimals;
+    }
+    if (upper === "IDR") return 2;
+    if (upper === "USDT" || upper === "USDC") return 6;
+    return 8;
+  }
+  /**
+   * Computes complete live Exchange Fee Revenue across all user & MM transactions
+   * reconciled against Staking Earn yield claims & Treasury reserves.
+   */
+  getExchangeFeeAndEarnTreasuryStats() {
+    const now = Date.now();
+    const oneDayAgo = now - MS_PER_DAY;
+    const fxRateIdr = Math.max(1, fxConversionService.getCurrentRate().rate || 16350);
+    const resolveQuoteForPair = (pairId) => {
+      const pair = db.tradingPairs.get(pairId);
+      if (pair) {
+        return {
+          baseCurrency: pair.baseCurrency,
+          quoteCurrency: pair.quoteCurrency,
+          quoteDecimals: pair.quoteDecimals ?? this.resolveCurrencyDecimals(pair.quoteCurrency)
+        };
+      }
+      const parts = pairId.split("-");
+      const baseCurrency = parts[0] || pairId;
+      const quoteCurrency = parts[1] || "IDR";
+      return {
+        baseCurrency,
+        quoteCurrency,
+        quoteDecimals: this.resolveCurrencyDecimals(quoteCurrency)
+      };
+    };
+    const isDirectUser = (userId) => {
+      if (!userId || userId.startsWith("sys-")) return false;
+      const u = db.users.get(userId);
+      if (!u) return true;
+      const role = String(u.role || "USER").toUpperCase();
+      return role === "USER" || role === "COMPLIANCE";
+    };
+    const entriesByJournal = /* @__PURE__ */ new Map();
+    for (const entry of db.ledgerEntries) {
+      let arr = entriesByJournal.get(entry.journalId);
+      if (!arr) {
+        arr = [];
+        entriesByJournal.set(entry.journalId, arr);
+      }
+      arr.push(entry);
+    }
+    const currencyStats = /* @__PURE__ */ new Map();
+    const ensureCurr = (curr) => {
+      const key = curr.trim().toUpperCase();
+      let rec = currencyStats.get(key);
+      if (!rec) {
+        rec = {
+          feeEarnedUnits: 0n,
+          feeEarned24hUnits: 0n,
+          spotMakerUnits: 0n,
+          spotTakerUnits: 0n,
+          futuresUnits: 0n,
+          userDirectUnits: 0n,
+          mmBotUnits: 0n,
+          sweptUnits: 0n,
+          stakingClaimedUnits: 0n,
+          stakingClaimed24hUnits: 0n,
+          stakingFeeFundedUnits: 0n,
+          stakingTreasuryFundedUnits: 0n,
+          stakingPendingUnits: 0n
+        };
+        currencyStats.set(key, rec);
+      }
+      return rec;
+    };
+    for (const c of ["IDR", "USDT", "BTC", "ETH", "SOL"]) ensureCurr(c);
+    for (const v of db.earnVaults.values()) ensureCurr(v.asset);
+    for (const p of db.tradingPairs.values()) {
+      ensureCurr(p.quoteCurrency);
+    }
+    const pairStats = /* @__PURE__ */ new Map();
+    let totalTradesCount = 0;
+    let trades24hCount = 0;
+    for (const trade of db.trades) {
+      totalTradesCount += 1;
+      const is24h = trade.createdAt >= oneDayAgo;
+      if (is24h) trades24hCount += 1;
+      const meta = resolveQuoteForPair(trade.pairId);
+      const makerFee = BigInt(trade.makerFee || "0");
+      const takerFee = BigInt(trade.takerFee || "0");
+      const tradeTotal = makerFee + takerFee;
+      const makerUserDirect = isDirectUser(trade.makerUserId);
+      const takerUserDirect = isDirectUser(trade.takerUserId);
+      const userPortion = (makerUserDirect ? makerFee : 0n) + (takerUserDirect ? takerFee : 0n);
+      const mmPortion = tradeTotal - userPortion;
+      const cRec = ensureCurr(meta.quoteCurrency);
+      cRec.feeEarnedUnits += tradeTotal;
+      cRec.spotMakerUnits += makerFee;
+      cRec.spotTakerUnits += takerFee;
+      cRec.userDirectUnits += userPortion;
+      cRec.mmBotUnits += mmPortion;
+      if (is24h) cRec.feeEarned24hUnits += tradeTotal;
+      let pRec = pairStats.get(trade.pairId);
+      if (!pRec) {
+        pRec = {
+          pairId: trade.pairId,
+          baseCurrency: meta.baseCurrency,
+          quoteCurrency: meta.quoteCurrency,
+          quoteDecimals: meta.quoteDecimals,
+          tradeCount: 0,
+          trades24hCount: 0,
+          makerFeesUnits: 0n,
+          takerFeesUnits: 0n,
+          totalFeesUnits: 0n,
+          userFeesUnits: 0n
+        };
+        pairStats.set(trade.pairId, pRec);
+      }
+      pRec.tradeCount += 1;
+      if (is24h) pRec.trades24hCount += 1;
+      pRec.makerFeesUnits += makerFee;
+      pRec.takerFeesUnits += takerFee;
+      pRec.totalFeesUnits += tradeTotal;
+      pRec.userFeesUnits += userPortion;
+    }
+    for (const journal of db.journalTransactions.values()) {
+      if (journal.txType !== "FUTURES_FEE" && journal.txType !== "FEE_TREASURY_SWEEP") continue;
+      const entries = entriesByJournal.get(journal.id) || [];
+      if (journal.txType === "FUTURES_FEE") {
+        let debitedUserId = "";
+        for (const e of entries) {
+          if (e.entryType === "DEBIT") {
+            const debAcc = db.ledgerAccounts.get(e.accountId);
+            if (debAcc) debitedUserId = debAcc.userId;
+          }
+        }
+        const userDirect = isDirectUser(debitedUserId);
+        for (const e of entries) {
+          if (e.entryType !== "CREDIT") continue;
+          const acc = db.ledgerAccounts.get(e.accountId);
+          if (!acc || acc.userId !== SYSTEM_FEE_ID) continue;
+          const amt = BigInt(e.amount || "0");
+          const cRec = ensureCurr(acc.currency);
+          cRec.feeEarnedUnits += amt;
+          cRec.futuresUnits += amt;
+          if (journal.createdAt >= oneDayAgo) cRec.feeEarned24hUnits += amt;
+          if (userDirect) cRec.userDirectUnits += amt;
+          else cRec.mmBotUnits += amt;
+        }
+      } else if (journal.txType === "FEE_TREASURY_SWEEP") {
+        for (const e of entries) {
+          if (e.entryType !== "CREDIT") continue;
+          const acc = db.ledgerAccounts.get(e.accountId);
+          if (!acc || acc.userId !== SYSTEM_TREASURY_ID) continue;
+          const amt = BigInt(e.amount || "0");
+          const cRec = ensureCurr(acc.currency);
+          cRec.sweptUnits += amt;
+        }
+      }
+    }
+    const claimedPayouts = [];
+    for (const p of db.earnPayouts) {
+      if (p.payoutType === "DAILY_SETTLEMENT") continue;
+      claimedPayouts.push(p);
+      const amt = BigInt(p.amountUnits || "0");
+      const feeFunded = p.feeFundedUnits ? BigInt(p.feeFundedUnits) : p.fundingSource === "EXCHANGE_FEE_POOL" ? amt : 0n;
+      const treasuryFunded = p.treasuryFundedUnits ? BigInt(p.treasuryFundedUnits) : amt > feeFunded ? amt - feeFunded : 0n;
+      const cRec = ensureCurr(p.asset);
+      cRec.stakingClaimedUnits += amt;
+      cRec.stakingFeeFundedUnits += feeFunded;
+      cRec.stakingTreasuryFundedUnits += treasuryFunded;
+      if (p.createdAt >= oneDayAgo) cRec.stakingClaimed24hUnits += amt;
+    }
+    for (const pos of db.earnPositions.values()) {
+      if (pos.status === "REDEEMED") continue;
+      const pending = BigInt(pos.accruedYieldUnits || "0");
+      if (pending > 0n) {
+        ensureCurr(pos.asset).stakingPendingUnits += pending;
+      }
+    }
+    for (const acc of db.ledgerAccounts.values()) {
+      if (acc.userId === SYSTEM_FEE_ID || acc.userId === SYSTEM_TREASURY_ID) {
+        ensureCurr(acc.currency);
+      }
+    }
+    let totalExchangeFeesIdr = 0;
+    let totalExchangeFeesUsd = 0;
+    let fees24hIdr = 0;
+    let fees24hUsd = 0;
+    let spotMakerFeesIdr = 0;
+    let spotTakerFeesIdr = 0;
+    let futuresFeesIdr = 0;
+    let userDirectFeesIdr = 0;
+    let mmBotFeesIdr = 0;
+    let feeCollectorLiveIdr = 0;
+    let feeCollectorLiveUsd = 0;
+    let treasuryReserveLiveIdr = 0;
+    let treasuryReserveLiveUsd = 0;
+    let totalSweptToTreasuryIdr = 0;
+    let stakingClaimedAllTimeIdr = 0;
+    let stakingClaimedAllTimeUsd = 0;
+    let stakingClaimed24hIdr = 0;
+    let stakingFeePoolFundedIdr = 0;
+    let stakingTreasuryFundedIdr = 0;
+    let stakingPendingClaimableIdr = 0;
+    let stakingPendingClaimableUsd = 0;
+    const byCurrency = Array.from(currencyStats.entries()).map(([currency, rec]) => {
+      const decimals = this.resolveCurrencyDecimals(currency);
+      const feeAcc = db.getAccount(SYSTEM_FEE_ID, currency);
+      const treasuryAcc = db.getAccount(SYSTEM_TREASURY_ID, currency);
+      const feeCollectorBal = feeAcc ? BigInt(feeAcc.balanceAvailable || "0") + BigInt(feeAcc.balanceLocked || "0") : 0n;
+      const treasuryReserveBal = treasuryAcc ? BigInt(treasuryAcc.balanceAvailable || "0") + BigInt(treasuryAcc.balanceLocked || "0") : 0n;
+      const netFeeSurplusUnits = rec.feeEarnedUnits - rec.stakingClaimedUnits;
+      const earnedVal = this.unitsToUsdIdr(rec.feeEarnedUnits, decimals, currency);
+      const earned24hVal = this.unitsToUsdIdr(rec.feeEarned24hUnits, decimals, currency);
+      const makerVal = this.unitsToUsdIdr(rec.spotMakerUnits, decimals, currency);
+      const takerVal = this.unitsToUsdIdr(rec.spotTakerUnits, decimals, currency);
+      const futuresVal = this.unitsToUsdIdr(rec.futuresUnits, decimals, currency);
+      const userVal = this.unitsToUsdIdr(rec.userDirectUnits, decimals, currency);
+      const mmVal = this.unitsToUsdIdr(rec.mmBotUnits, decimals, currency);
+      const sweptVal = this.unitsToUsdIdr(rec.sweptUnits, decimals, currency);
+      const feeCollVal = feeCollectorBal > 0n ? this.unitsToUsdIdr(feeCollectorBal, decimals, currency) : { usd: 0, idr: 0 };
+      const treasuryVal = treasuryReserveBal > 0n ? this.unitsToUsdIdr(treasuryReserveBal, decimals, currency) : { usd: 0, idr: 0 };
+      const claimedVal = this.unitsToUsdIdr(rec.stakingClaimedUnits, decimals, currency);
+      const claimed24hVal = this.unitsToUsdIdr(rec.stakingClaimed24hUnits, decimals, currency);
+      const feeFundedVal = this.unitsToUsdIdr(rec.stakingFeeFundedUnits, decimals, currency);
+      const treasuryFundedVal = this.unitsToUsdIdr(rec.stakingTreasuryFundedUnits, decimals, currency);
+      const pendingVal = this.unitsToUsdIdr(rec.stakingPendingUnits, decimals, currency);
+      totalExchangeFeesIdr += earnedVal.idr;
+      totalExchangeFeesUsd += earnedVal.usd;
+      fees24hIdr += earned24hVal.idr;
+      fees24hUsd += earned24hVal.usd;
+      spotMakerFeesIdr += makerVal.idr;
+      spotTakerFeesIdr += takerVal.idr;
+      futuresFeesIdr += futuresVal.idr;
+      userDirectFeesIdr += userVal.idr;
+      mmBotFeesIdr += mmVal.idr;
+      feeCollectorLiveIdr += feeCollVal.idr;
+      feeCollectorLiveUsd += feeCollVal.usd;
+      treasuryReserveLiveIdr += treasuryVal.idr;
+      treasuryReserveLiveUsd += treasuryVal.usd;
+      totalSweptToTreasuryIdr += sweptVal.idr;
+      stakingClaimedAllTimeIdr += claimedVal.idr;
+      stakingClaimedAllTimeUsd += claimedVal.usd;
+      stakingClaimed24hIdr += claimed24hVal.idr;
+      stakingFeePoolFundedIdr += feeFundedVal.idr;
+      stakingTreasuryFundedIdr += treasuryFundedVal.idr;
+      stakingPendingClaimableIdr += pendingVal.idr;
+      stakingPendingClaimableUsd += pendingVal.usd;
+      return {
+        currency,
+        decimals,
+        feeEarnedAllTimeUnits: rec.feeEarnedUnits.toString(),
+        feeEarnedAllTimeDisplay: PrecisionMath.formatFromUnits(rec.feeEarnedUnits, decimals, true),
+        feeCollectorBalanceUnits: feeCollectorBal.toString(),
+        feeCollectorBalanceDisplay: PrecisionMath.formatFromUnits(feeCollectorBal, decimals, true),
+        treasuryReserveBalanceUnits: treasuryReserveBal.toString(),
+        treasuryReserveBalanceDisplay: PrecisionMath.formatFromUnits(treasuryReserveBal, decimals, true),
+        sweptToTreasuryUnits: rec.sweptUnits.toString(),
+        sweptToTreasuryDisplay: PrecisionMath.formatFromUnits(rec.sweptUnits, decimals, true),
+        stakingClaimedUnits: rec.stakingClaimedUnits.toString(),
+        stakingClaimedDisplay: PrecisionMath.formatFromUnits(rec.stakingClaimedUnits, decimals, true),
+        stakingFeeFundedUnits: rec.stakingFeeFundedUnits.toString(),
+        stakingPendingUnits: rec.stakingPendingUnits.toString(),
+        stakingPendingDisplay: PrecisionMath.formatFromUnits(rec.stakingPendingUnits, decimals, true),
+        netFeeSurplusUnits: netFeeSurplusUnits.toString(),
+        netFeeSurplusDisplay: netFeeSurplusUnits < 0n ? `-${PrecisionMath.formatFromUnits(-netFeeSurplusUnits, decimals, true)}` : PrecisionMath.formatFromUnits(netFeeSurplusUnits, decimals, true),
+        feeEarnedIdr: earnedVal.idr,
+        stakingClaimedIdr: claimedVal.idr,
+        feeCollectorLiveIdr: feeCollVal.idr,
+        treasuryReserveLiveIdr: treasuryVal.idr
+      };
+    }).filter(
+      (row) => ["IDR", "USDT", "BTC", "ETH", "SOL"].includes(row.currency) || row.feeEarnedAllTimeUnits !== "0" || row.feeCollectorBalanceUnits !== "0" || row.treasuryReserveBalanceUnits !== "0" || row.stakingClaimedUnits !== "0" || row.stakingPendingUnits !== "0"
+    ).sort((a, b) => b.feeEarnedIdr - a.feeEarnedIdr || b.treasuryReserveLiveIdr - a.treasuryReserveLiveIdr);
+    const byPairRaw = Array.from(pairStats.values()).map((p) => {
+      const val = this.unitsToUsdIdr(p.totalFeesUnits, p.quoteDecimals, p.quoteCurrency);
+      return {
+        pairId: p.pairId,
+        baseCurrency: p.baseCurrency,
+        quoteCurrency: p.quoteCurrency,
+        quoteDecimals: p.quoteDecimals,
+        tradeCount: p.tradeCount,
+        trades24hCount: p.trades24hCount,
+        makerFeesUnits: p.makerFeesUnits.toString(),
+        takerFeesUnits: p.takerFeesUnits.toString(),
+        totalFeesUnits: p.totalFeesUnits.toString(),
+        totalFeesDisplay: PrecisionMath.formatFromUnits(p.totalFeesUnits, p.quoteDecimals, true),
+        userFeesUnits: p.userFeesUnits.toString(),
+        userFeesDisplay: PrecisionMath.formatFromUnits(p.userFeesUnits, p.quoteDecimals, true),
+        totalFeesIdr: val.idr,
+        totalFeesUsd: val.usd,
+        sharePct: totalExchangeFeesIdr > 0 ? Math.round(val.idr / totalExchangeFeesIdr * 1e4) / 100 : 0
+      };
+    });
+    byPairRaw.sort((a, b) => b.totalFeesIdr - a.totalFeesIdr || b.tradeCount - a.tradeCount);
+    const recentStakingClaims = [...claimedPayouts].sort((a, b) => b.createdAt - a.createdAt).slice(0, 30).map((p) => {
+      const user = db.users.get(p.userId);
+      const vault = db.earnVaults.get(p.vaultId);
+      const amt = BigInt(p.amountUnits || "0");
+      const val = this.unitsToUsdIdr(amt, p.decimals, p.asset);
+      const feeFunded = p.feeFundedUnits ? p.feeFundedUnits : p.fundingSource === "EXCHANGE_FEE_POOL" ? amt.toString() : "0";
+      const treasuryFunded = p.treasuryFundedUnits ? p.treasuryFundedUnits : (amt - BigInt(feeFunded)).toString();
+      return {
+        id: p.id,
+        userId: p.userId,
+        userEmail: user?.email || p.userId,
+        positionId: p.positionId,
+        vaultId: p.vaultId,
+        vaultName: vault?.name || p.vaultId,
+        asset: p.asset,
+        decimals: p.decimals,
+        payoutType: p.payoutType,
+        amountUnits: p.amountUnits,
+        amountDisplay: PrecisionMath.formatFromUnits(amt, p.decimals, true),
+        amountIdr: val.idr,
+        fundingSource: p.fundingSource || "TREASURY_RESERVE",
+        feeFundedUnits: feeFunded,
+        treasuryFundedUnits: treasuryFunded,
+        journalId: p.journalId,
+        createdAt: p.createdAt
+      };
+    });
+    const netTreasuryFeePoolIdr = totalExchangeFeesIdr - stakingClaimedAllTimeIdr;
+    const netTreasuryFeePoolUsd = Math.round((totalExchangeFeesUsd - stakingClaimedAllTimeUsd) * 100) / 100;
+    const spotFeesIdr = spotMakerFeesIdr + spotTakerFeesIdr;
+    let feeCoverageRatioPct = 0;
+    if (stakingClaimedAllTimeIdr > 0) {
+      feeCoverageRatioPct = Math.round(totalExchangeFeesIdr / stakingClaimedAllTimeIdr * 1e4) / 100;
+    } else if (stakingPendingClaimableIdr > 0) {
+      feeCoverageRatioPct = Math.round(totalExchangeFeesIdr / stakingPendingClaimableIdr * 1e4) / 100;
+    } else if (totalExchangeFeesIdr > 0) {
+      feeCoverageRatioPct = 100;
+    }
+    return {
+      generatedAt: now,
+      fxRateIdr,
+      summary: {
+        totalExchangeFeesIdr,
+        totalExchangeFeesUsd: Math.round(totalExchangeFeesUsd * 100) / 100,
+        fees24hIdr,
+        fees24hUsd: Math.round(fees24hUsd * 100) / 100,
+        spotFeesIdr,
+        spotMakerFeesIdr,
+        spotTakerFeesIdr,
+        futuresFeesIdr,
+        userDirectFeesIdr,
+        mmBotFeesIdr,
+        totalTradesCount,
+        trades24hCount,
+        feeCollectorLiveIdr,
+        feeCollectorLiveUsd: Math.round(feeCollectorLiveUsd * 100) / 100,
+        treasuryReserveLiveIdr,
+        treasuryReserveLiveUsd: Math.round(treasuryReserveLiveUsd * 100) / 100,
+        totalSweptToTreasuryIdr,
+        stakingClaimedAllTimeIdr,
+        stakingClaimedAllTimeUsd: Math.round(stakingClaimedAllTimeUsd * 100) / 100,
+        stakingClaimed24hIdr,
+        stakingFeePoolFundedIdr,
+        stakingTreasuryFundedIdr,
+        stakingPendingClaimableIdr,
+        stakingPendingClaimableUsd: Math.round(stakingPendingClaimableUsd * 100) / 100,
+        netTreasuryFeePoolIdr,
+        netTreasuryFeePoolUsd,
+        feeCoverageRatioPct
+      },
+      byCurrency,
+      byPair: byPairRaw,
+      recentStakingClaims
+    };
+  }
+  /**
+   * Atomically sweeps available balances from SYSTEM_FEE_ID into SYSTEM_TREASURY_ID
+   * via Double-Entry LedgerService (txType: 'FEE_TREASURY_SWEEP').
+   */
+  sweepCollectedFeesToTreasury(adminId) {
+    const now = Date.now();
+    const sweptCurrencies = [];
+    let totalSweptIdr = 0;
+    for (const acc of db.ledgerAccounts.values()) {
+      if (acc.userId !== SYSTEM_FEE_ID) continue;
+      const avail = BigInt(acc.balanceAvailable || "0");
+      if (avail <= 0n) continue;
+      const decimals = this.resolveCurrencyDecimals(acc.currency);
+      const treasuryAcc = db.createOrGetAccount(SYSTEM_TREASURY_ID, acc.currency);
+      const display = PrecisionMath.formatFromUnits(avail, decimals, true);
+      const { journal } = LedgerService.executeJournal({
+        idempotencyKey: `fee-sweep:${acc.currency}:${avail.toString()}:${now}`,
+        txType: "FEE_TREASURY_SWEEP",
+        referenceId: `sweep-${acc.currency}`,
+        description: `Sweep Exchange Fee Collector ${display} ${acc.currency} -> Treasury Reserve`,
+        entries: [
+          { accountId: acc.id, entryType: "DEBIT", amount: avail },
+          { accountId: treasuryAcc.id, entryType: "CREDIT", amount: avail }
+        ]
+      });
+      const val = this.unitsToUsdIdr(avail, decimals, acc.currency);
+      totalSweptIdr += val.idr;
+      sweptCurrencies.push({
+        currency: acc.currency,
+        decimals,
+        amountUnits: avail.toString(),
+        amountDisplay: display,
+        journalId: journal.id,
+        idrValue: val.idr
+      });
+    }
+    if (sweptCurrencies.length === 0) {
+      throw new Error("Tidak ada saldo fee pada akun Fee Collector (SYS_FEES) yang tersedia untuk disweep ke Treasury.");
+    }
+    const summaryText = sweptCurrencies.map((s) => `${s.amountDisplay} ${s.currency}`).join(", ");
+    db.auditLogs.push({
+      id: crypto17.randomUUID(),
+      actorId: adminId,
+      action: "EXCHANGE_FEE_TREASURY_SWEEP",
+      resource: "ledger:fee-treasury-sweep",
+      details: `Admin swept accumulated Exchange Fees to Treasury Reserve: ${summaryText} (Total Rp ${totalSweptIdr.toLocaleString("id-ID")})`,
+      createdAt: now
+    });
+    db.saveToDisk();
+    return {
+      sweptCurrencies,
+      totalSweptIdr,
+      message: `Berhasil sweep ${summaryText} dari Exchange Fee Collector ke Treasury Reserve.`
+    };
+  }
+  startScheduler() {
+    if (this.schedulerTimer) return;
+    try {
+      this.runDailyYieldSettlement(Date.now());
+    } catch (err) {
+      console.warn("[EarnService] Initial daily yield settlement warning:", err?.message);
+    }
+    this.schedulerTimer = setInterval(() => {
+      try {
+        this.runDailyYieldSettlement(Date.now());
+      } catch (err) {
+        console.warn("[EarnService] Scheduled yield settlement error:", err?.message);
+      }
+    }, 6e4);
+  }
+};
+var earnService = new EarnService();
+
+// server/routes/admin.ts
+var adminRouter = Router6();
+adminRouter.get("/users", requireAdmin, (req, res) => {
+  const usersList = Array.from(db.users.values()).map((u) => {
+    const kyc = db.kyc.get(u.id);
+    return {
+      id: u.id,
+      email: u.email,
+      role: u.role,
+      status: u.status,
+      isTotpEnabled: u.isTotpEnabled,
+      kycStatus: kyc ? kyc.status : "unverified",
+      kycTier: kyc ? kyc.tierLevel : 0,
+      fullName: kyc ? kyc.fullName : "-",
+      createdAt: u.createdAt
+    };
+  });
+  res.json(usersList);
+});
+adminRouter.post("/kyc/review", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { userId, action, rejectionReason, tierLevel } = req.body;
+    const kyc = db.kyc.get(userId);
+    if (!kyc) return res.status(404).json({ error: "Data KYC tidak ditemukan" });
+    if (action === "APPROVE") {
+      kyc.status = "approved";
+      kyc.tierLevel = tierLevel || 2;
+      kyc.reviewedBy = adminUser.id;
+      kyc.reviewedAt = Date.now();
+      kyc.rejectionReason = void 0;
+    } else {
+      kyc.status = "rejected";
+      kyc.rejectionReason = rejectionReason || "Dokumen identitas tidak terbaca dengan jelas";
+      kyc.reviewedBy = adminUser.id;
+      kyc.reviewedAt = Date.now();
+    }
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser.id,
+      action: `KYC_${action}`,
+      resource: `user:${userId}`,
+      details: `KYC marked as ${kyc.status} by admin ${adminUser.email}`,
+      createdAt: Date.now()
+    });
+    res.json({ success: true, kyc });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/pairs/toggle-halt", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { pairId, isHalted } = req.body;
+    const pair = db.tradingPairs.get(pairId);
+    if (!pair) return res.status(404).json({ error: "Pair tidak ditemukan" });
+    pair.isHalted = Boolean(isHalted);
+    db.tradingPairs.set(pairId, pair);
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser.id,
+      action: isHalted ? "TRADING_HALTED" : "TRADING_RESUMED",
+      resource: `pair:${pairId}`,
+      details: `Trading pair ${pairId} halted status changed to: ${isHalted}`,
+      createdAt: Date.now()
+    });
+    res.json({
+      success: true,
+      message: `Trading pair ${pairId} status: ${isHalted ? "DIHENTIKAN SEMENTARA (HALTED)" : "BERJALAN NORMAL"}`,
+      pair
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/pairs/update-fees", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { pairId, makerFeeBps, takerFeeBps } = req.body;
+    const pair = db.tradingPairs.get(pairId);
+    if (!pair) return res.status(404).json({ error: "Pair tidak ditemukan" });
+    if (makerFeeBps !== void 0) pair.makerFeeBps = Number(makerFeeBps);
+    if (takerFeeBps !== void 0) pair.takerFeeBps = Number(takerFeeBps);
+    db.tradingPairs.set(pairId, pair);
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser.id,
+      action: "FEES_UPDATED",
+      resource: `pair:${pairId}`,
+      details: `Fees updated: Maker ${pair.makerFeeBps} bps (${pair.makerFeeBps / 100}%), Taker ${pair.takerFeeBps} bps (${pair.takerFeeBps / 100}%)`,
+      createdAt: Date.now()
+    });
+    res.json({
+      success: true,
+      message: `Biaya transaksi ${pairId} berhasil diperbarui: Maker ${pair.makerFeeBps / 100}%, Taker ${pair.takerFeeBps / 100}%`,
+      pair
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/pairs/update-config", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const {
+      pairId,
+      minOrderSize,
+      maxOrderSize,
+      minOrderTokens,
+      maxOrderTokens,
+      makerFeeBps,
+      takerFeeBps,
+      isHalted,
+      lastPrice,
+      isDelisted,
+      delistScheduledAt,
+      delistReason
+    } = req.body;
+    if (!pairId) return res.status(400).json({ error: "ID Trading pair wajib ditentukan" });
+    const pair = db.tradingPairs.get(pairId);
+    if (!pair) return res.status(404).json({ error: `Trading pair ${pairId} tidak ditemukan` });
+    const baseDecimals = pair.baseDecimals || 8;
+    let updatedMin = pair.minOrderSize;
+    let updatedMax = pair.maxOrderSize;
+    if (minOrderTokens !== void 0 && minOrderTokens !== null && String(minOrderTokens).trim() !== "") {
+      updatedMin = PrecisionMath.parseToUnits(String(minOrderTokens), baseDecimals).toString();
+    } else if (minOrderSize !== void 0 && minOrderSize !== null && String(minOrderSize).trim() !== "") {
+      updatedMin = String(minOrderSize).trim();
+    }
+    if (maxOrderTokens !== void 0 && maxOrderTokens !== null && String(maxOrderTokens).trim() !== "") {
+      updatedMax = PrecisionMath.parseToUnits(String(maxOrderTokens), baseDecimals).toString();
+    } else if (maxOrderSize !== void 0 && maxOrderSize !== null && String(maxOrderSize).trim() !== "") {
+      updatedMax = String(maxOrderSize).trim();
+    }
+    if (BigInt(updatedMin) <= 0n) {
+      return res.status(400).json({ error: "Kuantitas minimum order harus lebih besar dari 0" });
+    }
+    if (BigInt(updatedMax) < BigInt(updatedMin)) {
+      return res.status(400).json({ error: "Kuantitas maksimum order tidak boleh lebih kecil dari kuantitas minimum" });
+    }
+    pair.minOrderSize = updatedMin;
+    pair.maxOrderSize = updatedMax;
+    if (makerFeeBps !== void 0 && makerFeeBps !== null) pair.makerFeeBps = Number(makerFeeBps);
+    if (takerFeeBps !== void 0 && takerFeeBps !== null) pair.takerFeeBps = Number(takerFeeBps);
+    if (isHalted !== void 0 && isHalted !== null) pair.isHalted = Boolean(isHalted);
+    if (lastPrice !== void 0 && lastPrice !== null && String(lastPrice).trim() !== "") {
+      pair.lastPrice = String(lastPrice).trim();
+    }
+    db.tradingPairs.set(pairId, pair);
+    const market = db.markets.get(pairId);
+    if (market) {
+      market.minQuantity = updatedMin;
+      if (makerFeeBps !== void 0) market.makerFeeBps = Number(makerFeeBps);
+      if (takerFeeBps !== void 0) market.takerFeeBps = Number(takerFeeBps);
+      db.markets.set(pairId, market);
+    }
+    const humanMin = PrecisionMath.formatFromUnits(BigInt(updatedMin), baseDecimals);
+    const humanMax = PrecisionMath.formatFromUnits(BigInt(updatedMax), baseDecimals);
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser.id,
+      action: "PAIR_CONFIG_UPDATED",
+      resource: `pair:${pairId}`,
+      details: `Token limits for ${pairId} updated: Min ${humanMin} ${pair.baseCurrency} (${updatedMin} units), Max ${humanMax} ${pair.baseCurrency} (${updatedMax} units) by ${adminUser.email}`,
+      createdAt: Date.now()
+    });
+    let lifecycleNote = "";
+    if (typeof isDelisted === "boolean") {
+      if (isDelisted && !pair.isDelisted) {
+        const resDelist = executeDelistMarket(
+          pairId,
+          adminUser.id,
+          adminUser.email,
+          delistReason || pair.delistReason || "Manual delisting oleh admin"
+        );
+        lifecycleNote = ` \xB7 Market di-DELISTING (${resDelist.cancelledOrdersCount} order dibatalkan & direfund, ${resDelist.stoppedBotsCount} bot dihentikan).`;
+      } else if (!isDelisted && pair.isDelisted) {
+        relistMarket(pairId, adminUser.id, adminUser.email);
+        if (isHalted !== void 0 && isHalted !== null) {
+          const refreshed = db.tradingPairs.get(pairId);
+          if (refreshed) {
+            refreshed.isHalted = Boolean(isHalted);
+            db.tradingPairs.set(pairId, refreshed);
+          }
+        }
+        lifecycleNote = " \xB7 Market diaktifkan kembali (Relisted).";
+      }
+    }
+    const currentPairAfterToggle = db.tradingPairs.get(pairId) || pair;
+    if (!currentPairAfterToggle.isDelisted && delistScheduledAt !== void 0) {
+      if (delistScheduledAt === null || delistScheduledAt === "" || Number(delistScheduledAt) === 0) {
+        if (currentPairAfterToggle.delistScheduledAt) {
+          cancelScheduledDelistMarket(pairId, adminUser.id, adminUser.email);
+          lifecycleNote += " \xB7 Jadwal delisting dibatalkan.";
+        }
+      } else {
+        const parsedTs = Number(delistScheduledAt);
+        if (!Number.isFinite(parsedTs) || parsedTs <= Date.now() + 1e4) {
+          return res.status(400).json({ error: "Waktu jadwal delisting harus berada di masa depan (minimal 10 detik dari sekarang)." });
+        }
+        if (currentPairAfterToggle.delistScheduledAt !== parsedTs || delistReason !== void 0 && delistReason !== currentPairAfterToggle.delistReason) {
+          scheduleDelistMarket(
+            pairId,
+            parsedTs,
+            adminUser.id,
+            adminUser.email,
+            delistReason || currentPairAfterToggle.delistReason || "Delisting terjadwal oleh admin"
+          );
+          lifecycleNote += ` \xB7 Delisting dijadwalkan pada ${new Date(parsedTs).toLocaleString("id-ID")}.`;
+        }
+      }
+    }
+    db.saveToDisk();
+    const finalPair = db.tradingPairs.get(pairId) || pair;
+    res.json({
+      success: true,
+      message: `Konfigurasi ${pairId} berhasil diperbarui: Min ${humanMin} ${finalPair.baseCurrency}, Max ${humanMax} ${finalPair.baseCurrency}${lifecycleNote}`,
+      pair: finalPair,
+      humanLimits: {
+        minTokens: humanMin,
+        maxTokens: humanMax,
+        baseDecimals
+      }
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.get("/withdrawals/pending", requireAdmin, (req, res) => {
+  const pendingFiat = Array.from(db.fiatTransactions.values()).filter((t) => t.type === "WITHDRAW" && t.status === "PENDING");
+  const pendingCrypto = Array.from(db.cryptoTransactions.values()).filter((t) => t.type === "WITHDRAW" && t.status === "PENDING");
+  res.json({
+    fiat: pendingFiat,
+    crypto: pendingCrypto
+  });
+});
+adminRouter.post("/withdrawals/approve", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { txId, txType } = req.body;
+    if (txType === "FIAT") {
+      const tx = db.fiatTransactions.get(txId);
+      if (!tx || tx.status !== "PENDING") return res.status(404).json({ error: "Transaksi tidak ditemukan atau sudah diproses" });
+      const userAcc = db.createOrGetAccount(tx.userId, "IDR");
+      const locked = BigInt(userAcc.balanceLocked);
+      const amountUnits = BigInt(tx.amount);
+      userAcc.balanceLocked = (locked >= amountUnits ? locked - amountUnits : 0n).toString();
+      userAcc.version += 1;
+      userAcc.updatedAt = Date.now();
+      tx.status = "COMPLETED";
+      db.fiatTransactions.set(txId, tx);
+    } else {
+      const tx = db.cryptoTransactions.get(txId);
+      if (!tx || tx.status !== "PENDING") return res.status(404).json({ error: "Transaksi kripto tidak ditemukan atau sudah diproses" });
+      const userAcc = db.createOrGetAccount(tx.userId, tx.currency);
+      const locked = BigInt(userAcc.balanceLocked);
+      const amountUnits = BigInt(tx.amount);
+      userAcc.balanceLocked = (locked >= amountUnits ? locked - amountUnits : 0n).toString();
+      userAcc.version += 1;
+      userAcc.updatedAt = Date.now();
+      tx.status = "COMPLETED";
+      tx.confirmations = 12;
+      db.cryptoTransactions.set(txId, tx);
+    }
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser.id,
+      action: "WITHDRAWAL_APPROVED",
+      resource: `tx:${txId}`,
+      details: `Withdrawal approved by admin ${adminUser.email}`,
+      createdAt: Date.now()
+    });
+    db.saveToDisk();
+    res.json({ success: true, message: "Penarikan dana berhasil disetujui dan diproses!" });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/withdrawals/reject", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { txId, txType, reason } = req.body;
+    if (txType === "FIAT") {
+      const tx = db.fiatTransactions.get(txId);
+      if (!tx || tx.status !== "PENDING") return res.status(404).json({ error: "Transaksi tidak ditemukan atau sudah diproses" });
+      const userAcc = db.createOrGetAccount(tx.userId, "IDR");
+      const locked = BigInt(userAcc.balanceLocked);
+      const available = BigInt(userAcc.balanceAvailable);
+      const amountUnits = BigInt(tx.amount);
+      userAcc.balanceLocked = (locked >= amountUnits ? locked - amountUnits : 0n).toString();
+      userAcc.balanceAvailable = (available + amountUnits).toString();
+      userAcc.version += 1;
+      userAcc.updatedAt = Date.now();
+      tx.status = "REJECTED";
+      db.fiatTransactions.set(txId, tx);
+    } else {
+      const tx = db.cryptoTransactions.get(txId);
+      if (!tx || tx.status !== "PENDING") return res.status(404).json({ error: "Transaksi kripto tidak ditemukan atau sudah diproses" });
+      const userAcc = db.createOrGetAccount(tx.userId, tx.currency);
+      const locked = BigInt(userAcc.balanceLocked);
+      const available = BigInt(userAcc.balanceAvailable);
+      const amountUnits = BigInt(tx.amount);
+      userAcc.balanceLocked = (locked >= amountUnits ? locked - amountUnits : 0n).toString();
+      userAcc.balanceAvailable = (available + amountUnits).toString();
+      userAcc.version += 1;
+      userAcc.updatedAt = Date.now();
+      tx.status = "REJECTED";
+      db.cryptoTransactions.set(txId, tx);
+    }
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser.id,
+      action: "WITHDRAWAL_REJECTED",
+      resource: `tx:${txId}`,
+      details: `Withdrawal rejected by admin ${adminUser.email}. Reason: ${reason || "Pemeriksaan kepatuhan"}. Saldo dikembalikan ke akun pengguna.`,
+      createdAt: Date.now()
+    });
+    db.saveToDisk();
+    res.json({ success: true, message: "Penarikan dana ditolak dan saldo berhasil dikembalikan ke akun pengguna." });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.get("/stats", requireAdmin, (req, res) => {
+  try {
+    const totalUsers = db.users.size;
+    const totalPairs = db.tradingPairs.size;
+    const totalOrders = db.orders.size;
+    const totalTrades = db.trades.length;
+    const totalBots = db.botInstances.size;
+    const activeBots2 = Array.from(db.botInstances.values()).filter((b) => b.status === "RUNNING").length;
+    const openOrdersCount = Array.from(db.orders.values()).filter((o) => o.status === "NEW" || o.status === "PARTIALLY_FILLED").length;
+    const oneDayAgo = Date.now() - 24 * 60 * 60 * 1e3;
+    let volume24hIdr = 0n;
+    for (const trade of db.trades.values()) {
+      if (trade.createdAt >= oneDayAgo) {
+        if (trade.pairId.endsWith("-IDR")) {
+          volume24hIdr += BigInt(trade.price) * BigInt(trade.quantity) / 100000000n;
+        } else {
+          volume24hIdr += BigInt(trade.price) * BigInt(trade.quantity) * 16350n / 100000000n;
+        }
+      }
+    }
+    const liabilitiesByCurrency = {};
+    for (const acc of db.ledgerAccounts.values()) {
+      if (!liabilitiesByCurrency[acc.currency]) {
+        liabilitiesByCurrency[acc.currency] = { available: "0", locked: "0", total: "0" };
+      }
+      const cur = liabilitiesByCurrency[acc.currency];
+      const av = BigInt(cur.available) + BigInt(acc.balanceAvailable);
+      const lk = BigInt(cur.locked) + BigInt(acc.balanceLocked);
+      cur.available = av.toString();
+      cur.locked = lk.toString();
+      cur.total = (av + lk).toString();
+    }
+    const treasuryFeeOverview = earnService.getExchangeFeeAndEarnTreasuryStats();
+    res.json({
+      totalUsers,
+      totalPairs,
+      totalOrders,
+      totalTrades,
+      totalBots,
+      activeBots: activeBots2,
+      openOrdersCount,
+      volume24hIdr: volume24hIdr.toString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+      memoryUsage: process.memoryUsage(),
+      liabilitiesByCurrency,
+      treasuryFeeSummary: treasuryFeeOverview.summary,
+      serverTime: Date.now()
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+adminRouter.post("/users/role", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { userId, role } = req.body;
+    const validRoles = ["USER", "MM", "COMPLIANCE", "ADMIN", "SUPERADMIN"];
+    const targetRole = String(role || "").toUpperCase();
+    if (!validRoles.includes(targetRole)) {
+      return res.status(400).json({ error: `Role tidak valid. Pilihan: ${validRoles.join(", ")}` });
+    }
+    const targetUser = db.users.get(userId);
+    if (!targetUser) return res.status(404).json({ error: "Pengguna tidak ditemukan" });
+    const oldRole = targetUser.role;
+    targetUser.role = targetRole;
+    targetUser.updatedAt = Date.now();
+    db.users.set(userId, targetUser);
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser.id,
+      action: "USER_ROLE_CHANGED",
+      resource: `user:${userId}`,
+      details: `User role changed from ${oldRole} to ${targetRole} by admin ${adminUser.email}`,
+      createdAt: Date.now()
+    });
+    db.saveToDisk();
+    res.json({ success: true, message: `Role pengguna berhasil diubah menjadi ${targetRole}`, user: targetUser });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/users/reset-2fa", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { userId, reason } = req.body;
+    const targetUser = db.users.get(userId);
+    if (!targetUser) return res.status(404).json({ error: "Pengguna tidak ditemukan" });
+    targetUser.isTotpEnabled = false;
+    targetUser.totpSecret = void 0;
+    targetUser.updatedAt = Date.now();
+    db.users.set(userId, targetUser);
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser.id,
+      action: "USER_2FA_RESET",
+      resource: `user:${userId}`,
+      details: `2FA TOTP disabled by admin ${adminUser.email}. Alasan: ${reason || "Permintaan pemulihan akun"}`,
+      createdAt: Date.now()
+    });
+    db.saveToDisk();
+    res.json({ success: true, message: `2FA TOTP untuk ${targetUser.email} berhasil di-reset.` });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/pairs/create", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const {
+      baseCurrency,
+      quoteCurrency,
+      baseDecimals = 8,
+      quoteDecimals = 2,
+      initialPrice = "100000000",
+      minOrderTokens,
+      maxOrderTokens,
+      minOrderSize,
+      maxOrderSize,
+      makerFeeBps = 10,
+      takerFeeBps = 20
+    } = req.body;
+    if (!baseCurrency || !quoteCurrency) {
+      return res.status(400).json({ error: "Base currency dan Quote currency wajib diisi" });
+    }
+    const pairId = `${baseCurrency.trim().toUpperCase()}-${quoteCurrency.trim().toUpperCase()}`;
+    if (db.tradingPairs.has(pairId)) {
+      return res.status(400).json({ error: `Trading pair ${pairId} sudah ada di exchange!` });
+    }
+    const bDec = Number(baseDecimals);
+    const oneToken = 10n ** BigInt(bDec);
+    let minUnits = "100000000";
+    let maxUnits = (10000000n * (oneToken > 0n ? oneToken : 1n)).toString();
+    if (minOrderTokens !== void 0 && minOrderTokens !== null && String(minOrderTokens).trim() !== "") {
+      minUnits = PrecisionMath.parseToUnits(String(minOrderTokens), bDec).toString();
+    } else if (minOrderSize) {
+      minUnits = String(minOrderSize).trim();
+    }
+    if (maxOrderTokens !== void 0 && maxOrderTokens !== null && String(maxOrderTokens).trim() !== "") {
+      maxUnits = PrecisionMath.parseToUnits(String(maxOrderTokens), bDec).toString();
+    } else if (maxOrderSize) {
+      maxUnits = String(maxOrderSize).trim();
+    }
+    const newPair = {
+      id: pairId,
+      baseCurrency: baseCurrency.trim().toUpperCase(),
+      quoteCurrency: quoteCurrency.trim().toUpperCase(),
+      baseDecimals: bDec,
+      quoteDecimals: Number(quoteDecimals),
+      minOrderSize: minUnits,
+      maxOrderSize: maxUnits,
+      lastPrice: String(initialPrice),
+      priceChange24h: "+0.00%",
+      priceChangePercent24h: "0.00",
+      high24h: String(initialPrice),
+      low24h: String(initialPrice),
+      volume24h: "0",
+      makerFeeBps: Number(makerFeeBps),
+      takerFeeBps: Number(takerFeeBps),
+      isHalted: false,
+      isNewListing: true,
+      createdAt: Date.now()
+    };
+    db.tradingPairs.set(pairId, newPair);
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser.id,
+      action: "PAIR_CREATED",
+      resource: `pair:${pairId}`,
+      details: `New trading pair ${pairId} registered by admin ${adminUser.email}`,
+      createdAt: Date.now()
+    });
+    db.saveToDisk();
+    res.json({ success: true, message: `Pasangan perdagangan ${pairId} berhasil dibuat dan diaktifkan!`, pair: newPair });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.get("/bots/all", requireAdmin, (req, res) => {
+  try {
+    const botsList = Array.from(db.botInstances.values()).map((b) => {
+      const owner = db.users.get(b.ownerUserId || b.accountId);
+      return {
+        id: b.id,
+        name: b.name,
+        botType: b.botType,
+        pairId: b.pairId,
+        environment: b.environment,
+        status: b.status,
+        ownerEmail: owner ? owner.email : "Unknown",
+        ownerUserId: b.ownerUserId,
+        activeOrdersCount: b.depthLiquidityConfig?.activeOrderIds?.length || b.movementDepthConfig?.activeOrderIds?.length || (b.priceFollowerConfig?.activeBuyOrderId ? 1 : 0) + (b.priceFollowerConfig?.activeSellOrderId ? 1 : 0) || 0,
+        stats: b.stats,
+        lastHeartbeat: b.lastHeartbeat,
+        createdAt: b.createdAt
+      };
+    });
+    res.json(botsList);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+adminRouter.post("/bots/emergency-stop", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { botId } = req.body;
+    let stoppedCount = 0;
+    if (botId) {
+      const b = db.botInstances.get(botId);
+      if (b && b.status === "RUNNING") {
+        b.status = "STOPPED";
+        b.updatedAt = Date.now();
+        stoppedCount++;
+      }
+    } else {
+      for (const b of db.botInstances.values()) {
+        if (b.status === "RUNNING") {
+          b.status = "STOPPED";
+          b.updatedAt = Date.now();
+          stoppedCount++;
+        }
+      }
+    }
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser.id,
+      action: "BOTS_EMERGENCY_STOP",
+      resource: botId ? `bot:${botId}` : "bots:all",
+      details: `Emergency stop triggered by admin ${adminUser.email}. Total bots stopped: ${stoppedCount}`,
+      createdAt: Date.now()
+    });
+    db.saveToDisk();
+    res.json({ success: true, message: `Emergency stop berhasil: ${stoppedCount} bot dihentikan seketika.` });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/ledger/adjust-balance", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { userId, currency, amountUnits, direction, reason } = req.body;
+    if (!userId || !currency || !amountUnits || !direction) {
+      return res.status(400).json({ error: "Parameter tidak lengkap (userId, currency, amountUnits, direction wajib diisi)" });
+    }
+    const units = BigInt(amountUnits);
+    if (units <= 0n) return res.status(400).json({ error: "Jumlah penyesuaian harus lebih besar dari 0" });
+    const userAcc = db.createOrGetAccount(userId, currency);
+    const treasuryAcc = db.createOrGetAccount("usr-sys-treasury-reserve-000001", currency);
+    const userAvail = BigInt(userAcc.balanceAvailable);
+    const treasuryAvail = BigInt(treasuryAcc.balanceAvailable);
+    if (direction === "CREDIT") {
+      userAcc.balanceAvailable = (userAvail + units).toString();
+      treasuryAcc.balanceAvailable = (treasuryAvail >= units ? treasuryAvail - units : 0n).toString();
+    } else {
+      if (userAvail < units) {
+        return res.status(400).json({ error: `Saldo pengguna tidak mencukupi untuk didebit sebesar ${units.toString()} units.` });
+      }
+      userAcc.balanceAvailable = (userAvail - units).toString();
+      treasuryAcc.balanceAvailable = (treasuryAvail + units).toString();
+    }
+    userAcc.version += 1;
+    userAcc.updatedAt = Date.now();
+    treasuryAcc.version += 1;
+    treasuryAcc.updatedAt = Date.now();
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser.id,
+      action: "LEDGER_ADJUSTMENT",
+      resource: `account:${userAcc.id}`,
+      details: `Balance adjustment: ${direction} ${units.toString()} units of ${currency} for user ${userId}. Reason: ${reason || "Koreksi administratif bursa"}. Double-entry balanced via Treasury reserve.`,
+      createdAt: Date.now()
+    });
+    db.saveToDisk();
+    res.json({
+      success: true,
+      message: `Penyesuaian saldo ${direction} sebesar ${units.toString()} ${currency} berhasil dicatat dalam buku besar.`,
+      newBalance: userAcc.balanceAvailable
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.get("/earn/pools", requireAdmin, (_req, res) => {
+  try {
+    res.json(earnService.listAdminVaults());
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Gagal memuat Earn Vaults" });
+  }
+});
+adminRouter.post("/earn/pools", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const vault = earnService.createVault(req.body || {}, adminUser.id);
+    res.status(201).json({
+      success: true,
+      message: `Vault Earn ${vault.name} (${vault.asset}) berhasil dibuat.`,
+      pool: vault
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Gagal membuat Earn Vault" });
+  }
+});
+adminRouter.post("/earn/pools/update", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { poolId, vaultId, ...patch } = req.body || {};
+    const targetId = String(vaultId || poolId || "").trim();
+    if (!targetId) return res.status(400).json({ error: "poolId / vaultId wajib diisi" });
+    const pool = earnService.updateVault(targetId, patch, adminUser.id);
+    res.json({
+      success: true,
+      message: `Vault Earn ${targetId} berhasil diperbarui (APY ${pool.apyPct}%, Status ${pool.status}).`,
+      pool
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.get("/earn/positions", requireAdmin, (req, res) => {
+  try {
+    const limit = Math.min(250, Math.max(10, Number(req.query.limit) || 100));
+    res.json({ positions: earnService.listAllPositions(limit) });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Gagal memuat posisi Earn pengguna" });
+  }
+});
+adminRouter.get("/earn/solvency", requireAdmin, (_req, res) => {
+  try {
+    res.json(earnService.getCustodySolvencyReport());
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Gagal memeriksa solvensi Earn Custody" });
+  }
+});
+adminRouter.get("/earn/assets", requireAdmin, (_req, res) => {
+  try {
+    res.json({ assets: earnService.listActiveAssetsForEarn() });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Gagal memuat aset Earn" });
+  }
+});
+adminRouter.get("/earn/payouts", requireAdmin, (req, res) => {
+  try {
+    const limit = Math.min(300, Math.max(10, Number(req.query.limit) || 120));
+    res.json({ payouts: earnService.listAdminPayouts(limit) });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Gagal memuat riwayat distribusi yield" });
+  }
+});
+adminRouter.post("/earn/positions/:id/unlock", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const positionId = String(req.params.id || "").trim();
+    if (!/^[a-zA-Z0-9_-]{3,64}$/.test(positionId)) {
+      return res.status(400).json({ error: "ID posisi tidak valid" });
+    }
+    const reason = typeof req.body?.reason === "string" ? req.body.reason : void 0;
+    const position = earnService.adminUnlockPosition(positionId, adminUser.id, reason);
+    res.json({
+      success: true,
+      message: `Posisi ${positionId} berhasil dibuka (MATURED) tanpa penalti.`,
+      position
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Gagal membuka lockup posisi" });
+  }
+});
+adminRouter.post("/earn/settle-yield", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const forceCycle = Boolean(req.body?.forceCycle);
+    const result = earnService.runDailyYieldSettlement(Date.now(), {
+      forceCycle,
+      actorId: adminUser.id
+    });
+    res.json({
+      success: true,
+      message: `Distribusi imbal hasil selesai: ${result.settledPositions} posisi diproses, ${result.payoutsCreated} pembayaran dicatat.`,
+      ...result
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Gagal menjalankan distribusi imbal hasil" });
+  }
+});
+adminRouter.get("/treasury-fees", requireAdmin, (_req, res) => {
+  try {
+    res.json(earnService.getExchangeFeeAndEarnTreasuryStats());
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Gagal memuat laporan fee transaksi dan treasury staking" });
+  }
+});
+adminRouter.post("/treasury-fees/sweep", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const result = earnService.sweepCollectedFeesToTreasury(adminUser.id);
+    const overview = earnService.getExchangeFeeAndEarnTreasuryStats();
+    res.json({
+      success: true,
+      ...result,
+      overview
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Gagal melakukan sweep fee ke treasury" });
+  }
+});
+var defaultMasters = [
+  { id: "trader-apex", name: "ApexQuant Master", asset: "BTC/IDR", roi30d: 48.2, winRate: 78.5, maxDrawdown: 6.2, followers: 412, profitShareBps: 1e3, status: "APPROVED" },
+  { id: "trader-crypto-king", name: "CryptoKing ID", asset: "ETH/IDR", roi30d: 32.8, winRate: 71, maxDrawdown: 8.5, followers: 289, profitShareBps: 1200, status: "APPROVED" },
+  { id: "trader-scalper-pro", name: "ScalperPro 24/7", asset: "SOL/IDR", roi30d: 64.5, winRate: 65.4, maxDrawdown: 12.1, followers: 580, profitShareBps: 1500, status: "APPROVED" }
+];
+adminRouter.get("/copy-trading/masters", requireAdmin, (req, res) => {
+  res.json(defaultMasters);
+});
+adminRouter.post("/copy-trading/masters/update", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { masterId, status, profitShareBps } = req.body;
+    const master = defaultMasters.find((m) => m.id === masterId);
+    if (!master) return res.status(404).json({ error: "Master trader tidak ditemukan" });
+    if (status !== void 0) master.status = status;
+    if (profitShareBps !== void 0) master.profitShareBps = Number(profitShareBps);
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser.id,
+      action: "COPY_MASTER_UPDATED",
+      resource: `master:${masterId}`,
+      details: `Master trader ${masterId} updated: Status ${master.status}, Profit Share ${master.profitShareBps / 100}% by admin ${adminUser.email}`,
+      createdAt: Date.now()
+    });
+    res.json({ success: true, message: `Master trader ${masterId} berhasil diperbarui!`, master });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+var defaultVipTiers = [
+  { tier: 0, minVolumeIdr: "0", makerFeeBps: 10, takerFeeBps: 20 },
+  { tier: 1, minVolumeIdr: "100000000", makerFeeBps: 8, takerFeeBps: 18 },
+  { tier: 2, minVolumeIdr: "500000000", makerFeeBps: 6, takerFeeBps: 15 },
+  { tier: 3, minVolumeIdr: "2000000000", makerFeeBps: 4, takerFeeBps: 12 },
+  { tier: 4, minVolumeIdr: "10000000000", makerFeeBps: 2, takerFeeBps: 8 },
+  { tier: 5, minVolumeIdr: "50000000000", makerFeeBps: 0, takerFeeBps: 5 }
+];
+adminRouter.get("/vip-tiers", requireAdmin, (req, res) => {
+  res.json(defaultVipTiers);
+});
+adminRouter.post("/vip-tiers/update", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { tier, makerFeeBps, takerFeeBps } = req.body;
+    const t = defaultVipTiers.find((x) => x.tier === Number(tier));
+    if (!t) return res.status(404).json({ error: "VIP Tier tidak ditemukan" });
+    if (makerFeeBps !== void 0) t.makerFeeBps = Number(makerFeeBps);
+    if (takerFeeBps !== void 0) t.takerFeeBps = Number(takerFeeBps);
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser.id,
+      action: "VIP_TIER_UPDATED",
+      resource: `vip:tier_${tier}`,
+      details: `VIP Tier ${tier} fees updated: Maker ${t.makerFeeBps} bps, Taker ${t.takerFeeBps} bps by admin ${adminUser.email}`,
+      createdAt: Date.now()
+    });
+    res.json({ success: true, message: `VIP Tier ${tier} berhasil diperbarui!`, tier: t });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.get("/audit-logs", requireAdmin, (req, res) => {
+  res.json(db.auditLogs.slice(-200).reverse());
+});
+adminRouter.get("/external-ws/whitelist", requireAdmin, (req, res) => {
+  try {
+    const items = Array.from(db.externalWsWhitelist.values()).map((entry) => {
+      const snap = priceAggregatorService.getSymbolSnapshot(entry.symbol, "AGGREGATED");
+      return {
+        ...entry,
+        binancePrice: snap.binancePrice,
+        bybitPrice: snap.bybitPrice,
+        binanceFresh: snap.binanceFresh,
+        bybitFresh: snap.bybitFresh
+      };
+    });
+    res.json({
+      success: true,
+      items,
+      feedStatus: {
+        binance: {
+          status: priceAggregatorService.binance.getConnectionStatus(),
+          subscribedCount: priceAggregatorService.binance.getSubscribedSymbols().length,
+          subscribedSymbols: priceAggregatorService.binance.getSubscribedSymbols()
+        },
+        bybit: {
+          status: priceAggregatorService.bybit.getConnectionStatus(),
+          subscribedCount: priceAggregatorService.bybit.getSubscribedSymbols().length,
+          subscribedSymbols: priceAggregatorService.bybit.getSubscribedSymbols()
+        }
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+adminRouter.get("/external-ws/catalog", requireAdmin, async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim().toUpperCase();
+    const providerFilter = String(req.query.provider || "ALL").toUpperCase();
+    const force = req.query.refresh === "1";
+    const catalog = await priceAggregatorService.fetchAvailableCatalog(force);
+    let filtered = catalog.items;
+    if (providerFilter === "BINANCE") {
+      filtered = filtered.filter((i) => i.providers.includes("binance"));
+    } else if (providerFilter === "BYBIT") {
+      filtered = filtered.filter((i) => i.providers.includes("bybit"));
+    }
+    if (q) {
+      filtered = filtered.filter(
+        (i) => i.symbol.includes(q) || i.baseAsset.includes(q) || i.quoteAsset.includes(q)
+      );
+    }
+    const whitelistedSet = new Set(Array.from(db.externalWsWhitelist.keys()));
+    const limited = filtered.slice(0, 60).map((item) => ({
+      ...item,
+      isWhitelisted: whitelistedSet.has(item.symbol)
+    }));
+    res.json({
+      success: true,
+      source: catalog.source,
+      fetchedAt: catalog.fetchedAt,
+      totalMatches: filtered.length,
+      items: limited
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+adminRouter.post("/external-ws/whitelist/add", requireAdmin, async (req, res) => {
+  try {
+    const adminUser = req.user;
+    const rawSymbol = String(req.body?.symbol || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!rawSymbol || rawSymbol.length < 4) {
+      return res.status(400).json({ error: "Simbol pair tidak valid (contoh: SOLUSDT, PEPEUSDT, ETHBTC)." });
+    }
+    const providersInput = Array.isArray(req.body?.providers) && req.body.providers.length > 0 ? req.body.providers.filter((p) => p === "binance" || p === "bybit") : ["binance", "bybit"];
+    const providers = providersInput.length > 0 ? providersInput : ["binance", "bybit"];
+    const parsed = parseExternalPairSymbol(rawSymbol);
+    const label = req.body?.label ? String(req.body.label).trim() : `${parsed.baseAsset} / ${parsed.quoteAsset}`;
+    const entry = {
+      symbol: rawSymbol,
+      baseAsset: parsed.baseAsset,
+      quoteAsset: parsed.quoteAsset,
+      label,
+      providers,
+      enabled: true,
+      addedBy: adminUser?.email || "ADMIN",
+      addedAt: Date.now()
+    };
+    db.externalWsWhitelist.set(rawSymbol, entry);
+    db.saveToDisk();
+    await priceAggregatorService.seedSymbolFromCatalog(rawSymbol, providers);
+    priceAggregatorService.syncWhitelistSymbols(
+      db.getEnabledExternalWsSymbols("binance"),
+      db.getEnabledExternalWsSymbols("bybit")
+    );
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser?.id || "ADMIN",
+      action: "EXTERNAL_WS_WHITELIST_ADDED",
+      resource: `ws_pair:${rawSymbol}`,
+      details: `Pair ${rawSymbol} (${providers.join(", ")}) ditambahkan ke whitelist WebSocket oleh ${adminUser?.email}`,
+      createdAt: Date.now()
+    });
+    db.scheduleSave();
+    res.json({
+      success: true,
+      message: `Pair ${rawSymbol} ditambahkan ke whitelist & stream WebSocket Binance/Bybit disinkronkan.`,
+      entry
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/external-ws/whitelist/toggle", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const rawSymbol = String(req.body?.symbol || "").trim().toUpperCase();
+    const entry = db.externalWsWhitelist.get(rawSymbol);
+    if (!entry) {
+      return res.status(404).json({ error: `Pair ${rawSymbol} tidak ditemukan di whitelist.` });
+    }
+    entry.enabled = req.body?.enabled !== void 0 ? Boolean(req.body.enabled) : !entry.enabled;
+    if (Array.isArray(req.body?.providers) && req.body.providers.length > 0) {
+      const validProvs = req.body.providers.filter((p) => p === "binance" || p === "bybit");
+      if (validProvs.length > 0) entry.providers = validProvs;
+    }
+    db.externalWsWhitelist.set(rawSymbol, entry);
+    db.saveToDisk();
+    priceAggregatorService.syncWhitelistSymbols(
+      db.getEnabledExternalWsSymbols("binance"),
+      db.getEnabledExternalWsSymbols("bybit")
+    );
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser?.id || "ADMIN",
+      action: "EXTERNAL_WS_WHITELIST_TOGGLED",
+      resource: `ws_pair:${rawSymbol}`,
+      details: `Pair ${rawSymbol} diubah status=${entry.enabled ? "ENABLED" : "DISABLED"} oleh ${adminUser?.email}`,
+      createdAt: Date.now()
+    });
+    db.scheduleSave();
+    res.json({
+      success: true,
+      message: `Pair ${rawSymbol} sekarang ${entry.enabled ? "AKTIF" : "NONAKTIF"} di WebSocket feed.`,
+      entry
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/external-ws/whitelist/remove", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const rawSymbol = String(req.body?.symbol || "").trim().toUpperCase();
+    if (!db.externalWsWhitelist.has(rawSymbol)) {
+      return res.status(404).json({ error: `Pair ${rawSymbol} tidak ditemukan di whitelist.` });
+    }
+    db.externalWsWhitelist.delete(rawSymbol);
+    db.saveToDisk();
+    priceAggregatorService.syncWhitelistSymbols(
+      db.getEnabledExternalWsSymbols("binance"),
+      db.getEnabledExternalWsSymbols("bybit")
+    );
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser?.id || "ADMIN",
+      action: "EXTERNAL_WS_WHITELIST_REMOVED",
+      resource: `ws_pair:${rawSymbol}`,
+      details: `Pair ${rawSymbol} dihapus dari whitelist WebSocket oleh ${adminUser?.email}`,
+      createdAt: Date.now()
+    });
+    db.scheduleSave();
+    res.json({
+      success: true,
+      message: `Pair ${rawSymbol} dihapus dari whitelist & di-unsubscribe dari WebSocket.`
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+function validateAndSanitizeLogoUrl(rawLogo) {
+  if (rawLogo === void 0) return void 0;
+  const trimmed = String(rawLogo || "").trim();
+  if (!trimmed) return "";
+  if (trimmed.length > 512e3) {
+    throw new Error("Ukuran logo terlalu besar (maksimal 500 KB). Kompres atau pilih gambar yang lebih kecil.");
+  }
+  if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) {
+    if (trimmed.length > 2048) {
+      throw new Error("URL logo terlalu panjang (maksimal 2048 karakter).");
+    }
+    return trimmed;
+  }
+  const dataUriMatch = trimmed.match(/^data:image\/(png|jpeg|jpg|webp|gif|svg\+xml);base64,([A-Za-z0-9+/=]+)$/i);
+  if (dataUriMatch) {
+    const mimeSubtype = dataUriMatch[1].toLowerCase();
+    if (mimeSubtype === "svg+xml") {
+      const decodedSvg = Buffer.from(dataUriMatch[2], "base64").toString("utf8");
+      if (/<script[\s>]|on[a-z]+\s*=|javascript:/i.test(decodedSvg)) {
+        throw new Error("File SVG tidak diizinkan mengandung script atau event handler.");
+      }
+    }
+    return trimmed;
+  }
+  throw new Error("Format logo tidak valid. Gunakan upload PNG/JPG/WebP/SVG atau URL https://");
+}
+function validateOptionalHttpUrl(rawUrl, fieldName) {
+  if (rawUrl === void 0) return void 0;
+  const trimmed = String(rawUrl || "").trim();
+  if (!trimmed) return "";
+  if (!/^https?:\/\//i.test(trimmed)) {
+    throw new Error(`${fieldName} harus diawali dengan https:// atau http://`);
+  }
+  if (trimmed.length > 1024) {
+    throw new Error(`${fieldName} terlalu panjang.`);
+  }
+  return trimmed;
+}
+function serializeAdminAsset(asset) {
+  const linkedPairs = Array.from(db.tradingPairs.values()).filter(
+    (p) => p.baseCurrency.toUpperCase() === asset.symbol.toUpperCase() || p.quoteCurrency.toUpperCase() === asset.symbol.toUpperCase()
+  ).map((p) => p.id);
+  return {
+    ...asset,
+    logoUrl: asset.logoUrl || "",
+    category: asset.category || (asset.network === "FIAT" ? "Fiat" : asset.assetType === "NATIVE" ? "Layer 1" : "Token"),
+    contractAddress: asset.contractAddress || "",
+    description: asset.description || "",
+    websiteUrl: asset.websiteUrl || "",
+    explorerUrl: asset.explorerUrl || "",
+    linkedPairs
+  };
+}
+adminRouter.get("/assets", requireAdmin, (req, res) => {
+  try {
+    const assets = db.ensureAssetsForTradingPairs().map(serializeAdminAsset).sort((a, b) => a.symbol.localeCompare(b.symbol));
+    res.json({
+      success: true,
+      count: assets.length,
+      assets
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+adminRouter.post("/assets", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const rawSymbol = String(req.body?.symbol || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const rawName = String(req.body?.name || "").trim();
+    if (!rawSymbol || rawSymbol.length < 2 || rawSymbol.length > 15) {
+      return res.status(400).json({ error: "Simbol aset harus 2\u201315 karakter alfanumerik (contoh: BTC, SOL, PEPE)." });
+    }
+    if (!rawName || rawName.length < 2 || rawName.length > 80) {
+      return res.status(400).json({ error: "Nama lengkap aset harus 2\u201380 karakter." });
+    }
+    const existing = Array.from(db.assets.values()).find(
+      (a) => a.symbol.toUpperCase() === rawSymbol
+    );
+    if (existing) {
+      return res.status(409).json({ error: `Aset dengan simbol ${rawSymbol} sudah terdaftar. Gunakan menu Edit Aset.` });
+    }
+    const decimals = Number(req.body?.decimals ?? 8);
+    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
+      return res.status(400).json({ error: "Desimal aset harus berupa bilangan bulat antara 0 sampai 18." });
+    }
+    const assetType = req.body?.assetType === "NATIVE" ? "NATIVE" : "TOKEN";
+    const allowedStatuses = ["PENDING", "ACTIVE", "SUSPENDED", "RETIRED"];
+    const status = allowedStatuses.includes(req.body?.status) ? req.body.status : "ACTIVE";
+    const network = String(req.body?.network || rawSymbol).trim().toUpperCase() || rawSymbol;
+    const logoUrl = validateAndSanitizeLogoUrl(req.body?.logoUrl) || "";
+    const websiteUrl = validateOptionalHttpUrl(req.body?.websiteUrl, "Website URL") || "";
+    const explorerUrl = validateOptionalHttpUrl(req.body?.explorerUrl, "Explorer URL") || "";
+    const category = String(req.body?.category || (assetType === "NATIVE" ? "Layer 1" : "Token")).trim().slice(0, 40);
+    const description = String(req.body?.description || "").trim().slice(0, 1e3);
+    const contractAddress = String(req.body?.contractAddress || "").trim().slice(0, 160);
+    const now = Date.now();
+    const newAsset = {
+      id: `ast-${rawSymbol.toLowerCase()}-${crypto18.randomUUID().slice(0, 8)}`,
+      symbol: rawSymbol,
+      name: rawName,
+      logoUrl,
+      assetType,
+      category,
+      decimals,
+      network,
+      contractAddress: contractAddress || void 0,
+      description: description || void 0,
+      websiteUrl: websiteUrl || void 0,
+      explorerUrl: explorerUrl || void 0,
+      status,
+      depositEnabled: req.body?.depositEnabled !== void 0 ? Boolean(req.body.depositEnabled) : true,
+      withdrawalEnabled: req.body?.withdrawalEnabled !== void 0 ? Boolean(req.body.withdrawalEnabled) : true,
+      createdAt: now,
+      updatedAt: now
+    };
+    db.assets.set(newAsset.id, newAsset);
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser?.id || "ADMIN",
+      action: "ASSET_CREATED",
+      resource: `asset:${newAsset.symbol}`,
+      details: `Aset baru ${newAsset.symbol} (${newAsset.name}, ${newAsset.decimals} desimal, network=${newAsset.network}, customLogo=${Boolean(logoUrl)}) ditambahkan oleh ${adminUser?.email}`,
+      createdAt: now
+    });
+    db.saveToDisk();
+    const serializedList = Array.from(db.assets.values()).map(serializeAdminAsset);
+    marketWsService.broadcastAssetsUpdated(serializedList);
+    res.status(201).json({
+      success: true,
+      message: `Aset ${newAsset.symbol} (${newAsset.name}) berhasil ditambahkan.`,
+      asset: serializeAdminAsset(newAsset)
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.put("/assets/:id", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const assetId = req.params.id;
+    const asset = db.assets.get(assetId) || Array.from(db.assets.values()).find((a) => a.symbol.toUpperCase() === assetId.toUpperCase());
+    if (!asset) {
+      return res.status(404).json({ error: `Aset ${assetId} tidak ditemukan.` });
+    }
+    const changes = [];
+    if (req.body?.name !== void 0) {
+      const nextName = String(req.body.name).trim();
+      if (nextName.length < 2 || nextName.length > 80) {
+        return res.status(400).json({ error: "Nama aset harus 2\u201380 karakter." });
+      }
+      if (nextName !== asset.name) {
+        changes.push(`name: "${asset.name}" -> "${nextName}"`);
+        asset.name = nextName;
+      }
+    }
+    if (req.body?.logoUrl !== void 0) {
+      const sanitizedLogo = validateAndSanitizeLogoUrl(req.body.logoUrl) || "";
+      if (sanitizedLogo !== (asset.logoUrl || "")) {
+        changes.push(`logoUrl: ${sanitizedLogo ? "UPDATED" : "CLEARED"}`);
+        asset.logoUrl = sanitizedLogo || void 0;
+      }
+    }
+    if (req.body?.assetType !== void 0) {
+      const nextType = req.body.assetType === "NATIVE" ? "NATIVE" : "TOKEN";
+      if (nextType !== asset.assetType) {
+        changes.push(`assetType: ${asset.assetType} -> ${nextType}`);
+        asset.assetType = nextType;
+      }
+    }
+    if (req.body?.category !== void 0) {
+      const nextCategory = String(req.body.category || "").trim().slice(0, 40);
+      if (nextCategory !== (asset.category || "")) {
+        changes.push(`category: "${asset.category || ""}" -> "${nextCategory}"`);
+        asset.category = nextCategory || void 0;
+      }
+    }
+    if (req.body?.network !== void 0) {
+      const nextNetwork = String(req.body.network || "").trim().toUpperCase().slice(0, 40);
+      if (!nextNetwork) {
+        return res.status(400).json({ error: "Jaringan (network) tidak boleh kosong." });
+      }
+      if (nextNetwork !== asset.network) {
+        changes.push(`network: ${asset.network} -> ${nextNetwork}`);
+        asset.network = nextNetwork;
+      }
+    }
+    if (req.body?.contractAddress !== void 0) {
+      const nextContract = String(req.body.contractAddress || "").trim().slice(0, 160);
+      if (nextContract !== (asset.contractAddress || "")) {
+        changes.push(`contractAddress updated`);
+        asset.contractAddress = nextContract || void 0;
+      }
+    }
+    if (req.body?.description !== void 0) {
+      const nextDesc = String(req.body.description || "").trim().slice(0, 1e3);
+      if (nextDesc !== (asset.description || "")) {
+        changes.push(`description updated`);
+        asset.description = nextDesc || void 0;
+      }
+    }
+    if (req.body?.websiteUrl !== void 0) {
+      const nextWeb = validateOptionalHttpUrl(req.body.websiteUrl, "Website URL") || "";
+      if (nextWeb !== (asset.websiteUrl || "")) {
+        changes.push(`websiteUrl updated`);
+        asset.websiteUrl = nextWeb || void 0;
+      }
+    }
+    if (req.body?.explorerUrl !== void 0) {
+      const nextExplorer = validateOptionalHttpUrl(req.body.explorerUrl, "Explorer URL") || "";
+      if (nextExplorer !== (asset.explorerUrl || "")) {
+        changes.push(`explorerUrl updated`);
+        asset.explorerUrl = nextExplorer || void 0;
+      }
+    }
+    const syncedPairs = [];
+    if (req.body?.decimals !== void 0) {
+      const nextDecimals = Number(req.body.decimals);
+      if (!Number.isInteger(nextDecimals) || nextDecimals < 0 || nextDecimals > 18) {
+        return res.status(400).json({ error: "Desimal aset harus berupa bilangan bulat antara 0 sampai 18." });
+      }
+      if (nextDecimals !== asset.decimals) {
+        changes.push(`decimals: ${asset.decimals} -> ${nextDecimals}`);
+        asset.decimals = nextDecimals;
+        for (const pair of db.tradingPairs.values()) {
+          let pairChanged = false;
+          if (pair.baseCurrency.toUpperCase() === asset.symbol.toUpperCase()) {
+            pair.baseDecimals = nextDecimals;
+            pairChanged = true;
+          }
+          if (pair.quoteCurrency.toUpperCase() === asset.symbol.toUpperCase()) {
+            pair.quoteDecimals = nextDecimals;
+            pairChanged = true;
+          }
+          if (pairChanged) {
+            syncedPairs.push(pair.id);
+          }
+        }
+      }
+    }
+    if (req.body?.status !== void 0) {
+      const allowedStatuses = ["PENDING", "ACTIVE", "SUSPENDED", "RETIRED"];
+      if (!allowedStatuses.includes(req.body.status)) {
+        return res.status(400).json({ error: "Status aset tidak valid." });
+      }
+      if (req.body.status !== asset.status) {
+        changes.push(`status: ${asset.status} -> ${req.body.status}`);
+        asset.status = req.body.status;
+      }
+    }
+    if (req.body?.depositEnabled !== void 0) {
+      const nextDep = Boolean(req.body.depositEnabled);
+      if (nextDep !== asset.depositEnabled) {
+        changes.push(`depositEnabled: ${asset.depositEnabled} -> ${nextDep}`);
+        asset.depositEnabled = nextDep;
+      }
+    }
+    if (req.body?.withdrawalEnabled !== void 0) {
+      const nextWd = Boolean(req.body.withdrawalEnabled);
+      if (nextWd !== asset.withdrawalEnabled) {
+        changes.push(`withdrawalEnabled: ${asset.withdrawalEnabled} -> ${nextWd}`);
+        asset.withdrawalEnabled = nextWd;
+      }
+    }
+    asset.updatedAt = Date.now();
+    db.assets.set(asset.id, asset);
+    db.auditLogs.push({
+      id: crypto18.randomUUID(),
+      actorId: adminUser?.id || "ADMIN",
+      action: "ASSET_UPDATED",
+      resource: `asset:${asset.symbol}`,
+      details: `Aset ${asset.symbol} diperbarui oleh ${adminUser?.email}: ${changes.length > 0 ? changes.join("; ") : "no field changes"}${syncedPairs.length > 0 ? ` | Synced pairs: ${syncedPairs.join(", ")}` : ""}`,
+      createdAt: Date.now()
+    });
+    db.saveToDisk();
+    const serializedList = Array.from(db.assets.values()).map(serializeAdminAsset);
+    marketWsService.broadcastAssetsUpdated(serializedList);
+    res.json({
+      success: true,
+      message: `Aset ${asset.symbol} (${asset.name}) berhasil diperbarui${syncedPairs.length > 0 ? ` & disinkronkan ke ${syncedPairs.length} pair` : ""}.`,
+      asset: serializeAdminAsset(asset),
+      syncedPairs
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/pairs/delist-schedule", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { pairId, delistScheduledAt, reason } = req.body;
+    if (!pairId || !delistScheduledAt) {
+      return res.status(400).json({ error: "pairId dan delistScheduledAt wajib diisi." });
+    }
+    const pair = scheduleDelistMarket(
+      String(pairId),
+      Number(delistScheduledAt),
+      adminUser?.id || "ADMIN",
+      adminUser?.email,
+      reason
+    );
+    res.json({
+      success: true,
+      message: `Delisting ${pair.id} dijadwalkan pada ${new Date(pair.delistScheduledAt || 0).toLocaleString("id-ID")}. Countdown timer delisting kini tampil di Market Chart.`,
+      pair
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/pairs/delist-cancel", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { pairId } = req.body;
+    if (!pairId) return res.status(400).json({ error: "pairId wajib diisi." });
+    const pair = cancelScheduledDelistMarket(String(pairId), adminUser?.id || "ADMIN", adminUser?.email);
+    res.json({
+      success: true,
+      message: `Jadwal delisting untuk ${pair.id} berhasil dibatalkan.`,
+      pair
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/pairs/delist-now", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { pairId, reason } = req.body;
+    if (!pairId) return res.status(400).json({ error: "pairId wajib diisi." });
+    const result = executeDelistMarket(
+      String(pairId),
+      adminUser?.id || "ADMIN",
+      adminUser?.email,
+      reason
+    );
+    res.json({
+      success: true,
+      message: `Market ${result.pair.id} berhasil di-DELISTING. ${result.cancelledOrdersCount} order terbuka dibatalkan & direfund otomatis, ${result.stoppedBotsCount} bot dihentikan.`,
+      ...result
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+adminRouter.post("/pairs/relist", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { pairId } = req.body;
+    if (!pairId) return res.status(400).json({ error: "pairId wajib diisi." });
+    const pair = relistMarket(String(pairId), adminUser?.id || "ADMIN", adminUser?.email);
+    res.json({
+      success: true,
+      message: `Market ${pair.id} berhasil diaktifkan kembali (Relisted).`,
+      pair
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// server/routes/listing.ts
+import { Router as Router7 } from "express";
+init_database();
+
+// server/services/listing/ListingService.ts
+init_database();
+import crypto19 from "crypto";
+var ListingService = class {
+  /**
+   * Validate network-specific contract address format
+   */
+  static validateContractAddress(network, contractAddress) {
+    if (!contractAddress) return;
+    const net = network.toUpperCase();
+    if (net.includes("ETHEREUM") || net.includes("ERC20") || net.includes("BSC") || net.includes("BEP20") || net.includes("POLYGON") || net.includes("ARBITRUM")) {
+      if (!/^0x[a-fA-F0-9]{40}$/.test(contractAddress)) {
+        throw new Error(`Alamat kontrak EVM tidak valid untuk jaringan ${network}: harus diawali 0x diikuti 40 digit heksadesimal`);
+      }
+    } else if (net.includes("SOLANA") || net.includes("SPL")) {
+      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(contractAddress)) {
+        throw new Error(`Alamat mint Solana tidak valid: harus 32-44 karakter Base58`);
+      }
+    } else if (net.includes("TRON") || net.includes("TRC20")) {
+      if (!/^T[a-km-zA-HJ-NP-Z1-9]{33}$/.test(contractAddress)) {
+        throw new Error(`Alamat kontrak TRON TRC-20 tidak valid: harus diawali huruf T dengan panjang 34 karakter Base58`);
+      }
+    }
+  }
+  /**
+   * Register a new Asset in the catalog
+   */
+  static createAsset(input, actorId, securityMeta) {
+    const normalizedSymbol = input.symbol.trim().toUpperCase();
+    if (!/^[A-Z0-9]{2,12}$/.test(normalizedSymbol)) {
+      throw new Error(`Format simbol aset tidak valid: ${input.symbol}. Harus 2-12 karakter alfanumerik huruf besar.`);
+    }
+    for (const a of db.assets.values()) {
+      if (a.symbol === normalizedSymbol) {
+        throw new Error(`Aset dengan simbol ${normalizedSymbol} sudah terdaftar di bursa.`);
+      }
+    }
+    if (!input.name || input.name.trim().length < 2) {
+      throw new Error("Nama aset wajib diisi (minimal 2 karakter).");
+    }
+    const decimals = Number(input.decimals);
+    if (!Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
+      throw new Error("Presisi desimal aset harus berupa integer antara 0 dan 18.");
+    }
+    if (!input.network || input.network.trim().length < 2) {
+      throw new Error("Jaringan aset (network) wajib ditentukan.");
+    }
+    if (input.assetType === "TOKEN" && !input.contractAddress) {
+      throw new Error(`Aset bertipe TOKEN pada jaringan ${input.network} wajib menyertakan contractAddress.`);
+    }
+    this.validateContractAddress(input.network, input.contractAddress);
+    const assetId = crypto19.randomUUID();
+    const now = Date.now();
+    const asset = {
+      id: assetId,
+      symbol: normalizedSymbol,
+      name: input.name.trim(),
+      assetType: input.assetType,
+      decimals,
+      network: input.network.trim().toUpperCase(),
+      contractAddress: input.contractAddress ? input.contractAddress.trim() : void 0,
+      status: "PENDING",
+      depositEnabled: input.depositEnabled !== void 0 ? Boolean(input.depositEnabled) : true,
+      withdrawalEnabled: input.withdrawalEnabled !== void 0 ? Boolean(input.withdrawalEnabled) : true,
+      depositOpenedAt: input.depositOpenedAt,
+      withdrawalOpenedAt: input.withdrawalOpenedAt,
+      createdAt: now,
+      updatedAt: now
+    };
+    db.assets.set(assetId, asset);
+    db.scheduleSave();
+    ListingAuditService.recordEvent({
+      aggregateId: assetId,
+      eventType: "ASSET_CREATED",
+      actorId,
+      aggregateVersion: 1,
+      payload: {
+        symbol: asset.symbol,
+        name: asset.name,
+        decimals: asset.decimals,
+        network: asset.network,
+        contractAddress: asset.contractAddress,
+        assetType: asset.assetType
+      },
+      reason: `Asset ${asset.symbol} created by admin`,
+      securityMetadata: securityMeta
+    });
+    return asset;
+  }
+  /**
+   * Helper to retrieve or validate Quote Asset (Default is IDR)
+   */
+  static getQuoteAsset(quoteAssetIdOrSymbol) {
+    if (quoteAssetIdOrSymbol) {
+      const customQuote = db.assets.get(quoteAssetIdOrSymbol);
+      if (customQuote) return customQuote;
+      const targetSym = quoteAssetIdOrSymbol.trim().toUpperCase();
+      for (const a of db.assets.values()) {
+        if (a.symbol === targetSym) return a;
+      }
+      throw new Error(`Quote asset tidak ditemukan: ${quoteAssetIdOrSymbol}`);
+    }
+    for (const a of db.assets.values()) {
+      if (a.symbol === "IDR") return a;
+    }
+    const idrAsset = {
+      id: "ast-idr-0000-0000-000000000001",
+      symbol: "IDR",
+      name: "Indonesian Rupiah",
+      assetType: "NATIVE",
+      decimals: 2,
+      network: "FIAT",
+      status: "ACTIVE",
+      depositEnabled: true,
+      withdrawalEnabled: true,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    db.assets.set(idrAsset.id, idrAsset);
+    return idrAsset;
+  }
+  /**
+   * Validate exact BigInt financial parameters
+   */
+  static validateFinancialParameters(params) {
+    const quoteUnitLabel = params.quoteSymbol === "IDR" ? "sen IDR" : `unit ${params.quoteSymbol || "quote"}`;
+    try {
+      const tick = BigInt(params.tickSize);
+      if (tick <= 0n) throw new Error("Tick size harus berupa integer positif lebih besar dari 0");
+    } catch {
+      throw new Error(`Nilai tickSize tidak valid: ${params.tickSize}. Wajib berupa string integer eksak (${quoteUnitLabel}).`);
+    }
+    try {
+      const lot = BigInt(params.lotSize);
+      if (lot <= 0n) throw new Error("Lot size harus berupa integer positif lebih besar dari 0");
+    } catch {
+      throw new Error(`Nilai lotSize tidak valid: ${params.lotSize}. Wajib berupa string integer eksak.`);
+    }
+    try {
+      const minQty = BigInt(params.minQuantity);
+      if (minQty <= 0n) throw new Error("Min quantity harus berupa integer positif lebih besar dari 0");
+      const lot = BigInt(params.lotSize);
+      if (minQty < lot) throw new Error(`Min quantity (${minQty}) tidak boleh lebih kecil dari lot size (${lot})`);
+    } catch (err) {
+      throw new Error(err.message || `Nilai minQuantity tidak valid: ${params.minQuantity}`);
+    }
+    try {
+      const minNotional = BigInt(params.minNotional);
+      if (minNotional <= 0n) throw new Error(`Min notional harus berupa integer positif lebih besar dari 0 ${quoteUnitLabel}`);
+    } catch {
+      throw new Error(`Nilai minNotional tidak valid: ${params.minNotional}. Wajib berupa string integer ${quoteUnitLabel}.`);
+    }
+    if (params.makerFeeBps !== void 0) {
+      if (!Number.isInteger(params.makerFeeBps) || params.makerFeeBps < 0 || params.makerFeeBps > 1e3) {
+        throw new Error("Maker fee harus berupa integer antara 0 dan 1000 basis poin (maks 10.00%)");
+      }
+    }
+    if (params.takerFeeBps !== void 0) {
+      if (!Number.isInteger(params.takerFeeBps) || params.takerFeeBps < 0 || params.takerFeeBps > 1e3) {
+        throw new Error("Taker fee harus berupa integer antara 0 dan 1000 basis poin (maks 10.00%)");
+      }
+    }
+  }
+  /**
+   * 1. MAKER: Create Draft Listing Request
+   */
+  static createListingRequest(input, makerAdminId, securityMeta) {
+    const baseAsset = db.assets.get(input.assetId);
+    if (!baseAsset) {
+      throw new Error(`Aset dasar tidak ditemukan: ${input.assetId}`);
+    }
+    const quoteAsset = this.getQuoteAsset(input.quoteAssetId);
+    const existingListing = Array.from(db.listingRequests.values()).find(
+      (l) => l.assetId === baseAsset.id && l.quoteAssetId === quoteAsset.id && l.status !== "CANCELLED" && l.status !== "REJECTED"
+    );
+    if (existingListing) {
+      throw new Error(`Listing untuk pasangan ${baseAsset.symbol}/${quoteAsset.symbol} sudah ada (Status: ${existingListing.status})`);
+    }
+    this.validateFinancialParameters({ ...input, quoteSymbol: quoteAsset.symbol });
+    const listingId = crypto19.randomUUID();
+    const now = Date.now();
+    const listing = {
+      id: listingId,
+      assetId: baseAsset.id,
+      quoteAssetId: quoteAsset.id,
+      status: "DRAFT",
+      tickSize: input.tickSize,
+      lotSize: input.lotSize,
+      minQuantity: input.minQuantity,
+      maxQuantity: input.maxQuantity,
+      minNotional: input.minNotional,
+      makerFeeBps: input.makerFeeBps !== void 0 ? input.makerFeeBps : 10,
+      takerFeeBps: input.takerFeeBps !== void 0 ? input.takerFeeBps : 20,
+      scheduledAt: input.scheduledAt,
+      depositOpenedAt: input.depositOpenedAt,
+      withdrawalOpenedAt: input.withdrawalOpenedAt,
+      depositEnabled: input.depositEnabled !== void 0 ? input.depositEnabled : true,
+      withdrawalEnabled: input.withdrawalEnabled !== void 0 ? input.withdrawalEnabled : true,
+      marketMakerAccountId: input.marketMakerAccountId || "usr-mm-0000-0000-000000000001",
+      projectOwnerAccountId: input.projectOwnerAccountId,
+      initialLiquidityBase: input.initialLiquidityBase,
+      initialLiquidityQuoteIdr: input.initialLiquidityQuoteIdr,
+      createdBy: makerAdminId,
+      version: 1,
+      createdAt: now,
+      updatedAt: now
+    };
+    db.listingRequests.set(listingId, listing);
+    db.scheduleSave();
+    ListingAuditService.recordEvent({
+      aggregateId: listingId,
+      eventType: "LISTING_CREATED",
+      actorId: makerAdminId,
+      aggregateVersion: 1,
+      payload: {
+        symbol: `${baseAsset.symbol}-${quoteAsset.symbol}`,
+        tickSize: listing.tickSize,
+        lotSize: listing.lotSize,
+        minQuantity: listing.minQuantity,
+        minNotional: listing.minNotional,
+        makerFeeBps: listing.makerFeeBps,
+        takerFeeBps: listing.takerFeeBps,
+        status: listing.status
+      },
+      reason: "Draft listing created by Maker Admin",
+      securityMetadata: securityMeta
+    });
+    return listing;
+  }
+  /**
+   * 2. Update Draft or Pending Listing Request
+   * If sensitive parameters change, increments version and invalidates any previous approval.
+   */
+  static updateListingRequest(id, input, actorId, securityMeta) {
+    const listing = db.listingRequests.get(id);
+    if (!listing) throw new Error(`Listing request tidak ditemukan: ${id}`);
+    if (listing.status !== "DRAFT" && listing.status !== "PENDING_REVIEW" && listing.status !== "APPROVED") {
+      throw new Error(`Listing request dalam status ${listing.status} tidak dapat diubah (Hanya DRAFT, PENDING_REVIEW, atau APPROVED sebelum aktif).`);
+    }
+    if (listing.status === "APPROVED") {
+      listing.status = "DRAFT";
+    }
+    if (input.tickSize || input.lotSize || input.minQuantity || input.minNotional || input.makerFeeBps !== void 0 || input.takerFeeBps !== void 0) {
+      const quoteAsset = db.assets.get(listing.quoteAssetId);
+      this.validateFinancialParameters({
+        tickSize: input.tickSize || listing.tickSize,
+        lotSize: input.lotSize || listing.lotSize,
+        minQuantity: input.minQuantity || listing.minQuantity,
+        minNotional: input.minNotional || listing.minNotional,
+        makerFeeBps: input.makerFeeBps !== void 0 ? input.makerFeeBps : listing.makerFeeBps,
+        takerFeeBps: input.takerFeeBps !== void 0 ? input.takerFeeBps : listing.takerFeeBps,
+        quoteSymbol: quoteAsset?.symbol
+      });
+    }
+    const previousVersion = listing.version;
+    const newVersion = previousVersion + 1;
+    if (input.tickSize) listing.tickSize = input.tickSize;
+    if (input.lotSize) listing.lotSize = input.lotSize;
+    if (input.minQuantity) listing.minQuantity = input.minQuantity;
+    if (input.minNotional) listing.minNotional = input.minNotional;
+    if (input.makerFeeBps !== void 0) listing.makerFeeBps = input.makerFeeBps;
+    if (input.takerFeeBps !== void 0) listing.takerFeeBps = input.takerFeeBps;
+    if (input.scheduledAt !== void 0) listing.scheduledAt = input.scheduledAt;
+    if (input.depositOpenedAt !== void 0) listing.depositOpenedAt = input.depositOpenedAt;
+    if (input.withdrawalOpenedAt !== void 0) listing.withdrawalOpenedAt = input.withdrawalOpenedAt;
+    if (input.depositEnabled !== void 0) listing.depositEnabled = input.depositEnabled;
+    if (input.withdrawalEnabled !== void 0) listing.withdrawalEnabled = input.withdrawalEnabled;
+    if (input.marketMakerAccountId !== void 0) listing.marketMakerAccountId = input.marketMakerAccountId;
+    if (input.projectOwnerAccountId !== void 0) listing.projectOwnerAccountId = input.projectOwnerAccountId;
+    if (input.initialLiquidityBase !== void 0) listing.initialLiquidityBase = input.initialLiquidityBase;
+    if (input.initialLiquidityQuoteIdr !== void 0) listing.initialLiquidityQuoteIdr = input.initialLiquidityQuoteIdr;
+    listing.version = newVersion;
+    listing.updatedAt = Date.now();
+    db.listingApprovals.delete(listing.id);
+    db.listingRequests.set(id, listing);
+    db.scheduleSave();
+    ListingAuditService.recordEvent({
+      aggregateId: id,
+      eventType: "LISTING_UPDATED",
+      actorId,
+      aggregateVersion: newVersion,
+      payload: {
+        previousVersion,
+        newVersion,
+        updatedFields: input
+      },
+      reason: "Listing parameters updated by Admin, previous approvals invalidated",
+      securityMetadata: securityMeta
+    });
+    return listing;
+  }
+  /**
+   * 3. Submit Listing Request for Review
+   * Transitions DRAFT -> PENDING_REVIEW
+   */
+  static submitForReview(id, actorId, securityMeta) {
+    const listing = db.listingRequests.get(id);
+    if (!listing) throw new Error(`Listing request tidak ditemukan: ${id}`);
+    if (listing.status !== "DRAFT") {
+      throw new Error(`Hanya listing berstatus DRAFT yang dapat diajukan untuk review (Status saat ini: ${listing.status})`);
+    }
+    listing.status = "PENDING_REVIEW";
+    listing.updatedAt = Date.now();
+    db.listingRequests.set(id, listing);
+    db.scheduleSave();
+    ListingAuditService.recordEvent({
+      aggregateId: id,
+      eventType: "LISTING_SUBMITTED",
+      actorId,
+      aggregateVersion: listing.version,
+      payload: {
+        status: listing.status
+      },
+      reason: "Submitted for Maker-Checker review",
+      securityMetadata: securityMeta
+    });
+    return listing;
+  }
+  /**
+   * 4. CHECKER: Approve Listing Request
+   * Strictly enforces Maker-Checker: reviewerId !== createdBy!
+   */
+  static approveListing(id, reviewerId, reason, securityMeta) {
+    const listing = db.listingRequests.get(id);
+    if (!listing) throw new Error(`Listing request tidak ditemukan: ${id}`);
+    if (listing.status !== "PENDING_REVIEW") {
+      throw new Error(`Hanya listing berstatus PENDING_REVIEW yang dapat disetujui (Status saat ini: ${listing.status})`);
+    }
+    if (listing.createdBy === reviewerId) {
+      throw new Error("Pelanggaran Maker-Checker: Pembuat listing (Maker) tidak diperbolehkan menyetujui (Approve) listing buatannya sendiri.");
+    }
+    if (!reason || reason.trim().length < 5) {
+      throw new Error("Alasan persetujuan (approval reason) wajib diisi dengan jelas minimal 5 karakter.");
+    }
+    const existingApproval = db.listingApprovals.get(listing.id);
+    if (existingApproval && existingApproval.configVersion === listing.version && existingApproval.decision === "APPROVED") {
+      throw new Error(`Listing versi ${listing.version} sudah memiliki persetujuan aktif.`);
+    }
+    const approvalId = crypto19.randomUUID();
+    const approval = {
+      id: approvalId,
+      listingRequestId: listing.id,
+      reviewerId,
+      decision: "APPROVED",
+      reason: reason.trim(),
+      configVersion: listing.version,
+      reviewedAt: Date.now()
+    };
+    db.listingApprovals.set(listing.id, approval);
+    const hasFutureSchedule = Boolean(listing.scheduledAt && listing.scheduledAt > Date.now() + 5e3);
+    listing.status = hasFutureSchedule ? "SCHEDULED" : "APPROVED";
+    listing.updatedAt = Date.now();
+    db.listingRequests.set(listing.id, listing);
+    if (hasFutureSchedule) {
+      ensureScheduledPairEntry(listing);
+      marketWsService.broadcastTickerSnapshot();
+    }
+    db.saveToDisk();
+    ListingAuditService.recordEvent({
+      aggregateId: listing.id,
+      eventType: "LISTING_APPROVED",
+      actorId: reviewerId,
+      aggregateVersion: listing.version,
+      payload: {
+        approvalId,
+        decision: "APPROVED",
+        configVersion: approval.configVersion,
+        reason: approval.reason,
+        makerId: listing.createdBy,
+        checkerId: reviewerId
+      },
+      reason: `Listing approved by Checker Admin: ${reason}`,
+      securityMetadata: securityMeta
+    });
+    return approval;
+  }
+  /**
+   * 5. CHECKER: Reject Listing Request
+   * Strictly enforces Maker-Checker: reviewerId !== createdBy!
+   */
+  static rejectListing(id, reviewerId, reason, securityMeta) {
+    const listing = db.listingRequests.get(id);
+    if (!listing) throw new Error(`Listing request tidak ditemukan: ${id}`);
+    if (listing.status !== "PENDING_REVIEW") {
+      throw new Error(`Hanya listing berstatus PENDING_REVIEW yang dapat ditolak (Status saat ini: ${listing.status})`);
+    }
+    if (listing.createdBy === reviewerId) {
+      throw new Error("Pelanggaran Maker-Checker: Pembuat listing (Maker) tidak diperbolehkan menolak/memutuskan listing buatannya sendiri.");
+    }
+    if (!reason || reason.trim().length < 5) {
+      throw new Error("Alasan penolakan (rejection reason) wajib diisi minimal 5 karakter.");
+    }
+    const approvalId = crypto19.randomUUID();
+    const approval = {
+      id: approvalId,
+      listingRequestId: listing.id,
+      reviewerId,
+      decision: "REJECTED",
+      reason: reason.trim(),
+      configVersion: listing.version,
+      reviewedAt: Date.now()
+    };
+    db.listingApprovals.set(listing.id, approval);
+    listing.status = "REJECTED";
+    listing.updatedAt = Date.now();
+    db.listingRequests.set(listing.id, listing);
+    db.scheduleSave();
+    ListingAuditService.recordEvent({
+      aggregateId: listing.id,
+      eventType: "LISTING_REJECTED",
+      actorId: reviewerId,
+      aggregateVersion: listing.version,
+      payload: {
+        approvalId,
+        decision: "REJECTED",
+        configVersion: approval.configVersion,
+        reason: approval.reason,
+        makerId: listing.createdBy,
+        checkerId: reviewerId
+      },
+      reason: `Listing rejected by Checker Admin: ${reason}`,
+      securityMetadata: securityMeta
+    });
+    return approval;
+  }
+  /**
+   * 6. Schedule Listing Request (supports initial scheduling on APPROVED and rescheduling on SCHEDULED)
+   */
+  static scheduleListing(id, scheduledAt, actorId, securityMeta) {
+    const listing = db.listingRequests.get(id);
+    if (!listing) throw new Error(`Listing request tidak ditemukan: ${id}`);
+    if (listing.status !== "APPROVED" && listing.status !== "SCHEDULED") {
+      throw new Error(`Hanya listing berstatus APPROVED atau SCHEDULED yang dapat dijadwalkan (Status saat ini: ${listing.status})`);
+    }
+    if (!scheduledAt || !Number.isFinite(scheduledAt) || scheduledAt <= Date.now() + 5e3) {
+      throw new Error("Waktu jadwal (scheduledAt) harus berupa waktu masa depan (minimal 5 detik dari sekarang).");
+    }
+    listing.status = "SCHEDULED";
+    listing.scheduledAt = Math.floor(scheduledAt);
+    listing.updatedAt = Date.now();
+    db.listingRequests.set(listing.id, listing);
+    ensureScheduledPairEntry(listing);
+    db.saveToDisk();
+    marketWsService.broadcastTickerSnapshot();
+    ListingAuditService.recordEvent({
+      aggregateId: listing.id,
+      eventType: "LISTING_SCHEDULED",
+      actorId,
+      aggregateVersion: listing.version,
+      payload: {
+        scheduledAt: listing.scheduledAt
+      },
+      reason: `Listing scheduled for activation at ${new Date(listing.scheduledAt).toISOString()}`,
+      securityMetadata: securityMeta
+    });
+    return listing;
+  }
+  /**
+   * 6b. Cancel Scheduled Listing (reverts SCHEDULED -> APPROVED)
+   */
+  static cancelScheduleListing(id, actorId, securityMeta) {
+    const listing = db.listingRequests.get(id);
+    if (!listing) throw new Error(`Listing request tidak ditemukan: ${id}`);
+    if (listing.status !== "SCHEDULED") {
+      throw new Error(`Hanya listing berstatus SCHEDULED yang dapat dibatalkan jadwalnya (Status saat ini: ${listing.status})`);
+    }
+    const baseAsset = db.assets.get(listing.assetId);
+    const quoteAsset = db.assets.get(listing.quoteAssetId);
+    const pairId = baseAsset && quoteAsset ? `${baseAsset.symbol}-${quoteAsset.symbol}` : null;
+    listing.status = "APPROVED";
+    listing.scheduledAt = void 0;
+    listing.updatedAt = Date.now();
+    db.listingRequests.set(listing.id, listing);
+    if (pairId) {
+      const existingPair = db.tradingPairs.get(pairId);
+      if (existingPair && !existingPair.isActive && !db.markets.has(pairId)) {
+        db.tradingPairs.delete(pairId);
+      } else if (existingPair) {
+        existingPair.scheduledAt = void 0;
+        db.tradingPairs.set(pairId, existingPair);
+      }
+    }
+    db.saveToDisk();
+    marketWsService.broadcastTickerSnapshot();
+    ListingAuditService.recordEvent({
+      aggregateId: listing.id,
+      eventType: "LISTING_UPDATED",
+      actorId,
+      aggregateVersion: listing.version,
+      payload: { status: "APPROVED", scheduledAt: null },
+      reason: "Scheduled listing launch time cancelled by Admin",
+      securityMetadata: securityMeta
+    });
+    return listing;
+  }
+  /**
+   * 7. Idempotent Market Activation
+   */
+  static async activateListing(id, actorId, idempotencyKey, securityMeta) {
+    return ListingActivationService.activateMarket(id, actorId, idempotencyKey, securityMeta);
+  }
+  /**
+   * 8. Suspend Market Trading
+   */
+  static suspendMarket(id, actorId, reason, securityMeta) {
+    const listing = db.listingRequests.get(id);
+    let market;
+    if (listing) {
+      market = Array.from(db.markets.values()).find((m) => m.listingRequestId === listing.id);
+    } else {
+      market = db.markets.get(id);
+    }
+    if (!market) {
+      throw new Error(`Market tidak ditemukan untuk ID ${id}`);
+    }
+    market.status = "HALTED";
+    market.updatedAt = Date.now();
+    db.markets.set(market.id, market);
+    const pair = db.tradingPairs.get(market.id);
+    if (pair) {
+      pair.isHalted = true;
+      db.tradingPairs.set(pair.id, pair);
+    }
+    if (listing) {
+      listing.status = "SUSPENDED";
+      listing.updatedAt = Date.now();
+      db.listingRequests.set(listing.id, listing);
+    }
+    db.scheduleSave();
+    ListingAuditService.recordEvent({
+      aggregateId: listing ? listing.id : market.id,
+      eventType: "MARKET_SUSPENDED",
+      actorId,
+      aggregateVersion: market.version,
+      payload: {
+        marketId: market.id,
+        symbol: market.symbol,
+        reason
+      },
+      reason: `Market suspended: ${reason}`,
+      securityMetadata: securityMeta
+    });
+    marketWsService.broadcast({
+      type: "MARKET_STATUS_CHANGED",
+      data: {
+        symbol: market.symbol,
+        status: "HALTED",
+        isHalted: true
+      }
+    });
+    return market;
+  }
+  /**
+   * 9. Resume Market Trading
+   */
+  static resumeMarket(id, actorId, reason, securityMeta) {
+    const listing = db.listingRequests.get(id);
+    let market;
+    if (listing) {
+      market = Array.from(db.markets.values()).find((m) => m.listingRequestId === listing.id);
+    } else {
+      market = db.markets.get(id);
+    }
+    if (!market) throw new Error(`Market tidak ditemukan untuk ID ${id}`);
+    market.status = "ACTIVE";
+    market.updatedAt = Date.now();
+    db.markets.set(market.id, market);
+    const pair = db.tradingPairs.get(market.id);
+    if (pair) {
+      pair.isHalted = false;
+      pair.isActive = true;
+      db.tradingPairs.set(pair.id, pair);
+    }
+    if (listing) {
+      listing.status = "ACTIVE";
+      listing.updatedAt = Date.now();
+      db.listingRequests.set(listing.id, listing);
+    }
+    db.scheduleSave();
+    ListingAuditService.recordEvent({
+      aggregateId: listing ? listing.id : market.id,
+      eventType: "MARKET_RESUMED",
+      actorId,
+      aggregateVersion: market.version,
+      payload: {
+        marketId: market.id,
+        symbol: market.symbol,
+        reason
+      },
+      reason: `Market resumed: ${reason}`,
+      securityMetadata: securityMeta
+    });
+    marketWsService.broadcast({
+      type: "MARKET_STATUS_CHANGED",
+      data: {
+        symbol: market.symbol,
+        status: "ACTIVE",
+        isHalted: false
+      }
+    });
+    return market;
+  }
+};
+
+// server/services/listingService.ts
+init_database();
+import crypto20 from "crypto";
+init_PrecisionMath();
+var ListingService2 = class {
+  /**
+   * 1. CREATE Listing Request (Maker Action)
+   */
+  static createListingRequest(input, makerAdminId, securityMeta) {
+    if (!makerAdminId) {
+      throw new Error("Maker identity (makerAdminId) wajib disertakan untuk membuat listing.");
+    }
+    return ListingService.createListingRequest(input, makerAdminId, securityMeta);
+  }
+  /**
+   * 2. GET Listing Request by ID
+   */
+  static getListingRequestById(id) {
+    const listing = db.listingRequests.get(id);
+    if (!listing) return null;
+    const approval = db.listingApprovals.get(id);
+    const asset = db.assets.get(listing.assetId);
+    const quoteAsset = db.assets.get(listing.quoteAssetId);
+    return {
+      ...listing,
+      approval,
+      asset,
+      quoteAsset
+    };
+  }
+  /**
+   * 3. LIST Listing Requests with optional filter
+   */
+  static listListingRequests(filter) {
+    const all = Array.from(db.listingRequests.values());
+    const filtered = all.filter((l) => {
+      if (filter?.status && l.status !== filter.status) return false;
+      if (filter?.assetId && l.assetId !== filter.assetId) return false;
+      return true;
+    });
+    return filtered.map((l) => {
+      const approval = db.listingApprovals.get(l.id);
+      const asset = db.assets.get(l.assetId);
+      const quoteAsset = db.assets.get(l.quoteAssetId);
+      return {
+        ...l,
+        approval,
+        assetSymbol: asset ? asset.symbol : "UNKNOWN",
+        quoteSymbol: quoteAsset ? quoteAsset.symbol : "IDR"
+      };
+    });
+  }
+  /**
+   * 4. UPDATE Listing Request
+   * Sensitive parameter changes increment version and invalidate any previous approvals!
+   */
+  static updateListingRequest(id, input, actorId, securityMeta) {
+    return ListingService.updateListingRequest(id, input, actorId, securityMeta);
+  }
+  /**
+   * 5. DELETE / CANCEL Listing Request
+   */
+  static deleteListingRequest(id, actorId, reason, securityMeta) {
+    const listing = db.listingRequests.get(id);
+    if (!listing) {
+      throw new Error(`Listing request tidak ditemukan: ${id}`);
+    }
+    if (listing.status === "ACTIVE") {
+      throw new Error("Listing request yang sudah ACTIVE tidak dapat dihapus.");
+    }
+    listing.status = "CANCELLED";
+    listing.updatedAt = Date.now();
+    db.listingRequests.set(id, listing);
+    db.scheduleSave();
+    ListingAuditService.recordEvent({
+      aggregateId: id,
+      eventType: "LISTING_REJECTED",
+      actorId,
+      aggregateVersion: listing.version,
+      payload: { status: "CANCELLED" },
+      reason: reason || "Listing request cancelled by admin",
+      securityMetadata: securityMeta
+    });
+    return true;
+  }
+  /**
+   * 6. SUBMIT for Review (Maker submits DRAFT -> PENDING_REVIEW)
+   */
+  static submitForReview(id, actorId, securityMeta) {
+    return ListingService.submitForReview(id, actorId, securityMeta);
+  }
+  /**
+   * 7. APPROVE Listing Request (Checker Action)
+   * Strictly enforces Maker-Checker: reviewerId !== createdBy!
+   */
+  static approveListingRequest(id, checkerAdminId, reason, securityMeta) {
+    if (!checkerAdminId) {
+      throw new Error("Checker identity (checkerAdminId) wajib disertakan untuk approval.");
+    }
+    return ListingService.approveListing(id, checkerAdminId, reason, securityMeta);
+  }
+  /**
+   * 8. REJECT Listing Request (Checker Action)
+   * Strictly enforces Maker-Checker: reviewerId !== createdBy!
+   */
+  static rejectListingRequest(id, checkerAdminId, reason, securityMeta) {
+    if (!checkerAdminId) {
+      throw new Error("Checker identity (checkerAdminId) wajib disertakan untuk penolakan.");
+    }
+    return ListingService.rejectListing(id, checkerAdminId, reason, securityMeta);
+  }
+  /**
+   * 9. VALIDATE ENGINE READINESS
+   * Inspects matching engine state, order book clean status, ticker uniqueness, and asset registries.
+   */
+  static validateEngineReadiness(listingRequestId) {
+    const listing = db.listingRequests.get(listingRequestId);
+    if (!listing) {
+      throw new Error(`Listing request tidak ditemukan: ${listingRequestId}`);
+    }
+    const baseAsset = db.assets.get(listing.assetId);
+    const quoteAsset = db.assets.get(listing.quoteAssetId);
+    const baseAssetRegistered = !!baseAsset;
+    const quoteAssetRegistered = !!quoteAsset;
+    const marketSymbol = baseAsset && quoteAsset ? `${baseAsset.symbol}-${quoteAsset.symbol}` : "UNKNOWN";
+    const existingMarket = Array.from(db.markets.values()).find((m) => m.symbol === marketSymbol && m.status === "ACTIVE");
+    const existingTradingPair = Array.from(db.tradingPairs.values()).find((p) => p.id === marketSymbol && p.isActive);
+    const pairSymbolUnique = !existingMarket && !existingTradingPair;
+    let matchingEngineResponsive = false;
+    try {
+      matchingEngineResponsive = typeof matchingEngine.getOrderBook === "function";
+    } catch {
+      matchingEngineResponsive = false;
+    }
+    let orderBookZeroState = true;
+    try {
+      const book = matchingEngine.getOrderBook(marketSymbol);
+      if (book) {
+        orderBookZeroState = book.bids.length === 0 && book.asks.length === 0;
+      }
+    } catch {
+      orderBookZeroState = true;
+    }
+    const ledgerAccountsInitialized = baseAssetRegistered && quoteAssetRegistered;
+    const isReady = matchingEngineResponsive && orderBookZeroState && pairSymbolUnique && baseAssetRegistered && quoteAssetRegistered && ledgerAccountsInitialized;
+    let details = "Semua pemeriksaan kesiapan engine memenuhi syarat.";
+    if (!isReady) {
+      const failures = [];
+      if (!matchingEngineResponsive) failures.push("Matching engine tidak responsif");
+      if (!orderBookZeroState) failures.push("Order book tidak dalam status nol (terdapat order menggantung)");
+      if (!pairSymbolUnique) failures.push(`Simbol pasar ${marketSymbol} sudah aktif di bursa`);
+      if (!baseAssetRegistered) failures.push("Aset dasar belum terdaftar");
+      if (!quoteAssetRegistered) failures.push("Quote asset belum terdaftar");
+      details = `Engine belum siap: ${failures.join(", ")}`;
+    }
+    return {
+      isReady,
+      checks: {
+        matchingEngineResponsive,
+        orderBookZeroState,
+        pairSymbolUnique,
+        baseAssetRegistered,
+        quoteAssetRegistered,
+        ledgerAccountsInitialized
+      },
+      details
+    };
+  }
+  /**
+   * 10. IDEMPOTENT MARKET ACTIVATION ORCHESTRATOR
+   * Validates engine readiness before executing status updates to ACTIVE.
+   * Dispatches transactional outbox event for guaranteed delivery.
+   */
+  static async activateListingMarket(listingRequestId, actorId, idempotencyKey, securityMeta) {
+    const readiness = this.validateEngineReadiness(listingRequestId);
+    if (!readiness.isReady) {
+      throw new Error(`Aktivasi pasar gagal pra-verifikasi: ${readiness.details}`);
+    }
+    return await ListingActivationService.activateMarket(
+      listingRequestId,
+      actorId,
+      idempotencyKey,
+      securityMeta
+    );
+  }
+  /**
+   * 11. PUBLIC TOKEN LISTING APPLICATION (Project Portal)
+   * Allows external crypto projects and token issuers to submit listing proposals.
+   */
+  static submitPublicListingApplication(input, ipAddress) {
+    const symbol = input.tokenSymbol.trim().toUpperCase();
+    if (!/^[A-Z0-9]{2,12}$/.test(symbol)) {
+      throw new Error("Format simbol token harus 2-12 karakter alfanumerik huruf besar.");
+    }
+    ListingService.validateContractAddress(input.network, input.contractAddress);
+    const applicationId = `REQ-${Date.now().toString(36).toUpperCase()}-${crypto20.randomBytes(3).toString("hex").toUpperCase()}`;
+    const now = Date.now();
+    let asset = Array.from(db.assets.values()).find((a) => a.symbol === symbol);
+    if (!asset) {
+      const assetId = crypto20.randomUUID();
+      asset = {
+        id: assetId,
+        symbol,
+        name: input.tokenName.trim(),
+        assetType: "TOKEN",
+        decimals: input.decimals || 18,
+        network: input.network.toUpperCase(),
+        contractAddress: input.contractAddress.trim(),
+        status: "PENDING",
+        depositEnabled: false,
+        withdrawalEnabled: false,
+        createdAt: now,
+        updatedAt: now
+      };
+      db.assets.set(assetId, asset);
+    }
+    const isUsdtQuote = (input.quoteCurrency || "").toUpperCase() === "USDT";
+    const quoteAsset = ListingService.getQuoteAsset(isUsdtQuote ? "USDT" : "IDR");
+    const listingId = crypto20.randomUUID();
+    const tickSize = isUsdtQuote ? "10000" : "100";
+    const baseLotDefault = asset.decimals >= 2 ? (10n ** BigInt(asset.decimals - 2)).toString() : "1";
+    const lotSize = baseLotDefault;
+    const minQuantity = baseLotDefault;
+    const minNotional = isUsdtQuote ? "5000000" : "1000000";
+    let parsedInitialLiquidityQuote;
+    if (input.initialLiquidityCommitmentIdr) {
+      try {
+        const cleanedCommitment = String(input.initialLiquidityCommitmentIdr).trim().replace(/,/g, "");
+        if (cleanedCommitment) {
+          parsedInitialLiquidityQuote = PrecisionMath.parseToUnits(cleanedCommitment, quoteAsset.decimals).toString();
+        }
+      } catch {
+        parsedInitialLiquidityQuote = void 0;
+      }
+    }
+    const listing = {
+      id: listingId,
+      applicationId,
+      assetId: asset.id,
+      quoteAssetId: quoteAsset.id,
+      status: "PENDING_REVIEW",
+      // Automatically queued for Maker review
+      tickSize,
+      lotSize,
+      minQuantity,
+      minNotional,
+      makerFeeBps: 10,
+      takerFeeBps: 20,
+      depositOpenedAt: input.depositOpenedAt,
+      withdrawalOpenedAt: input.withdrawalOpenedAt,
+      depositEnabled: input.depositEnabled !== void 0 ? input.depositEnabled : true,
+      withdrawalEnabled: input.withdrawalEnabled !== void 0 ? input.withdrawalEnabled : true,
+      marketMakerAccountId: "usr-mm-0000-0000-000000000001",
+      projectOwnerAccountId: input.projectOwnerAccountId,
+      initialLiquidityQuoteIdr: parsedInitialLiquidityQuote,
+      createdBy: `portal:${input.contactEmail}`,
+      version: 1,
+      createdAt: now,
+      updatedAt: now
+    };
+    db.listingRequests.set(listingId, listing);
+    db.saveToDisk();
+    ListingAuditService.recordEvent({
+      aggregateId: listingId,
+      eventType: "LISTING_SUBMITTED",
+      actorId: `applicant:${input.contactEmail}`,
+      aggregateVersion: 1,
+      payload: {
+        applicationId,
+        tokenName: input.tokenName,
+        tokenSymbol: symbol,
+        network: input.network,
+        contractAddress: input.contractAddress,
+        decimals: input.decimals,
+        website: input.projectWebsite,
+        contact: input.contactEmail
+      },
+      reason: "Public token listing application received via DIMONEX Portal",
+      securityMetadata: { ip: ipAddress, userAgent: "PUBLIC_PORTAL" }
+    });
+    return {
+      applicationId,
+      tokenSymbol: symbol,
+      status: "SUBMITTED",
+      createdAt: now,
+      trackingMessage: `Pengajuan listing untuk ${symbol} berhasil disimpan. Tim DIMONEX Listing Committee akan mereview dalam 1-3 hari kerja.`
+    };
+  }
+};
+var listingService = ListingService2;
+
+// server/routes/listing.ts
+var listingRouter = Router7();
+function extractSecurityMeta(req) {
+  const user = req.user;
+  return {
+    ip: req.ip || req.socket.remoteAddress || "127.0.0.1",
+    userAgent: req.headers["user-agent"] || "unknown",
+    authRole: user ? user.role : "UNKNOWN",
+    sessionHash: req.token ? req.token.slice(-12) : void 0
+  };
+}
+listingRouter.post("/apply", (req, res) => {
+  try {
+    const {
+      tokenName,
+      tokenSymbol,
+      network,
+      contractAddress,
+      decimals,
+      projectWebsite,
+      whitepaperUrl,
+      contactEmail,
+      telegramHandle,
+      quoteCurrency,
+      expectedInitialPriceIdr,
+      initialLiquidityCommitmentIdr,
+      description,
+      projectOwnerAccountId,
+      depositOpenedAt,
+      withdrawalOpenedAt,
+      depositEnabled,
+      withdrawalEnabled
+    } = req.body;
+    if (!tokenName || !tokenSymbol || !network || !contactEmail) {
+      return res.status(400).json({
+        error: "Nama token, simbol, jaringan, dan email kontak wajib diisi.",
+        code: "MISSING_FIELDS"
+      });
+    }
+    const clientIp = req.ip || req.socket.remoteAddress || "127.0.0.1";
+    const result = listingService.submitPublicListingApplication({
+      tokenName,
+      tokenSymbol,
+      network,
+      contractAddress: contractAddress || "",
+      decimals: Number(decimals) || 18,
+      projectWebsite: projectWebsite || "",
+      whitepaperUrl,
+      contactEmail,
+      telegramHandle,
+      quoteCurrency: quoteCurrency === "USDT" ? "USDT" : "IDR",
+      expectedInitialPriceIdr: expectedInitialPriceIdr || "1000",
+      initialLiquidityCommitmentIdr: initialLiquidityCommitmentIdr || "10000000",
+      description: description || "",
+      projectOwnerAccountId,
+      depositOpenedAt: depositOpenedAt ? Number(depositOpenedAt) : void 0,
+      withdrawalOpenedAt: withdrawalOpenedAt ? Number(withdrawalOpenedAt) : void 0,
+      depositEnabled: depositEnabled !== void 0 ? Boolean(depositEnabled) : true,
+      withdrawalEnabled: withdrawalEnabled !== void 0 ? Boolean(withdrawalEnabled) : true
+    }, clientIp);
+    res.status(201).json({ success: true, data: result });
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: "APPLICATION_REJECTED" });
+  }
+});
+function maskEmailForPublicView(email) {
+  const parts = email.split("@");
+  if (parts.length !== 2) return email;
+  const [local, domain] = parts;
+  if (local.length <= 2) return `${local[0] || "*"}***@${domain}`;
+  return `${local.slice(0, 2)}***@${domain}`;
+}
+function findAuditApplicationId(listingId) {
+  for (let i = db.listingAuditEvents.length - 1; i >= 0; i--) {
+    const ev = db.listingAuditEvents[i];
+    if (ev.aggregateId === listingId && ev.payload && typeof ev.payload.applicationId === "string") {
+      return ev.payload.applicationId;
+    }
+  }
+  return void 0;
+}
+function resolveListingTrack(rawInput) {
+  const trimmed = rawInput.trim();
+  if (!trimmed) {
+    return { status: 400, error: "Masukkan Application ID, Simbol Token, atau Pair untuk melacak.", code: "EMPTY_QUERY" };
+  }
+  if (trimmed.length > 128) {
+    return { status: 400, error: "Query pelacakan terlalu panjang (maksimal 128 karakter).", code: "INVALID_QUERY" };
+  }
+  const qUpper = trimmed.toUpperCase();
+  const qNormalizedPair = qUpper.replace("/", "-");
+  const pairParts = qNormalizedPair.includes("-") ? qNormalizedPair.split("-").filter(Boolean) : null;
+  const baseFromPair = pairParts && pairParts.length >= 2 ? pairParts[0] : null;
+  const quoteFromPair = pairParts && pairParts.length >= 2 ? pairParts[1] : null;
+  const allListings = Array.from(db.listingRequests.values()).sort((a, b) => {
+    const aTerminal = a.status === "CANCELLED" || a.status === "REJECTED" ? 1 : 0;
+    const bTerminal = b.status === "CANCELLED" || b.status === "REJECTED" ? 1 : 0;
+    if (aTerminal !== bTerminal) return aTerminal - bTerminal;
+    return b.createdAt - a.createdAt;
+  });
+  let matchedByDirectSecret = false;
+  let match = allListings.find((l) => {
+    const appId = l.applicationId?.toUpperCase();
+    return appId === qUpper || l.id.toUpperCase() === qUpper;
+  });
+  if (match) matchedByDirectSecret = true;
+  if (!match) {
+    const auditEvent = [...db.listingAuditEvents].reverse().find((ev) => ev.payload && typeof ev.payload.applicationId === "string" && ev.payload.applicationId.toUpperCase() === qUpper);
+    if (auditEvent) {
+      match = db.listingRequests.get(auditEvent.aggregateId);
+      if (match) matchedByDirectSecret = true;
+    }
+  }
+  if (!match && baseFromPair && quoteFromPair) {
+    match = allListings.find((l) => {
+      const asset = db.assets.get(l.assetId);
+      const quote = db.assets.get(l.quoteAssetId);
+      return asset?.symbol.toUpperCase() === baseFromPair && quote?.symbol.toUpperCase() === quoteFromPair;
+    });
+  }
+  if (!match) {
+    match = allListings.find((l) => {
+      const asset = db.assets.get(l.assetId);
+      return asset && (asset.symbol.toUpperCase() === qUpper || baseFromPair && asset.symbol.toUpperCase() === baseFromPair);
+    });
+  }
+  if (!match && qUpper.includes("@")) {
+    match = allListings.find((l) => {
+      if (!l.createdBy) return false;
+      const cleaned = l.createdBy.replace(/^portal:/i, "").toUpperCase();
+      return cleaned === qUpper;
+    });
+    if (match) matchedByDirectSecret = true;
+  }
+  if (!match && qUpper.length >= 3) {
+    match = allListings.find((l) => {
+      const asset = db.assets.get(l.assetId);
+      const appId = (l.applicationId || findAuditApplicationId(l.id) || "").toUpperCase();
+      const createdByClean = (l.createdBy || "").replace(/^portal:/i, "").toUpperCase();
+      return appId.includes(qUpper) || l.id.toUpperCase().includes(qUpper) || asset && asset.name.toUpperCase().includes(qUpper) || qUpper.includes("@") && createdByClean.includes(qUpper);
+    });
+  }
+  if (match) {
+    const asset = db.assets.get(match.assetId);
+    const quote = db.assets.get(match.quoteAssetId);
+    const approval = db.listingApprovals.get(match.id);
+    const pairKey = `${asset?.symbol || "TOKEN"}-${quote?.symbol || "IDR"}`;
+    const market = Array.from(db.markets.values()).find((m) => m.listingRequestId === match.id) || Array.from(db.markets.values()).find((m) => m.symbol.toUpperCase() === pairKey.toUpperCase());
+    const tradingPair = db.tradingPairs.get(pairKey);
+    const mmUser = match.marketMakerAccountId ? db.users.get(match.marketMakerAccountId) : db.users.get("usr-mm-0000-0000-000000000001");
+    const projectUser = match.projectOwnerAccountId ? db.users.get(match.projectOwnerAccountId) : null;
+    const isDepositOpen = asset?.depositEnabled ?? match.depositEnabled ?? true;
+    const isWithdrawOpen = asset?.withdrawalEnabled ?? match.withdrawalEnabled ?? true;
+    const resolvedAppId = match.applicationId || findAuditApplicationId(match.id) || match.id;
+    const isMarketLive = market?.status === "ACTIVE" || Boolean(tradingPair && tradingPair.isActive && !tradingPair.isDelisted && !tradingPair.isHalted);
+    let stage = 1;
+    let stageName = "Compliance Pre-Screening";
+    if (match.status === "DRAFT") {
+      stage = 1;
+      stageName = "Draft \u2014 Compliance Pre-Screening";
+    } else if (match.status === "PENDING_REVIEW") {
+      stage = 2;
+      stageName = "Maker Review & Risk Assessment";
+    } else if (match.status === "APPROVED") {
+      stage = 3;
+      stageName = "Checker Approval & Engine Readiness";
+    } else if (match.status === "SCHEDULED") {
+      stage = 3;
+      stageName = "Scheduled for Spot Market Launch";
+    } else if (match.status === "ACTIVE") {
+      stage = 4;
+      stageName = "Market Live on Spot Exchange";
+    } else if (match.status === "SUSPENDED") {
+      stage = 4;
+      stageName = "Market Temporarily Suspended";
+    } else if (match.status === "REJECTED") {
+      stage = 0;
+      stageName = "Rejected by Review Committee";
+    } else if (match.status === "CANCELLED") {
+      stage = 0;
+      stageName = "Application Cancelled";
+    }
+    const rawOwnerEmail = projectUser ? projectUser.email : match.createdBy.startsWith("portal:") ? match.createdBy.replace("portal:", "") : "-";
+    const safeOwnerEmail = rawOwnerEmail !== "-" && !matchedByDirectSecret ? maskEmailForPublicView(rawOwnerEmail) : rawOwnerEmail;
+    return {
+      status: 200,
+      data: {
+        id: match.id,
+        applicationId: resolvedAppId,
+        tokenName: asset ? asset.name : "Unknown",
+        tokenSymbol: asset ? asset.symbol : "UNKNOWN",
+        network: asset ? asset.network : "Unknown",
+        status: match.status,
+        stage,
+        stageName,
+        scheduledAt: match.scheduledAt,
+        createdAt: match.createdAt,
+        updatedAt: match.updatedAt,
+        pair: `${asset?.symbol || "TOKEN"}/${quote?.symbol || "IDR"}`,
+        approvalReason: approval?.reason,
+        marketActive: isMarketLive,
+        depositStatus: isDepositOpen ? "OPEN" : "CLOSED",
+        withdrawalStatus: isWithdrawOpen ? "OPEN" : "CLOSED",
+        depositOpenedAt: match.depositOpenedAt || asset?.depositOpenedAt,
+        withdrawalOpenedAt: match.withdrawalOpenedAt || asset?.withdrawalOpenedAt,
+        marketMakerAccountId: match.marketMakerAccountId || "usr-mm-0000-0000-000000000001",
+        marketMakerEmail: mmUser ? mmUser.email : "mm@dimonex.id",
+        projectOwnerAccountId: match.projectOwnerAccountId || null,
+        projectOwnerEmail: safeOwnerEmail,
+        source: "LISTING_REQUEST"
+      }
+    };
+  }
+  const allAssets = Array.from(db.assets.values());
+  const matchedAsset = allAssets.find((a) => a.symbol.toUpperCase() === qUpper || a.id.toUpperCase() === qUpper) || (baseFromPair ? allAssets.find((a) => a.symbol.toUpperCase() === baseFromPair) : void 0) || (qUpper.length >= 3 ? allAssets.find((a) => a.name.toUpperCase().includes(qUpper)) : void 0);
+  if (matchedAsset) {
+    const assetMarkets = Array.from(db.markets.values()).filter((m) => m.baseAssetId === matchedAsset.id);
+    const assetPairs = Array.from(db.tradingPairs.values()).filter(
+      (p) => p.baseCurrency.toUpperCase() === matchedAsset.symbol.toUpperCase() && !p.isDelisted
+    );
+    const preferredPair = (quoteFromPair ? assetPairs.find((p) => p.quoteCurrency.toUpperCase() === quoteFromPair) : void 0) || assetPairs.find((p) => p.isActive && !p.isHalted) || assetPairs[0];
+    const preferredMarket = (quoteFromPair ? assetMarkets.find((m) => m.symbol.toUpperCase() === `${matchedAsset.symbol}-${quoteFromPair}`.toUpperCase()) : void 0) || assetMarkets.find((m) => m.status === "ACTIVE") || assetMarkets[0];
+    const isMarketLive = preferredMarket?.status === "ACTIVE" || Boolean(preferredPair && preferredPair.isActive && !preferredPair.isDelisted && !preferredPair.isHalted);
+    let stage = 1;
+    let stageName = "Compliance Pre-Screening";
+    if (matchedAsset.status === "ACTIVE" || isMarketLive) {
+      stage = 4;
+      stageName = isMarketLive ? "Market Live on Spot Exchange" : "Active Exchange Settlement Asset";
+    } else if (matchedAsset.status === "SUSPENDED") {
+      stage = 4;
+      stageName = "Asset Temporarily Suspended";
+    } else if (matchedAsset.status === "RETIRED") {
+      stage = 0;
+      stageName = "Asset Retired / Delisted";
+    }
+    const pairLabel = preferredPair ? `${preferredPair.baseCurrency}/${preferredPair.quoteCurrency}` : preferredMarket ? preferredMarket.symbol.replace("-", "/") : `${matchedAsset.symbol}/IDR`;
+    const mmUser = db.users.get("usr-mm-0000-0000-000000000001");
+    return {
+      status: 200,
+      data: {
+        id: matchedAsset.id,
+        applicationId: `LISTED-${matchedAsset.symbol}`,
+        tokenName: matchedAsset.name,
+        tokenSymbol: matchedAsset.symbol,
+        network: matchedAsset.network,
+        status: isMarketLive ? "ACTIVE" : matchedAsset.status,
+        stage,
+        stageName,
+        scheduledAt: preferredPair?.scheduledAt,
+        createdAt: matchedAsset.createdAt,
+        updatedAt: matchedAsset.updatedAt,
+        pair: pairLabel,
+        approvalReason: isMarketLive ? "Aset telah terverifikasi dan aktif diperdagangkan di Pasar Spot DIMONEX." : void 0,
+        marketActive: isMarketLive,
+        depositStatus: matchedAsset.depositEnabled ? "OPEN" : "CLOSED",
+        withdrawalStatus: matchedAsset.withdrawalEnabled ? "OPEN" : "CLOSED",
+        depositOpenedAt: matchedAsset.depositOpenedAt,
+        withdrawalOpenedAt: matchedAsset.withdrawalOpenedAt,
+        marketMakerAccountId: "usr-mm-0000-0000-000000000001",
+        marketMakerEmail: mmUser ? mmUser.email : "mm@dimonex.id",
+        projectOwnerAccountId: null,
+        projectOwnerEmail: "DIMONEX Official Registry",
+        source: "EXCHANGE_REGISTRY"
+      }
+    };
+  }
+  return {
+    status: 404,
+    error: `Pengajuan listing tidak ditemukan untuk ID atau Simbol "${trimmed}". Pastikan Kode Permohonan (REQ-...) atau Simbol Token sudah benar.`,
+    code: "APPLICATION_NOT_FOUND"
+  };
+}
+listingRouter.get("/track", (req, res) => {
+  try {
+    const rawQuery = String(req.query.q || req.query.id || "");
+    const result = resolveListingTrack(rawQuery);
+    if (result.status !== 200) {
+      return res.status(result.status).json({ error: result.error, code: result.code });
+    }
+    res.json({ success: true, data: result.data });
+  } catch (err) {
+    res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
+  }
+});
+listingRouter.get("/track/:id", (req, res) => {
+  try {
+    const result = resolveListingTrack(req.params.id || "");
+    if (result.status !== 200) {
+      return res.status(result.status).json({ error: result.error, code: result.code });
+    }
+    res.json({ success: true, data: result.data });
+  } catch (err) {
+    res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
+  }
+});
+listingRouter.get("/public-list", (req, res) => {
+  const assets = Array.from(db.assets.values()).map((a) => {
+    const assetMarkets = Array.from(db.markets.values()).filter((m) => m.baseAssetId === a.id);
+    const activeMarket = assetMarkets.find((m) => m.status === "ACTIVE") || assetMarkets[0];
+    const listing = Array.from(db.listingRequests.values()).find((l) => l.assetId === a.id && l.status !== "CANCELLED" && l.status !== "REJECTED") || Array.from(db.listingRequests.values()).find((l) => l.assetId === a.id);
+    const listingQuote = listing ? db.assets.get(listing.quoteAssetId) : void 0;
+    const fallbackMarketSymbol = listingQuote ? `${a.symbol}-${listingQuote.symbol}` : `${a.symbol}-IDR`;
+    const activeMarketSymbols = assetMarkets.filter((m) => m.status === "ACTIVE").map((m) => m.symbol);
+    return {
+      id: a.id,
+      symbol: a.symbol,
+      name: a.name,
+      assetType: a.assetType,
+      network: a.network,
+      contractAddress: a.contractAddress,
+      decimals: a.decimals,
+      status: a.status,
+      depositEnabled: a.depositEnabled,
+      withdrawalEnabled: a.withdrawalEnabled,
+      depositOpenedAt: a.depositOpenedAt || listing?.depositOpenedAt,
+      withdrawalOpenedAt: a.withdrawalOpenedAt || listing?.withdrawalOpenedAt,
+      hasActiveMarket: activeMarket ? activeMarket.status === "ACTIVE" : false,
+      marketSymbol: activeMarket ? activeMarket.symbol : fallbackMarketSymbol,
+      activeMarketSymbols,
+      marketMakerAccountId: listing?.marketMakerAccountId,
+      projectOwnerAccountId: listing?.projectOwnerAccountId
+    };
+  });
+  res.json({ success: true, assets });
+});
+listingRouter.get("/assets/list", requireAdmin, (req, res) => {
+  const assets = Array.from(db.assets.values());
+  res.json({ success: true, assets });
+});
+listingRouter.post("/assets", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { symbol, name, assetType, decimals, network, contractAddress, depositEnabled, withdrawalEnabled } = req.body;
+    const asset = ListingService.createAsset({
+      symbol,
+      name,
+      assetType,
+      decimals,
+      network,
+      contractAddress,
+      depositEnabled,
+      withdrawalEnabled
+    }, adminUser.id, extractSecurityMeta(req));
+    res.status(201).json({ success: true, asset });
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: "INVALID_ASSET_DATA" });
+  }
+});
+listingRouter.get("/", requireAdmin, (req, res) => {
+  try {
+    const { status, search, page = "1", limit = "20" } = req.query;
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    let listings = Array.from(db.listingRequests.values());
+    if (status) {
+      listings = listings.filter((l) => l.status === status.toUpperCase());
+    }
+    if (search) {
+      const q = search.toUpperCase();
+      listings = listings.filter((l) => {
+        const baseAsset = db.assets.get(l.assetId);
+        const quoteAsset = db.assets.get(l.quoteAssetId);
+        return baseAsset && baseAsset.symbol.includes(q) || quoteAsset && quoteAsset.symbol.includes(q) || l.id.includes(search);
+      });
+    }
+    listings.sort((a, b) => b.createdAt - a.createdAt);
+    const totalCount = listings.length;
+    const startIndex = (pageNum - 1) * limitNum;
+    const paginated = listings.slice(startIndex, startIndex + limitNum);
+    const enriched = paginated.map((l) => {
+      const baseAsset = db.assets.get(l.assetId);
+      const quoteAsset = db.assets.get(l.quoteAssetId);
+      const approval = db.listingApprovals.get(l.id);
+      const market = Array.from(db.markets.values()).find((m) => m.listingRequestId === l.id);
+      const creator = db.users.get(l.createdBy);
+      const reviewer = approval ? db.users.get(approval.reviewerId) : null;
+      const mmUser = l.marketMakerAccountId ? db.users.get(l.marketMakerAccountId) : db.users.get("usr-mm-0000-0000-000000000001");
+      const projectUser = l.projectOwnerAccountId ? db.users.get(l.projectOwnerAccountId) : null;
+      const isDepositOpen = baseAsset?.depositEnabled ?? l.depositEnabled ?? true;
+      const isWithdrawOpen = baseAsset?.withdrawalEnabled ?? l.withdrawalEnabled ?? true;
+      return {
+        ...l,
+        baseAsset,
+        quoteAsset,
+        symbol: baseAsset && quoteAsset ? `${baseAsset.symbol}-${quoteAsset.symbol}` : l.id,
+        approval: approval ? {
+          ...approval,
+          reviewerEmail: reviewer ? reviewer.email : "Unknown"
+        } : null,
+        market: market || null,
+        creatorEmail: creator ? creator.email : l.createdBy.startsWith("portal:") ? l.createdBy.replace("portal:", "") : "Unknown",
+        marketMakerEmail: mmUser ? mmUser.email : "mm@dimonex.id",
+        marketMakerAccountId: l.marketMakerAccountId || "usr-mm-0000-0000-000000000001",
+        projectOwnerEmail: projectUser ? projectUser.email : l.createdBy.startsWith("portal:") ? l.createdBy.replace("portal:", "") : "-",
+        projectOwnerAccountId: l.projectOwnerAccountId || null,
+        depositStatus: isDepositOpen ? "OPEN" : "CLOSED",
+        withdrawalStatus: isWithdrawOpen ? "OPEN" : "CLOSED",
+        depositOpenedAt: l.depositOpenedAt || baseAsset?.depositOpenedAt,
+        withdrawalOpenedAt: l.withdrawalOpenedAt || baseAsset?.withdrawalOpenedAt
+      };
+    });
+    res.json({
+      success: true,
+      data: enriched,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        totalItems: totalCount,
+        totalPages: Math.ceil(totalCount / limitNum)
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
+  }
+});
+listingRouter.get("/:id", requireAdmin, (req, res) => {
+  try {
+    const { id } = req.params;
+    const listing = db.listingRequests.get(id);
+    if (!listing) {
+      return res.status(404).json({ error: `Listing request tidak ditemukan: ${id}`, code: "NOT_FOUND" });
+    }
+    const baseAsset = db.assets.get(listing.assetId);
+    const quoteAsset = db.assets.get(listing.quoteAssetId);
+    const approval = db.listingApprovals.get(listing.id);
+    const market = Array.from(db.markets.values()).find((m) => m.listingRequestId === listing.id);
+    const creator = db.users.get(listing.createdBy);
+    const reviewer = approval ? db.users.get(approval.reviewerId) : null;
+    const auditEvents = ListingAuditService.getEventsForAggregate(listing.id);
+    res.json({
+      success: true,
+      listing: {
+        ...listing,
+        baseAsset,
+        quoteAsset,
+        symbol: baseAsset && quoteAsset ? `${baseAsset.symbol}-${quoteAsset.symbol}` : listing.id,
+        approval: approval ? {
+          ...approval,
+          reviewerEmail: reviewer ? reviewer.email : "Unknown"
+        } : null,
+        market,
+        creatorEmail: creator ? creator.email : "Unknown",
+        auditEvents
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
+  }
+});
+listingRouter.get("/accounts/eligible", requireAdmin, (req, res) => {
+  const accounts = Array.from(db.users.values()).map((u) => {
+    const kyc = db.kyc.get(u.id);
+    return {
+      id: u.id,
+      email: u.email,
+      role: u.role,
+      fullName: kyc?.fullName || u.email.split("@")[0],
+      isMM: u.role === "MM" || u.id === "usr-mm-0000-0000-000000000001"
+    };
+  });
+  res.json({ success: true, accounts });
+});
+listingRouter.post("/", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const {
+      assetId,
+      quoteAssetId,
+      tickSize,
+      lotSize,
+      minQuantity,
+      maxQuantity,
+      minNotional,
+      makerFeeBps,
+      takerFeeBps,
+      scheduledAt,
+      depositOpenedAt,
+      withdrawalOpenedAt,
+      depositEnabled,
+      withdrawalEnabled,
+      marketMakerAccountId,
+      projectOwnerAccountId,
+      initialLiquidityBase,
+      initialLiquidityQuoteIdr
+    } = req.body;
+    const listing = ListingService.createListingRequest({
+      assetId,
+      quoteAssetId,
+      tickSize,
+      lotSize,
+      minQuantity,
+      maxQuantity,
+      minNotional,
+      makerFeeBps,
+      takerFeeBps,
+      scheduledAt,
+      depositOpenedAt,
+      withdrawalOpenedAt,
+      depositEnabled,
+      withdrawalEnabled,
+      marketMakerAccountId,
+      projectOwnerAccountId,
+      initialLiquidityBase,
+      initialLiquidityQuoteIdr
+    }, adminUser.id, extractSecurityMeta(req));
+    res.status(201).json({ success: true, listing });
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: "LISTING_VALIDATION_ERROR" });
+  }
+});
+listingRouter.post("/:id/toggle-deposit", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { id } = req.params;
+    const { enabled, openedAt } = req.body;
+    const listing = db.listingRequests.get(id);
+    if (!listing) return res.status(404).json({ error: "Listing tidak ditemukan" });
+    const baseAsset = db.assets.get(listing.assetId);
+    const newEnabled = enabled !== void 0 ? Boolean(enabled) : !(listing.depositEnabled ?? true);
+    listing.depositEnabled = newEnabled;
+    if (openedAt !== void 0) listing.depositOpenedAt = openedAt;
+    else if (newEnabled && !listing.depositOpenedAt) listing.depositOpenedAt = Date.now();
+    listing.updatedAt = Date.now();
+    if (baseAsset) {
+      baseAsset.depositEnabled = newEnabled;
+      baseAsset.depositOpenedAt = listing.depositOpenedAt;
+      baseAsset.updatedAt = Date.now();
+      db.assets.set(baseAsset.id, baseAsset);
+    }
+    db.scheduleSave();
+    ListingAuditService.recordEvent({
+      aggregateId: listing.id,
+      eventType: "LISTING_UPDATED",
+      actorId: adminUser.id,
+      aggregateVersion: listing.version,
+      payload: { depositEnabled: newEnabled, depositOpenedAt: listing.depositOpenedAt },
+      reason: `Deposit status changed to ${newEnabled ? "OPEN" : "CLOSED"} by admin`,
+      securityMetadata: extractSecurityMeta(req)
+    });
+    res.json({ success: true, depositEnabled: newEnabled, depositOpenedAt: listing.depositOpenedAt });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+listingRouter.post("/:id/toggle-withdraw", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { id } = req.params;
+    const { enabled, openedAt } = req.body;
+    const listing = db.listingRequests.get(id);
+    if (!listing) return res.status(404).json({ error: "Listing tidak ditemukan" });
+    const baseAsset = db.assets.get(listing.assetId);
+    const newEnabled = enabled !== void 0 ? Boolean(enabled) : !(listing.withdrawalEnabled ?? true);
+    listing.withdrawalEnabled = newEnabled;
+    if (openedAt !== void 0) listing.withdrawalOpenedAt = openedAt;
+    else if (newEnabled && !listing.withdrawalOpenedAt) listing.withdrawalOpenedAt = Date.now();
+    listing.updatedAt = Date.now();
+    if (baseAsset) {
+      baseAsset.withdrawalEnabled = newEnabled;
+      baseAsset.withdrawalOpenedAt = listing.withdrawalOpenedAt;
+      baseAsset.updatedAt = Date.now();
+      db.assets.set(baseAsset.id, baseAsset);
+    }
+    db.scheduleSave();
+    ListingAuditService.recordEvent({
+      aggregateId: listing.id,
+      eventType: "LISTING_UPDATED",
+      actorId: adminUser.id,
+      aggregateVersion: listing.version,
+      payload: { withdrawalEnabled: newEnabled, withdrawalOpenedAt: listing.withdrawalOpenedAt },
+      reason: `Withdrawal status changed to ${newEnabled ? "OPEN" : "CLOSED"} by admin`,
+      securityMetadata: extractSecurityMeta(req)
+    });
+    res.json({ success: true, withdrawalEnabled: newEnabled, withdrawalOpenedAt: listing.withdrawalOpenedAt });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+listingRouter.patch("/:id", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { id } = req.params;
+    const updated = ListingService.updateListingRequest(id, req.body, adminUser.id, extractSecurityMeta(req));
+    res.json({ success: true, listing: updated });
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: "UPDATE_FAILED" });
+  }
+});
+listingRouter.post("/:id/submit", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { id } = req.params;
+    const submitted = ListingService.submitForReview(id, adminUser.id, extractSecurityMeta(req));
+    res.json({ success: true, listing: submitted });
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: "SUBMIT_FAILED" });
+  }
+});
+listingRouter.post("/:id/approve", requireAdmin, (req, res) => {
+  try {
+    const checkerUser = req.user;
+    const { id } = req.params;
+    const { reason } = req.body;
+    const approval = ListingService.approveListing(id, checkerUser.id, reason, extractSecurityMeta(req));
+    res.json({ success: true, approval });
+  } catch (err) {
+    const isSelfApproval = err.message.includes("Maker-Checker");
+    res.status(isSelfApproval ? 403 : 400).json({
+      error: err.message,
+      code: isSelfApproval ? "SELF_APPROVAL_FORBIDDEN" : "APPROVAL_FAILED"
+    });
+  }
+});
+listingRouter.post("/:id/reject", requireAdmin, (req, res) => {
+  try {
+    const checkerUser = req.user;
+    const { id } = req.params;
+    const { reason } = req.body;
+    const approval = ListingService.rejectListing(id, checkerUser.id, reason, extractSecurityMeta(req));
+    res.json({ success: true, approval });
+  } catch (err) {
+    const isSelfApproval = err.message.includes("Maker-Checker");
+    res.status(isSelfApproval ? 403 : 400).json({
+      error: err.message,
+      code: isSelfApproval ? "SELF_APPROVAL_FORBIDDEN" : "REJECTION_FAILED"
+    });
+  }
+});
+listingRouter.post("/:id/schedule", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { id } = req.params;
+    const { scheduledAt } = req.body;
+    const scheduled = ListingService.scheduleListing(id, Number(scheduledAt), adminUser.id, extractSecurityMeta(req));
+    res.json({
+      success: true,
+      message: `Listing berhasil dijadwalkan untuk ${new Date(scheduled.scheduledAt || 0).toLocaleString("id-ID")}. Countdown timer kini aktif di Market Chart.`,
+      listing: scheduled
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: "SCHEDULE_FAILED" });
+  }
+});
+listingRouter.post("/:id/unschedule", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { id } = req.params;
+    const updated = ListingService.cancelScheduleListing(id, adminUser.id, extractSecurityMeta(req));
+    res.json({
+      success: true,
+      message: "Jadwal aktivasi listing dibatalkan (kembali ke status APPROVED).",
+      listing: updated
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: "UNSCHEDULE_FAILED" });
+  }
+});
+listingRouter.post("/:id/activate", requireAdmin, async (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { id } = req.params;
+    const idempotencyKey = req.headers["x-idempotency-key"];
+    const result = await ListingService.activateListing(
+      id,
+      adminUser.id,
+      idempotencyKey,
+      extractSecurityMeta(req)
+    );
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: "ACTIVATION_FAILED" });
+  }
+});
+listingRouter.post("/:id/suspend", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { id } = req.params;
+    const { reason = "Emergency regulatory halt" } = req.body;
+    const market = ListingService.suspendMarket(id, adminUser.id, reason, extractSecurityMeta(req));
+    res.json({ success: true, market });
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: "SUSPEND_FAILED" });
+  }
+});
+listingRouter.post("/:id/resume", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { id } = req.params;
+    const { reason = "Resumed by market operations" } = req.body;
+    const market = ListingService.resumeMarket(id, adminUser.id, reason, extractSecurityMeta(req));
+    res.json({ success: true, market });
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: "RESUME_FAILED" });
+  }
+});
+listingRouter.get("/audit/verify", requireAdmin, (req, res) => {
+  const result = ListingAuditService.verifyAuditIntegrity();
+  res.json({ success: true, ...result });
+});
+listingRouter.get("/:id/reconcile", requireAdmin, (req, res) => {
+  const { id } = req.params;
+  const listing = db.listingRequests.get(id);
+  const symbol = listing ? `${db.assets.get(listing.assetId)?.symbol}-${db.assets.get(listing.quoteAssetId)?.symbol}` : id;
+  const report = ListingActivationService.reconcileMarketReadiness(symbol);
+  res.json({ success: true, symbol, report });
+});
+
+// server/routes/markets.ts
+init_database();
+import { Router as Router8 } from "express";
+var marketsRouter = Router8();
+marketsRouter.get("/", (req, res) => {
+  try {
+    db.ensureAssetsForTradingPairs();
+    db.recalculatePair24hStats();
+    const assetsBySymbol = new Map(
+      Array.from(db.assets.values()).map((a) => [a.symbol.toUpperCase(), a])
+    );
+    const activeMarkets = Array.from(db.markets.values()).filter((m) => m.status === "ACTIVE").map((m) => {
+      const baseSym = m.symbol.split("-")[0];
+      const quoteSym = m.symbol.split("-")[1];
+      const baseAsset = db.assets.get(m.baseAssetId) || assetsBySymbol.get(baseSym);
+      const quoteAsset = db.assets.get(m.quoteAssetId) || assetsBySymbol.get(quoteSym);
+      const pair = db.tradingPairs.get(m.id);
+      return {
+        id: m.id,
+        symbol: m.symbol,
+        baseCurrency: baseAsset ? baseAsset.symbol : baseSym,
+        quoteCurrency: quoteAsset ? quoteAsset.symbol : quoteSym,
+        baseName: baseAsset?.name || baseSym,
+        baseLogoUrl: baseAsset?.logoUrl || "",
+        quoteLogoUrl: quoteAsset?.logoUrl || "",
+        baseDecimals: baseAsset ? baseAsset.decimals : 8,
+        quoteDecimals: quoteAsset ? quoteAsset.decimals : 2,
+        tickSize: m.tickSize,
+        lotSize: m.lotSize,
+        minQuantity: m.minQuantity,
+        minNotional: m.minNotional,
+        makerFeeBps: m.makerFeeBps,
+        takerFeeBps: m.takerFeeBps,
+        status: m.status,
+        isHalted: pair ? pair.isHalted : false,
+        lastPrice: pair ? pair.lastPrice : "0",
+        high24h: pair ? pair.high24h : "0",
+        low24h: pair ? pair.low24h : "0",
+        volume24h: pair ? pair.volume24h : "0",
+        quoteVolume24h: pair ? pair.quoteVolume24h || "0" : "0",
+        priceChange24h: pair ? pair.priceChange24h : "+0.00",
+        priceChangePercent24h: pair ? pair.priceChangePercent24h || "0.00" : "0.00",
+        activatedAt: m.activatedAt
+      };
+    });
+    const newListings = Array.from(db.listingRequests.values()).map((l) => {
+      const baseAsset = db.assets.get(l.assetId);
+      const quoteAsset = db.assets.get(l.quoteAssetId);
+      const quoteSym = quoteAsset?.symbol || "IDR";
+      const isDepositOpen = baseAsset?.depositEnabled ?? l.depositEnabled ?? true;
+      const isWithdrawOpen = baseAsset?.withdrawalEnabled ?? l.withdrawalEnabled ?? true;
+      const pairId = `${baseAsset?.symbol || "TOKEN"}-${quoteSym}`;
+      const pair = db.tradingPairs.get(pairId);
+      return {
+        id: l.id,
+        pairId,
+        symbol: pairId,
+        baseCurrency: baseAsset?.symbol || "TOKEN",
+        quoteCurrency: quoteSym,
+        tokenName: baseAsset?.name || baseAsset?.symbol,
+        logoUrl: baseAsset?.logoUrl || "",
+        network: baseAsset?.network || "TOKEN",
+        contractAddress: baseAsset?.contractAddress,
+        decimals: baseAsset?.decimals ?? 8,
+        status: l.status,
+        depositStatus: isDepositOpen ? "OPEN" : "CLOSED",
+        withdrawalStatus: isWithdrawOpen ? "OPEN" : "CLOSED",
+        depositOpenedAt: l.depositOpenedAt || baseAsset?.depositOpenedAt,
+        withdrawalOpenedAt: l.withdrawalOpenedAt || baseAsset?.withdrawalOpenedAt,
+        scheduledAt: l.scheduledAt,
+        lastPrice: pair ? pair.lastPrice : "0",
+        priceChange24h: pair ? pair.priceChange24h : "+0.00",
+        marketMakerAccountId: l.marketMakerAccountId,
+        projectOwnerAccountId: l.projectOwnerAccountId
+      };
+    });
+    res.json({
+      success: true,
+      count: activeMarkets.length,
+      markets: activeMarkets,
+      newListings
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
+  }
+});
+marketsRouter.get("/assets", (req, res) => {
+  try {
+    const allAssets = db.ensureAssetsForTradingPairs().map((a) => ({
+      id: a.id,
+      symbol: a.symbol,
+      name: a.name,
+      logoUrl: a.logoUrl || "",
+      assetType: a.assetType,
+      category: a.category || (a.network === "FIAT" ? "Fiat" : a.assetType === "NATIVE" ? "Layer 1" : "Token"),
+      decimals: a.decimals,
+      network: a.network,
+      contractAddress: a.contractAddress || "",
+      description: a.description || "",
+      websiteUrl: a.websiteUrl || "",
+      explorerUrl: a.explorerUrl || "",
+      status: a.status,
+      depositEnabled: a.depositEnabled,
+      withdrawalEnabled: a.withdrawalEnabled,
+      updatedAt: a.updatedAt
+    }));
+    res.json({
+      success: true,
+      count: allAssets.length,
+      assets: allAssets
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
+  }
+});
+marketsRouter.get("/:symbol", (req, res) => {
+  try {
+    const symbol = req.params.symbol.toUpperCase();
+    const market = db.markets.get(symbol);
+    if (!market || market.status !== "ACTIVE") {
+      return res.status(404).json({
+        error: `Market ${symbol} tidak ditemukan atau belum aktif diperdagangkan`,
+        code: "MARKET_NOT_FOUND"
+      });
+    }
+    const baseAsset = db.assets.get(market.baseAssetId);
+    const quoteAsset = db.assets.get(market.quoteAssetId);
+    const pair = db.tradingPairs.get(market.id);
+    res.json({
+      success: true,
+      market: {
+        id: market.id,
+        symbol: market.symbol,
+        baseCurrency: baseAsset ? baseAsset.symbol : market.symbol.split("-")[0],
+        quoteCurrency: quoteAsset ? quoteAsset.symbol : market.symbol.split("-")[1],
+        baseName: baseAsset?.name || market.symbol.split("-")[0],
+        baseLogoUrl: baseAsset?.logoUrl || "",
+        quoteLogoUrl: quoteAsset?.logoUrl || "",
+        baseDecimals: baseAsset ? baseAsset.decimals : 8,
+        quoteDecimals: quoteAsset ? quoteAsset.decimals : 2,
+        tickSize: market.tickSize,
+        lotSize: market.lotSize,
+        minQuantity: market.minQuantity,
+        minNotional: market.minNotional,
+        makerFeeBps: market.makerFeeBps,
+        takerFeeBps: market.takerFeeBps,
+        status: market.status,
+        isHalted: pair ? pair.isHalted : false,
+        lastPrice: pair ? pair.lastPrice : "0",
+        high24h: pair ? pair.high24h : "0",
+        low24h: pair ? pair.low24h : "0",
+        volume24h: pair ? pair.volume24h : "0",
+        priceChange24h: pair ? pair.priceChange24h : "0.00",
+        activatedAt: market.activatedAt
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
+  }
+});
+
+// server/routes/risk.ts
+import { Router as Router9 } from "express";
+import crypto21 from "crypto";
+init_database();
+var riskRouter = Router9();
+riskRouter.get("/suspicious-activity", requireAdmin, (req, res) => {
+  const flags = [];
+  for (const tx of db.fiatTransactions.values()) {
+    if (BigInt(tx.amount) > 5000000000n) {
+      flags.push({
+        id: `aml-tx-${tx.id.slice(0, 8)}`,
+        severity: "HIGH",
+        category: "LARGE_VALUE_TRANSACTION",
+        description: `Transaksi nominal besar: IDR ${BigInt(tx.amount) / 100n} oleh user ${tx.userId}`,
+        userId: tx.userId,
+        createdAt: tx.createdAt
+      });
+    }
+  }
+  for (const u of db.users.values()) {
+    if (u.failedLoginAttempts >= 3) {
+      flags.push({
+        id: `sec-user-${u.id.slice(0, 8)}`,
+        severity: "MEDIUM",
+        category: "POSSIBLE_BRUTE_FORCE",
+        description: `Percobaan masuk gagal berulang (${u.failedLoginAttempts} kali) untuk email: ${u.email}`,
+        userId: u.id,
+        createdAt: Date.now() - 3e5
+      });
+    }
+  }
+  res.json(flags);
+});
+riskRouter.post("/account-freeze", requireAdmin, (req, res) => {
+  try {
+    const adminUser = req.user;
+    const { userId, freeze, reason } = req.body;
+    const targetUser = db.users.get(userId);
+    if (!targetUser) return res.status(404).json({ error: "User tidak ditemukan" });
+    targetUser.status = freeze ? "frozen" : "active";
+    targetUser.updatedAt = Date.now();
+    db.auditLogs.push({
+      id: crypto21.randomUUID(),
+      actorId: adminUser.id,
+      action: freeze ? "ACCOUNT_FROZEN" : "ACCOUNT_UNFROZEN",
+      resource: `user:${userId}`,
+      details: `User status changed to ${targetUser.status}. Reason: ${reason || "AML/Compliance investigation"}`,
+      createdAt: Date.now()
+    });
+    res.json({
+      success: true,
+      message: `Akun ${targetUser.email} berhasil ${freeze ? "DIBEKUKAN (FROZEN)" : "DIAKTIFKAN KEMBALI"}`,
+      user: {
+        id: targetUser.id,
+        email: targetUser.email,
+        status: targetUser.status
+      }
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+riskRouter.get("/export-report", requireAdmin, (req, res) => {
+  const report = {
+    reportId: `AML-DMX-${Date.now()}`,
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    totalUsers: db.users.size,
+    totalTrades: db.trades.length,
+    totalFiatTransactions: db.fiatTransactions.size,
+    totalCryptoTransactions: db.cryptoTransactions.size,
+    systemInvariantsValid: true
+  };
+  res.json(report);
+});
+
+// server/routes/bot.ts
+import { Router as Router10 } from "express";
+import crypto22 from "crypto";
+import fs3 from "fs";
+import path3 from "path";
+init_database();
+init_PrecisionMath();
+var botRouter = Router10();
+var requireAuthOrHmac = (req, res, next) => {
+  const apiKey = req.headers["x-dimonex-apikey"];
+  if (apiKey) {
+    return requireHmacAuth(req, res, next);
+  }
+  return requireAuth(req, res, next);
+};
+function getBotDataDirectory() {
+  if (process.env.VERCEL === "1") {
+    const tmpDir = path3.join("/tmp", "dimonex_data");
+    if (!fs3.existsSync(tmpDir)) {
+      try {
+        fs3.mkdirSync(tmpDir, { recursive: true });
+      } catch {
+      }
+    }
+    return tmpDir;
+  }
+  const localDir = path3.resolve(process.cwd(), "server", "data");
+  try {
+    if (!fs3.existsSync(localDir)) {
+      fs3.mkdirSync(localDir, { recursive: true });
+    }
+    const testFile = path3.join(localDir, ".write_test_bot");
+    fs3.writeFileSync(testFile, "ok");
+    try {
+      fs3.unlinkSync(testFile);
+    } catch {
+    }
+    return localDir;
+  } catch {
+    const tmpDir = path3.join("/tmp", "dimonex_data");
+    if (!fs3.existsSync(tmpDir)) {
+      try {
+        fs3.mkdirSync(tmpDir, { recursive: true });
+      } catch {
+      }
+    }
+    return tmpDir;
+  }
+}
+var activeBots = /* @__PURE__ */ new Map();
+var botIntervals = /* @__PURE__ */ new Map();
+var saveBotsTimer = null;
+function scheduleSaveBots() {
+  if (saveBotsTimer) clearTimeout(saveBotsTimer);
+  saveBotsTimer = setTimeout(() => {
+    saveBotsToDisk();
+    saveBotsTimer = null;
+  }, 5e3);
+}
+function saveBotsToDisk() {
+  try {
+    const dir = getBotDataDirectory();
+    if (!fs3.existsSync(dir)) fs3.mkdirSync(dir, { recursive: true });
+    for (const bot of activeBots.values()) {
+      if (bot.deployedOrderIds && bot.deployedOrderIds.length > 80) {
+        bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
+      }
+      if (bot.logs && bot.logs.length > 80) {
+        bot.logs = bot.logs.slice(0, 80);
+      }
+    }
+    const botsArray = Array.from(activeBots.values());
+    const jsonStr = JSON.stringify(
+      botsArray,
+      (key, value) => typeof value === "bigint" ? value.toString() : value
+    );
+    const targetFiles = [
+      path3.join(dir, "bots_state.json"),
+      path3.join(dir, "bot_state.json")
+    ];
+    const bundledDir = path3.resolve(process.cwd(), "server", "data");
+    if (dir !== bundledDir && fs3.existsSync(bundledDir)) {
+      try {
+        targetFiles.push(path3.join(bundledDir, "bots_state.json"));
+        targetFiles.push(path3.join(bundledDir, "bot_state.json"));
+      } catch {
+      }
+    }
+    for (const filePath of targetFiles) {
+      try {
+        const tempFile = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 6)}`;
+        fs3.writeFileSync(tempFile, jsonStr, "utf-8");
+        try {
+          fs3.renameSync(tempFile, filePath);
+        } catch {
+          fs3.copyFileSync(tempFile, filePath);
+          try {
+            fs3.unlinkSync(tempFile);
+          } catch {
+          }
+        }
+      } catch (fErr) {
+      }
+    }
+  } catch (err) {
+    console.error("[DIMONEX Bot Engine] Gagal menyimpan bots ke disk:", err);
+  }
+}
+function addBotLog(bot, message, type = "INFO") {
+  bot.logs.unshift({
+    timestamp: Date.now(),
+    message,
+    type
+  });
+  if (bot.logs.length > 80) bot.logs.pop();
+  bot.updatedAt = Date.now();
+  scheduleSaveBots();
+  marketWsService.broadcastBotUpdate(bot);
+}
+marketWsService.setBotProvider((userId) => {
+  return Array.from(activeBots.values()).filter((b) => b.userId === userId).sort((a, b) => b.createdAt - a.createdAt);
+});
+botRouter.get("/list", requireAuthOrHmac, (req, res) => {
+  const user = req.user;
+  const userBots = Array.from(activeBots.values()).filter((b) => b.userId === user.id).sort((a, b) => b.createdAt - a.createdAt);
+  res.json(userBots);
+});
+botRouter.get("/orders/:botId", requireAuthOrHmac, (req, res) => {
+  const user = req.user;
+  const bot = activeBots.get(req.params.botId);
+  if (!bot || bot.userId !== user.id) {
+    return res.status(404).json({ error: "Bot tidak ditemukan" });
+  }
+  const botOrders = bot.deployedOrderIds.map((id) => db.orders.get(id)).filter(Boolean);
+  res.json(botOrders);
+});
+botRouter.get("/open-orders", requireAuthOrHmac, (req, res) => {
+  const user = req.user;
+  const userBots = Array.from(activeBots.values()).filter((b) => b.userId === user.id);
+  const botOrderIds = /* @__PURE__ */ new Set();
+  userBots.forEach((b) => b.deployedOrderIds.forEach((id) => botOrderIds.add(id)));
+  const openOrders = Array.from(db.orders.values()).filter((o) => o.userId === user.id && (botOrderIds.has(o.id) || o.clientOrderId && o.clientOrderId.startsWith("bot-")) && (o.status === "NEW" || o.status === "PARTIALLY_FILLED")).sort((a, b) => b.createdAt - a.createdAt);
+  res.json(openOrders);
+});
+botRouter.post("/grid/deploy", requireAuthOrHmac, (req, res) => {
+  try {
+    const user = req.user;
+    const { apiKeyId, pairId, lowerPrice, upperPrice, gridCount, totalInvestmentIdr, investmentCrypto } = req.body;
+    if (!pairId || !lowerPrice || !upperPrice || !gridCount || !totalInvestmentIdr) {
+      return res.status(400).json({ error: "Parameter Spot Grid tidak lengkap" });
+    }
+    const pair = db.tradingPairs.get(pairId);
+    if (!pair) return res.status(404).json({ error: "Trading pair tidak ditemukan" });
+    const existingRunningBot = Array.from(activeBots.values()).find(
+      (b) => b.userId === user.id && b.pairId === pairId && b.status === "RUNNING" && b.strategy === "SPOT_GRID"
+    );
+    if (existingRunningBot) {
+      return res.status(409).json({
+        error: `Bot Spot Grid aktif untuk pair ${pairId} sudah berjalan (${existingRunningBot.name}). Hentikan bot sebelumnya sebelum meluncurkan bot baru.`
+      });
+    }
+    const reqInvestmentUnits = PrecisionMath.parseToUnits(totalInvestmentIdr, pair.quoteDecimals);
+    const userQuoteAcc = db.createOrGetAccount(user.id, pair.quoteCurrency);
+    const availableQuoteUnits = BigInt(userQuoteAcc.balanceAvailable);
+    if (availableQuoteUnits < reqInvestmentUnits) {
+      return res.status(400).json({
+        error: `Saldo ${pair.quoteCurrency} tidak mencukupi di ledger untuk meluncurkan bot. Diperlukan: Rp ${PrecisionMath.formatIDRDisplay(reqInvestmentUnits)}, Tersedia: Rp ${PrecisionMath.formatIDRDisplay(availableQuoteUnits)}`
+      });
+    }
+    const lowerUnits = PrecisionMath.parseToUnits(lowerPrice, pair.quoteDecimals);
+    const upperUnits = PrecisionMath.parseToUnits(upperPrice, pair.quoteDecimals);
+    const currentPriceUnits = BigInt(pair.lastPrice);
+    if (lowerUnits >= upperUnits) {
+      return res.status(400).json({ error: "Batas harga bawah harus lebih kecil dari batas harga atas" });
+    }
+    const count = parseInt(gridCount, 10);
+    if (count < 3 || count > 30) {
+      return res.status(400).json({ error: "Jumlah grid harus di antara 3 sampai 30" });
+    }
+    const priceStep = (upperUnits - lowerUnits) / BigInt(count);
+    const budgetPerGridIdr = PrecisionMath.parseToUnits(totalInvestmentIdr, 2) / BigInt(count);
+    const botId = `bot-grid-${crypto22.randomUUID().slice(0, 8)}`;
+    const bot = {
+      id: botId,
+      userId: user.id,
+      userEmail: user.email,
+      apiKeyId,
+      name: `Spot Grid ${pairId} (${count} Level)`,
+      strategy: "SPOT_GRID",
+      pairId,
+      status: "RUNNING",
+      config: {
+        lowerPrice,
+        upperPrice,
+        gridCount: count,
+        priceStep: priceStep.toString(),
+        totalInvestmentIdr
+      },
+      deployedOrderIds: [],
+      filledOrderCount: 0,
+      totalVolumeFilled: "0",
+      realizedProfitIdr: "0",
+      logs: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    addBotLog(bot, `Bot Spot Grid diinisialisasi oleh ${user.email} (API Key: ${apiKeyId || "Session Token"}).`);
+    addBotLog(bot, `Rentang Grid: ${lowerPrice} IDR s/d ${upperPrice} IDR | Step: ${PrecisionMath.formatFromUnits(priceStep, 2)} IDR`);
+    const userBaseAcc = db.createOrGetAccount(user.id, pair.baseCurrency);
+    const availableBaseUnits = BigInt(userBaseAcc.balanceAvailable);
+    let buyOrdersDeployed = 0;
+    let sellOrdersDeployed = 0;
+    for (let i = 0; i <= count; i++) {
+      const gridPrice = lowerUnits + priceStep * BigInt(i);
+      if (gridPrice < currentPriceUnits) {
+        const qtyBaseUnits = PrecisionMath.calculateBaseQuantity(budgetPerGridIdr, pair.baseDecimals, gridPrice);
+        if (qtyBaseUnits >= BigInt(pair.minOrderSize)) {
+          try {
+            const result = matchingEngine.placeOrder({
+              userId: user.id,
+              // Explicit user ownership
+              pairId,
+              side: "BUY",
+              orderType: "LIMIT",
+              timeInForce: "GTC",
+              price: gridPrice.toString(),
+              quantity: qtyBaseUnits.toString(),
+              clientOrderId: `${botId}-buy-${i + 1}`
+            });
+            bot.deployedOrderIds.push(result.takerOrder.id);
+            marketWsService.broadcastOrderUpdate(result.takerOrder);
+            buyOrdersDeployed++;
+            addBotLog(bot, `[Grid Buy #${i + 1}] Order limit beli aktif: ${PrecisionMath.formatFromUnits(qtyBaseUnits, pair.baseDecimals)} @ ${PrecisionMath.formatIDRDisplay(gridPrice)}`, "ORDER");
+          } catch (err) {
+            addBotLog(bot, `Gagal memasang grid buy #${i + 1}: ${err.message}`, "ERROR");
+          }
+        }
+      } else if (gridPrice > currentPriceUnits && availableBaseUnits > 0n) {
+        const qtyToSellUnits = availableBaseUnits / BigInt(count);
+        if (qtyToSellUnits >= BigInt(pair.minOrderSize)) {
+          try {
+            const result = matchingEngine.placeOrder({
+              userId: user.id,
+              pairId,
+              side: "SELL",
+              orderType: "LIMIT",
+              timeInForce: "GTC",
+              price: gridPrice.toString(),
+              quantity: qtyToSellUnits.toString(),
+              clientOrderId: `${botId}-sell-${i + 1}`
+            });
+            bot.deployedOrderIds.push(result.takerOrder.id);
+            marketWsService.broadcastOrderUpdate(result.takerOrder);
+            sellOrdersDeployed++;
+            addBotLog(bot, `[Grid Sell #${i + 1}] Order limit jual aktif: ${PrecisionMath.formatFromUnits(qtyToSellUnits, pair.baseDecimals)} @ ${PrecisionMath.formatIDRDisplay(gridPrice)}`, "ORDER");
+          } catch (err) {
+          }
+        }
+      }
+    }
+    addBotLog(bot, `Deployment selesai: Total ${bot.deployedOrderIds.length} order limit aktif dimasukkan ke buku order (${buyOrdersDeployed} Beli, ${sellOrdersDeployed} Jual)`);
+    activeBots.set(bot.id, bot);
+    marketWsService.broadcastBotUpdate(bot);
+    const book = matchingEngine.getOrderBook(pairId);
+    marketWsService.broadcast(`depth:${pairId}`, { type: "depth", pairId, data: book.getDepth(25) });
+    res.json({ success: true, bot });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+botRouter.post("/layers/deploy", requireAuthOrHmac, (req, res) => {
+  try {
+    const user = req.user;
+    const { apiKeyId, pairId, side, startPrice, layerCount, priceStepPercent, quantityPerLayer } = req.body;
+    if (!pairId || !side || !startPrice || !layerCount || !priceStepPercent || !quantityPerLayer) {
+      return res.status(400).json({ error: "Konfigurasi layer order tidak lengkap" });
+    }
+    const pair = db.tradingPairs.get(pairId);
+    if (!pair) return res.status(404).json({ error: "Pair tidak ditemukan" });
+    const strat = side === "BUY" ? "BUY_LAYERS" : "SELL_LAYERS";
+    const duplicate = Array.from(activeBots.values()).find(
+      (b) => b.userId === user.id && b.pairId === pairId && b.status === "RUNNING" && b.strategy === strat
+    );
+    if (duplicate) {
+      return res.status(409).json({
+        error: `Bot Tangga ${side} aktif untuk pair ${pairId} sudah berjalan (${duplicate.name}). Hentikan bot sebelumnya sebelum membuat ladder baru.`
+      });
+    }
+    const baseStartPriceUnits = PrecisionMath.parseToUnits(startPrice, pair.quoteDecimals);
+    const count = parseInt(layerCount, 10);
+    const stepBps = Math.round(parseFloat(priceStepPercent) * 100);
+    const qtyUnits = PrecisionMath.parseToUnits(quantityPerLayer, pair.baseDecimals);
+    if (count < 2 || count > 20) {
+      return res.status(400).json({ error: "Jumlah layer order harus antara 2 sampai 20" });
+    }
+    const calculatedStepUnits = baseStartPriceUnits * BigInt(stepBps) / 10000n;
+    const minTickStepUnits = pair.quoteCurrency === "IDR" ? 100n : 1n;
+    const effectiveStepUnits = calculatedStepUnits > minTickStepUnits ? calculatedStepUnits : minTickStepUnits;
+    if (side === "BUY") {
+      let totalQuoteNeeded = 0n;
+      for (let i = 0; i < count; i++) {
+        const layerPriceUnits = baseStartPriceUnits - effectiveStepUnits * BigInt(i);
+        totalQuoteNeeded += PrecisionMath.calculateQuoteAmount(qtyUnits, pair.baseDecimals, layerPriceUnits);
+      }
+      const quoteAcc = db.createOrGetAccount(user.id, pair.quoteCurrency);
+      const availableQuote = BigInt(quoteAcc.balanceAvailable);
+      if (availableQuote < totalQuoteNeeded) {
+        return res.status(400).json({
+          error: `Saldo ${pair.quoteCurrency} tidak mencukupi di ledger. Diperlukan: Rp ${PrecisionMath.formatIDRDisplay(totalQuoteNeeded)}, Tersedia: Rp ${PrecisionMath.formatIDRDisplay(availableQuote)}`
+        });
+      }
+    } else {
+      const totalBaseNeeded = qtyUnits * BigInt(count);
+      const baseAcc = db.createOrGetAccount(user.id, pair.baseCurrency);
+      const availableBase = BigInt(baseAcc.balanceAvailable);
+      if (availableBase < totalBaseNeeded) {
+        return res.status(400).json({
+          error: `Saldo ${pair.baseCurrency} tidak mencukupi di ledger. Diperlukan: ${PrecisionMath.formatFromUnits(totalBaseNeeded, pair.baseDecimals)} ${pair.baseCurrency}, Tersedia: ${PrecisionMath.formatFromUnits(availableBase, pair.baseDecimals)} ${pair.baseCurrency}`
+        });
+      }
+    }
+    const botId = `bot-layer-${crypto22.randomUUID().slice(0, 8)}`;
+    const bot = {
+      id: botId,
+      userId: user.id,
+      userEmail: user.email,
+      apiKeyId,
+      name: `Layered ${side} Ladder ${pairId} (${count} Level)`,
+      strategy: side === "BUY" ? "BUY_LAYERS" : "SELL_LAYERS",
+      pairId,
+      status: "RUNNING",
+      config: {
+        side,
+        startPrice,
+        layerCount: count,
+        priceStepPercent,
+        quantityPerLayer
+      },
+      deployedOrderIds: [],
+      filledOrderCount: 0,
+      totalVolumeFilled: "0",
+      realizedProfitIdr: "0",
+      logs: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    addBotLog(bot, `Mendeploy tangga order ${side} untuk ${user.email} (Step: ${priceStepPercent}% per level)`);
+    for (let i = 0; i < count; i++) {
+      const layerPriceUnits = side === "BUY" ? baseStartPriceUnits - effectiveStepUnits * BigInt(i) : baseStartPriceUnits + effectiveStepUnits * BigInt(i);
+      try {
+        const result = matchingEngine.placeOrder({
+          userId: user.id,
+          // Explicit user ownership
+          pairId,
+          side,
+          orderType: "LIMIT",
+          timeInForce: "GTC",
+          price: layerPriceUnits.toString(),
+          quantity: qtyUnits.toString(),
+          clientOrderId: `${botId}-${side.toLowerCase()}-layer-${i + 1}`
+        });
+        bot.deployedOrderIds.push(result.takerOrder.id);
+        marketWsService.broadcastOrderUpdate(result.takerOrder);
+        addBotLog(bot, `[Layer #${i + 1}] Order limit ${side} aktif: ${quantityPerLayer} ${pair.baseCurrency} @ ${PrecisionMath.formatIDRDisplay(layerPriceUnits)}`, "ORDER");
+      } catch (err) {
+        addBotLog(bot, `Gagal memasang layer #${i + 1}: ${err.message}`, "ERROR");
+      }
+    }
+    addBotLog(bot, `Berhasil memasukkan ${bot.deployedOrderIds.length} order limit ke buku order dan antrean order aktif.`);
+    activeBots.set(bot.id, bot);
+    marketWsService.broadcastBotUpdate(bot);
+    const book = matchingEngine.getOrderBook(pairId);
+    marketWsService.broadcast(`depth:${pairId}`, { type: "depth", pairId, data: book.getDepth(25) });
+    res.json({ success: true, bot });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+botRouter.post("/smart-trade/deploy", requireAuthOrHmac, (req, res) => {
+  try {
+    const user = req.user;
+    const { apiKeyId, pairId, side, targetPrice, totalVolume, sliceCount, orderType } = req.body;
+    if (!pairId || !side || !targetPrice || !totalVolume || !sliceCount) {
+      return res.status(400).json({ error: "Parameter Smart Trade tidak lengkap" });
+    }
+    const pair = db.tradingPairs.get(pairId);
+    if (!pair) return res.status(404).json({ error: "Pair tidak ditemukan" });
+    const duplicate = Array.from(activeBots.values()).find(
+      (b) => b.userId === user.id && b.pairId === pairId && b.status === "RUNNING" && b.strategy === "SMART_TRADE"
+    );
+    if (duplicate) {
+      return res.status(409).json({
+        error: `Bot Smart Trade aktif untuk pair ${pairId} sudah berjalan (${duplicate.name}). Hentikan bot sebelumnya sebelum meluncurkan baru.`
+      });
+    }
+    const totalVolumeUnits = PrecisionMath.parseToUnits(totalVolume, pair.baseDecimals);
+    const targetPriceUnits = PrecisionMath.parseToUnits(targetPrice, pair.quoteDecimals);
+    const slices = parseInt(sliceCount, 10);
+    const sliceQtyUnits = totalVolumeUnits / BigInt(slices);
+    if (side === "BUY") {
+      const totalQuoteNeeded = PrecisionMath.calculateQuoteAmount(totalVolumeUnits, pair.baseDecimals, targetPriceUnits);
+      const quoteAcc = db.createOrGetAccount(user.id, pair.quoteCurrency);
+      const availableQuote = BigInt(quoteAcc.balanceAvailable);
+      if (availableQuote < totalQuoteNeeded) {
+        return res.status(400).json({
+          error: `Saldo ${pair.quoteCurrency} tidak mencukupi di ledger. Diperlukan: Rp ${PrecisionMath.formatIDRDisplay(totalQuoteNeeded)}, Tersedia: Rp ${PrecisionMath.formatIDRDisplay(availableQuote)}`
+        });
+      }
+    } else {
+      const baseAcc = db.createOrGetAccount(user.id, pair.baseCurrency);
+      const availableBase = BigInt(baseAcc.balanceAvailable);
+      if (availableBase < totalVolumeUnits) {
+        return res.status(400).json({
+          error: `Saldo ${pair.baseCurrency} tidak mencukupi di ledger. Diperlukan: ${totalVolume} ${pair.baseCurrency}, Tersedia: ${PrecisionMath.formatFromUnits(availableBase, pair.baseDecimals)} ${pair.baseCurrency}`
+        });
+      }
+    }
+    const botId = `bot-smart-${crypto22.randomUUID().slice(0, 8)}`;
+    const bot = {
+      id: botId,
+      userId: user.id,
+      userEmail: user.email,
+      apiKeyId,
+      name: `Smart Trade ${side} ${pairId} (${totalVolume} ${pair.baseCurrency})`,
+      strategy: "SMART_TRADE",
+      pairId,
+      status: "RUNNING",
+      config: {
+        side,
+        targetPrice,
+        totalVolume,
+        sliceCount: slices,
+        orderType: orderType || "LIMIT"
+      },
+      deployedOrderIds: [],
+      filledOrderCount: 0,
+      totalVolumeFilled: "0",
+      realizedProfitIdr: "0",
+      logs: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    addBotLog(bot, `Smart Trade dimulai: Target volume ${totalVolume} ${pair.baseCurrency} dibagi ke dalam ${slices} slice @ ${targetPrice} IDR`);
+    try {
+      const result = matchingEngine.placeOrder({
+        userId: user.id,
+        // Explicit user ownership
+        pairId,
+        side,
+        orderType: orderType === "MARKET" ? "MARKET" : "LIMIT",
+        timeInForce: "GTC",
+        price: targetPriceUnits.toString(),
+        quantity: sliceQtyUnits.toString(),
+        clientOrderId: `${botId}-slice-1`
+      });
+      bot.deployedOrderIds.push(result.takerOrder.id);
+      marketWsService.broadcastOrderUpdate(result.takerOrder);
+      if (result.trades.length > 0) {
+        bot.filledOrderCount += 1;
+        bot.totalVolumeFilled = (BigInt(bot.totalVolumeFilled) + sliceQtyUnits).toString();
+        addBotLog(bot, `Slice #1 terisi langsung: ${PrecisionMath.formatFromUnits(sliceQtyUnits, pair.baseDecimals)} ${pair.baseCurrency}`, "FILL");
+      } else {
+        addBotLog(bot, `Slice #1 terpasang sebagai limit order aktif @ ${PrecisionMath.formatIDRDisplay(targetPriceUnits)}`, "ORDER");
+      }
+    } catch (err) {
+      addBotLog(bot, `Gagal mengeksekusi slice awal: ${err.message}`, "ERROR");
+    }
+    activeBots.set(bot.id, bot);
+    marketWsService.broadcastBotUpdate(bot);
+    const book = matchingEngine.getOrderBook(pairId);
+    marketWsService.broadcast(`depth:${pairId}`, { type: "depth", pairId, data: book.getDepth(25) });
+    res.json({ success: true, bot });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+function startVolumeBotRunner(botId) {
+  const bot = activeBots.get(botId);
+  if (!bot || bot.status !== "RUNNING") return;
+  const pair = db.tradingPairs.get(bot.pairId);
+  if (!pair) return;
+  const delayMs = Math.max(1e3, Number(bot.config.delaySecondAmount || 3) * 1e3);
+  let stepIndex = 0;
+  const executeTick = () => {
+    const currentBot = activeBots.get(botId);
+    if (!currentBot || currentBot.status !== "RUNNING") {
+      const timer = botIntervals.get(botId);
+      if (timer) {
+        clearInterval(timer);
+        botIntervals.delete(botId);
+      }
+      return;
+    }
+    const currentPair = db.tradingPairs.get(currentBot.pairId);
+    if (!currentPair) return;
+    const targetVolumeUnits = PrecisionMath.parseToUnits(currentBot.config.targetVolumeReach, currentPair.baseDecimals);
+    const currentFilledUnits = BigInt(currentBot.totalVolumeFilled || "0");
+    if (currentFilledUnits >= targetVolumeUnits) {
+      currentBot.status = "COMPLETED";
+      addBotLog(currentBot, `\u{1F3AF} Target volume ${currentBot.config.targetVolumeReach} ${currentPair.baseCurrency} tercapai 100%! Bot volume selesai secara otomatis.`, "FILL");
+      const timer = botIntervals.get(botId);
+      if (timer) {
+        clearInterval(timer);
+        botIntervals.delete(botId);
+      }
+      return;
+    }
+    let side;
+    if (currentBot.config.directionMode === "BUY_FIRST") {
+      side = stepIndex % 2 === 0 ? "BUY" : "SELL";
+    } else if (currentBot.config.directionMode === "SELL_FIRST") {
+      side = stepIndex % 2 === 0 ? "SELL" : "BUY";
+    } else {
+      side = Math.random() >= 0.5 ? "BUY" : "SELL";
+    }
+    let qtyStr = currentBot.config.amountMin || "0.01";
+    if (currentBot.config.amountRandom) {
+      const minVal = parseFloat(currentBot.config.amountMin || "0.01");
+      const maxVal = parseFloat(currentBot.config.amountMax || (minVal * 2).toString());
+      const randVal = minVal + Math.random() * (maxVal - minVal);
+      qtyStr = randVal.toFixed(currentPair.baseDecimals > 6 ? 4 : 2);
+    }
+    let qtyUnits = PrecisionMath.parseToUnits(qtyStr, currentPair.baseDecimals);
+    if (qtyUnits < BigInt(currentPair.minOrderSize)) {
+      qtyUnits = BigInt(currentPair.minOrderSize);
+    }
+    const remainingUnits = targetVolumeUnits - currentFilledUnits;
+    if (qtyUnits > remainingUnits) {
+      qtyUnits = remainingUnits;
+    }
+    const minUnits = PrecisionMath.parseToUnits(currentBot.config.minPrice, currentPair.quoteDecimals);
+    const maxUnits = PrecisionMath.parseToUnits(currentBot.config.maxPrice, currentPair.quoteDecimals);
+    const midUnits = BigInt(currentPair.lastPrice);
+    const randomBps = BigInt(Math.floor(Math.random() * 30 - 15));
+    let priceUnits = midUnits + midUnits * randomBps / 10000n;
+    if (priceUnits < minUnits) priceUnits = minUnits;
+    if (priceUnits > maxUnits) priceUnits = maxUnits;
+    stepIndex++;
+    try {
+      db.createOrGetAccount(currentBot.userId, currentPair.quoteCurrency, "500000000000");
+      db.createOrGetAccount(currentBot.userId, currentPair.baseCurrency, "1000000000");
+      const book = matchingEngine.getOrderBook(currentPair.id);
+      const opposingSide = side === "BUY" ? book.asks : book.bids;
+      const hasOpposing = opposingSide.some((o) => o.userId !== currentBot.userId);
+      if (!hasOpposing) {
+        matchingEngine.placeOrder({
+          userId: SYSTEM_TREASURY_ID,
+          pairId: currentPair.id,
+          side: side === "BUY" ? "SELL" : "BUY",
+          orderType: "LIMIT",
+          timeInForce: "GTC",
+          price: priceUnits.toString(),
+          quantity: qtyUnits.toString(),
+          clientOrderId: `sys-vol-maker-${Date.now()}`
+        });
+      }
+      const result = matchingEngine.placeOrder({
+        userId: currentBot.userId,
+        pairId: currentPair.id,
+        side,
+        orderType: "LIMIT",
+        timeInForce: "IOC",
+        price: priceUnits.toString(),
+        quantity: qtyUnits.toString(),
+        clientOrderId: `${botId}-vol-${side.toLowerCase()}-${stepIndex}`
+      });
+      currentBot.deployedOrderIds.push(result.takerOrder.id);
+      if (currentBot.deployedOrderIds.length > 80) {
+        currentBot.deployedOrderIds.splice(0, currentBot.deployedOrderIds.length - 80);
+      }
+      currentBot.filledOrderCount += 1;
+      const filledThisTick = BigInt(result.takerOrder.filledQuantity || qtyUnits.toString());
+      currentBot.totalVolumeFilled = (BigInt(currentBot.totalVolumeFilled) + filledThisTick).toString();
+      for (const t of result.trades) {
+        marketWsService.broadcastTrade(t);
+      }
+      marketWsService.broadcastOrderUpdate(result.takerOrder);
+      const updatedBook = matchingEngine.getOrderBook(currentPair.id);
+      marketWsService.broadcast(`depth:${currentPair.id}`, { type: "depth", pairId: currentPair.id, data: updatedBook.getDepth(25) });
+      const cumFormatted = PrecisionMath.formatFromUnits(BigInt(currentBot.totalVolumeFilled), currentPair.baseDecimals);
+      const targetFormatted = currentBot.config.targetVolumeReach;
+      const pct = Math.min(100, Number(BigInt(currentBot.totalVolumeFilled) * 100n / targetVolumeUnits));
+      addBotLog(
+        currentBot,
+        `[Vol Bot #${stepIndex}] Eksekusi ${side} ${PrecisionMath.formatFromUnits(filledThisTick, currentPair.baseDecimals)} ${currentPair.baseCurrency} @ ${PrecisionMath.formatIDRDisplay(priceUnits)} | Akumulasi: ${cumFormatted}/${targetFormatted} (${pct}%)`,
+        "FILL"
+      );
+      if (BigInt(currentBot.totalVolumeFilled) >= targetVolumeUnits) {
+        currentBot.status = "COMPLETED";
+        addBotLog(currentBot, `\u{1F3AF} Target volume ${targetFormatted} ${currentPair.baseCurrency} TERCAPAI LENGKAP 100%! Bot volume selesai.`, "INFO");
+        const timer = botIntervals.get(botId);
+        if (timer) {
+          clearInterval(timer);
+          botIntervals.delete(botId);
+        }
+      }
+    } catch (err) {
+      addBotLog(currentBot, `Gagal eksekusi tick volume #${stepIndex}: ${err.message}`, "ERROR");
+    }
+  };
+  executeTick();
+  const interval = setInterval(executeTick, delayMs);
+  botIntervals.set(botId, interval);
+}
+function loadBotsFromDisk() {
+  try {
+    const dir = getBotDataDirectory();
+    const bundledDir = path3.resolve(process.cwd(), "server", "data");
+    const candidatePaths = [
+      path3.join(dir, "bots_state.json"),
+      path3.join(dir, "bot_state.json"),
+      path3.join(bundledDir, "bots_state.json"),
+      path3.join(bundledDir, "bot_state.json")
+    ];
+    let loaded = false;
+    for (const p of candidatePaths) {
+      if (fs3.existsSync(p)) {
+        try {
+          const raw = fs3.readFileSync(p, "utf-8");
+          if (raw && raw.trim().length > 0) {
+            const botsArray = JSON.parse(raw);
+            if (Array.isArray(botsArray)) {
+              let volIdx = 0;
+              let wasPruned = false;
+              for (const bot of botsArray) {
+                if (bot.deployedOrderIds && bot.deployedOrderIds.length > 80) {
+                  bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
+                  wasPruned = true;
+                }
+                if (bot.logs && bot.logs.length > 80) {
+                  bot.logs = bot.logs.slice(0, 80);
+                  wasPruned = true;
+                }
+                activeBots.set(bot.id, bot);
+                if (bot.status === "RUNNING" && bot.strategy === "VOLUME_BOT") {
+                  const delay = 2500 + volIdx * 250;
+                  volIdx++;
+                  setTimeout(() => {
+                    startVolumeBotRunner(bot.id);
+                  }, delay);
+                }
+              }
+              console.log(`[DIMONEX Bot Engine] Berhasil memuat ${activeBots.size} bot dari disk (${p}).`);
+              loaded = true;
+              if (wasPruned) {
+                scheduleSaveBots();
+              }
+              break;
+            }
+          }
+        } catch (readErr) {
+          console.warn(`[DIMONEX Bot Engine] Gagal membaca ${p}:`, readErr);
+        }
+      }
+    }
+    const onExit = () => {
+      saveBotsToDisk();
+    };
+    process.on("SIGINT", onExit);
+    process.on("SIGTERM", onExit);
+    process.on("beforeExit", onExit);
+  } catch (err) {
+    console.warn("[DIMONEX Bot Engine] Gagal memuat bots dari disk:", err);
+  }
+}
+loadBotsFromDisk();
+botRouter.post("/volume/deploy", requireAuthOrHmac, (req, res) => {
+  try {
+    const user = req.user;
+    const {
+      apiKeyId,
+      pairId,
+      targetVolumeReach,
+      minPrice,
+      maxPrice,
+      delaySecondAmount,
+      amountRandom,
+      amountMin,
+      amountMax,
+      directionMode
+    } = req.body;
+    if (!pairId || !targetVolumeReach || !minPrice || !maxPrice) {
+      return res.status(400).json({ error: "Parameter volume bot tidak lengkap (pairId, targetVolumeReach, minPrice, maxPrice)" });
+    }
+    const pair = db.tradingPairs.get(pairId);
+    if (!pair) return res.status(404).json({ error: "Trading pair tidak ditemukan" });
+    const duplicate = Array.from(activeBots.values()).find(
+      (b) => b.userId === user.id && b.pairId === pairId && b.status === "RUNNING" && b.strategy === "VOLUME_BOT"
+    );
+    if (duplicate) {
+      return res.status(409).json({
+        error: `Bot Volume Maker aktif untuk pair ${pairId} sudah berjalan (${duplicate.name}). Hentikan bot sebelumnya sebelum meluncurkan bot baru.`
+      });
+    }
+    const minPriceUnits = PrecisionMath.parseToUnits(minPrice, pair.quoteDecimals);
+    const maxPriceUnits = PrecisionMath.parseToUnits(maxPrice, pair.quoteDecimals);
+    if (minPriceUnits >= maxPriceUnits) {
+      return res.status(400).json({ error: "Harga minimum harus lebih kecil dari harga maksimum" });
+    }
+    const delaySec = Math.max(1, parseInt(String(delaySecondAmount || 3), 10));
+    const botId = `bot-vol-${crypto22.randomUUID().slice(0, 8)}`;
+    const bot = {
+      id: botId,
+      userId: user.id,
+      userEmail: user.email,
+      apiKeyId,
+      name: `Volume Bot ${pairId} (${targetVolumeReach} ${pair.baseCurrency})`,
+      strategy: "VOLUME_BOT",
+      pairId,
+      status: "RUNNING",
+      config: {
+        targetVolumeReach,
+        minPrice,
+        maxPrice,
+        delaySecondAmount: delaySec,
+        amountRandom: Boolean(amountRandom),
+        amountMin: amountMin || "0.01",
+        amountMax: amountMax || "0.05",
+        directionMode: directionMode || "RANDOM"
+      },
+      deployedOrderIds: [],
+      filledOrderCount: 0,
+      totalVolumeFilled: "0",
+      realizedProfitIdr: "0",
+      logs: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    addBotLog(bot, `Volume Bot diluncurkan oleh ${user.email}. Target: ${targetVolumeReach} ${pair.baseCurrency} | Rentang: ${minPrice} - ${maxPrice} IDR`);
+    addBotLog(bot, `Arah: ${directionMode || "RANDOM"} | Interval Delay: ${delaySec}s | Random Amount: ${amountRandom ? "YA" : "TIDAK"}`);
+    activeBots.set(bot.id, bot);
+    marketWsService.broadcastBotUpdate(bot);
+    startVolumeBotRunner(bot.id);
+    res.json({ success: true, bot });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+botRouter.post("/stop", requireAuthOrHmac, (req, res) => {
+  try {
+    const user = req.user;
+    const { botId, cancelOpenOrders } = req.body;
+    const bot = activeBots.get(botId);
+    if (!bot) {
+      return res.status(404).json({ error: "Bot tidak ditemukan" });
+    }
+    const roleUpper = (user.role || "").toUpperCase();
+    const isOwner = bot.userId === user.id;
+    const isPrivileged = roleUpper === "ADMIN" || roleUpper === "SUPERADMIN" || roleUpper === "MM";
+    if (!isOwner && !isPrivileged) {
+      return res.status(403).json({ error: "Tidak memiliki otorisasi untuk menghentikan bot ini" });
+    }
+    if (bot.status === "STOPPED" || bot.status === "COMPLETED") {
+      marketWsService.broadcastBotUpdate(bot);
+      return res.json({
+        success: true,
+        message: `Bot ${bot.name} sudah dalam status ${bot.status}.`,
+        bot
+      });
+    }
+    bot.status = "STOPPED";
+    bot.updatedAt = Date.now();
+    addBotLog(bot, `Bot dihentikan oleh user ${user.email}`);
+    const timer = botIntervals.get(botId);
+    if (timer) {
+      clearInterval(timer);
+      botIntervals.delete(botId);
+    }
+    let cancelledCount = 0;
+    if (cancelOpenOrders !== false) {
+      for (const orderId of bot.deployedOrderIds) {
+        const order = db.orders.get(orderId);
+        if (order && (order.status === "NEW" || order.status === "PARTIALLY_FILLED")) {
+          try {
+            matchingEngine.cancelOrder(orderId, bot.userId, bot.pairId, user.role);
+            cancelledCount++;
+          } catch (e) {
+            console.warn(`[Bot Stop] Gagal batalkan order ${orderId}:`, e);
+          }
+        }
+      }
+      addBotLog(bot, `Membatalkan ${cancelledCount} order aktif yang belum terisi di buku order.`);
+      const book = matchingEngine.getOrderBook(bot.pairId);
+      marketWsService.broadcast(`depth:${bot.pairId}`, { type: "depth", pairId: bot.pairId, data: book.getDepth(25) });
+    }
+    scheduleSaveBots();
+    db.scheduleSave();
+    marketWsService.broadcastBotUpdate(bot);
+    marketWsService.broadcastBotStopped(bot.id, bot.userId, bot);
+    res.json({ success: true, message: `Bot ${bot.name} berhasil dihentikan. ${cancelledCount} order aktif dibatalkan.`, bot });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+botRouter.post("/cancel-all", requireAuthOrHmac, (req, res) => {
+  try {
+    const user = req.user;
+    const roleUpper = (user.role || "").toUpperCase();
+    const isSuper = roleUpper === "ADMIN" || roleUpper === "SUPERADMIN";
+    const userBots = Array.from(activeBots.values()).filter((b) => isSuper || b.userId === user.id);
+    let totalCancelled = 0;
+    const affectedPairs = /* @__PURE__ */ new Set();
+    for (const bot of userBots) {
+      const timer = botIntervals.get(bot.id);
+      if (timer) {
+        clearInterval(timer);
+        botIntervals.delete(bot.id);
+      }
+      bot.status = "STOPPED";
+      bot.updatedAt = Date.now();
+      affectedPairs.add(bot.pairId);
+      for (const orderId of bot.deployedOrderIds) {
+        const order = db.orders.get(orderId);
+        if (order && (order.status === "NEW" || order.status === "PARTIALLY_FILLED")) {
+          try {
+            matchingEngine.cancelOrder(orderId, bot.userId, bot.pairId, user.role);
+            totalCancelled++;
+          } catch (e) {
+          }
+        }
+      }
+      addBotLog(bot, `Semua order bot dibatalkan secara massal.`);
+      marketWsService.broadcastBotUpdate(bot);
+      marketWsService.broadcastBotStopped(bot.id, bot.userId, bot);
+    }
+    for (const pairId of affectedPairs) {
+      const book = matchingEngine.getOrderBook(pairId);
+      marketWsService.broadcast(`depth:${pairId}`, { type: "depth", pairId, data: book.getDepth(25) });
+    }
+    scheduleSaveBots();
+    db.scheduleSave();
+    res.json({ success: true, message: `Berhasil membatalkan ${totalCancelled} order bot terbuka.`, totalCancelled });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// server/routes/volumeExecutionV2.ts
+import { Router as Router11 } from "express";
+
+// server/services/bots/VolumeExecutionV2Service.ts
+init_database();
+import crypto23 from "crypto";
+init_PrecisionMath();
+var MAX_LOGS_PER_BOT = 120;
+var MAX_TRACKED_TRADE_IDS = 5e3;
+function randomBigIntInRange(minUnits, maxUnits) {
+  if (maxUnits <= minUnits) return minUnits;
+  const span = maxUnits - minUnits + 1n;
+  if (span <= 1n) return minUnits;
+  const bitLength = span.toString(2).length;
+  const byteLength = Math.max(1, Math.ceil(bitLength / 8));
+  const mask = (1n << BigInt(bitLength)) - 1n;
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const bytes2 = crypto23.randomBytes(byteLength);
+    let candidate = 0n;
+    for (let i = 0; i < bytes2.length; i++) {
+      candidate = candidate << 8n | BigInt(bytes2[i]);
+    }
+    candidate = candidate & mask;
+    if (candidate < span) {
+      return minUnits + candidate;
+    }
+  }
+  const bytes = crypto23.randomBytes(byteLength);
+  let fallback = 0n;
+  for (let i = 0; i < bytes.length; i++) {
+    fallback = fallback << 8n | BigInt(bytes[i]);
+  }
+  return minUnits + fallback % span;
+}
+function roundQuantityToLot(qtyUnits, lotUnits) {
+  if (lotUnits <= 1n) return qtyUnits > 0n ? qtyUnits : 0n;
+  if (qtyUnits <= 0n) return 0n;
+  return qtyUnits / lotUnits * lotUnits;
+}
+function roundPriceToTick(priceUnits, tickUnits, direction = "DOWN") {
+  if (priceUnits <= 0n) return 0n;
+  if (tickUnits <= 1n) return priceUnits;
+  const rem = priceUnits % tickUnits;
+  if (rem === 0n) return priceUnits;
+  if (direction === "DOWN") {
+    const rounded2 = priceUnits - rem;
+    return rounded2 >= tickUnits ? rounded2 : tickUnits;
+  }
+  if (direction === "UP") {
+    return priceUnits + (tickUnits - rem);
+  }
+  if (rem * 2n >= tickUnits) {
+    return priceUnits + (tickUnits - rem);
+  }
+  const rounded = priceUnits - rem;
+  return rounded >= tickUnits ? rounded : tickUnits;
+}
+function calculateSlippageBps(execPriceUnits, benchmarkPriceUnits, side) {
+  if (benchmarkPriceUnits <= 0n || execPriceUnits <= 0n) return 0;
+  const diff = side === "BUY" ? execPriceUnits - benchmarkPriceUnits : benchmarkPriceUnits - execPriceUnits;
+  const bpsBig = diff * 10000n / benchmarkPriceUnits;
+  return Number(bpsBig);
+}
+function emptyOrderBreakdown() {
+  return {
+    submitted: 0,
+    accepted: 0,
+    partiallyFilled: 0,
+    filled: 0,
+    cancelled: 0,
+    rejected: 0,
+    expired: 0
+  };
+}
+var VolumeExecutionV2Service = class {
+  constructor() {
+    this.workers = /* @__PURE__ */ new Map();
+    this.runningTicks = /* @__PURE__ */ new Set();
+    this.recoveryScheduled = false;
+  }
+  startRecoveryScheduler() {
+    if (this.recoveryScheduled) return;
+    this.recoveryScheduled = true;
+    setTimeout(() => {
+      this.recoverActiveBots();
+    }, 2e3);
+  }
+  recoverActiveBots() {
+    for (const bot of db.volumeExecutionV2Bots.values()) {
+      if (bot.status === "RUNNING") {
+        try {
+          this.reconcileBotStateInternal(bot, "CRASH_RECOVERY");
+          if (bot.status === "RUNNING") {
+            this.appendLog(
+              bot,
+              "INFO",
+              `Engine V2 dipulihkan setelah restart pada slice #${bot.checkpoint.sliceIndex}. Sisa ${PrecisionMath.formatFromUnits(
+                BigInt(bot.stats.remainingQuantityUnits),
+                this.getPairDecimals(bot.pairId).baseDecimals,
+                true
+              )}.`
+            );
+            this.scheduleWorker(bot.id);
+          }
+        } catch (err) {
+          bot.status = "PAUSED";
+          this.appendLog(bot, "ERROR", `Gagal memulihkan worker: ${err?.message || "Unknown error"}`);
+        }
+      }
+    }
+    db.scheduleSave();
+  }
+  getPairDecimals(pairId) {
+    const pair = db.tradingPairs.get(pairId);
+    if (!pair) {
+      return { baseDecimals: 8, quoteDecimals: pairId.endsWith("-USDT") ? 6 : 2 };
+    }
+    return {
+      pair,
+      baseDecimals: typeof pair.baseDecimals === "number" ? pair.baseDecimals : 8,
+      quoteDecimals: typeof pair.quoteDecimals === "number" ? pair.quoteDecimals : pair.quoteCurrency === "USDT" ? 6 : 2
+    };
+  }
+  resolveMarketSteps(pair, config) {
+    const { baseDecimals, quoteDecimals } = this.getPairDecimals(pair.id);
+    const market = db.markets.get(pair.id);
+    const parsedTick = config.tickSize ? PrecisionMath.parseToUnits(config.tickSize, quoteDecimals) : market?.tickSize ? BigInt(market.tickSize) : pair.quoteCurrency === "USDT" ? 100n : 100n;
+    const parsedLot = config.lotSize ? PrecisionMath.parseToUnits(config.lotSize, baseDecimals) : market?.lotSize ? BigInt(market.lotSize) : BigInt(pair.minOrderSize || "1");
+    const minOrderUnits = BigInt(pair.minOrderSize || "1");
+    const maxOrderUnits = BigInt(pair.maxOrderSize || "1000000000000000");
+    return {
+      tickUnits: parsedTick > 0n ? parsedTick : 1n,
+      lotUnits: parsedLot > 0n ? parsedLot : 1n,
+      minOrderUnits: minOrderUnits > 0n ? minOrderUnits : 1n,
+      maxOrderUnits: maxOrderUnits > minOrderUnits ? maxOrderUnits : minOrderUnits
+    };
+  }
+  appendLog(bot, type, message) {
+    bot.logs.unshift({
+      timestamp: Date.now(),
+      type,
+      message
+    });
+    if (bot.logs.length > MAX_LOGS_PER_BOT) {
+      bot.logs.length = MAX_LOGS_PER_BOT;
+    }
+    bot.updatedAt = Date.now();
+  }
+  validateAndNormalizeConfig(input) {
+    if (!input || !input.pairId) {
+      throw new Error("pairId wajib diisi.");
+    }
+    const pair = db.tradingPairs.get(input.pairId);
+    if (!pair) {
+      throw new Error(`Trading pair ${input.pairId} tidak ditemukan.`);
+    }
+    if (!pair.isActive || pair.isHalted || pair.isDelisted) {
+      throw new Error(`Market ${pair.id} sedang tidak aktif atau halted.`);
+    }
+    const validStrategies = [
+      "TWAP",
+      "VWAP",
+      "ICEBERG",
+      "PASSIVE_LIMIT",
+      "AGGRESSIVE_LIMIT"
+    ];
+    const strategy = input.strategy || "TWAP";
+    if (!validStrategies.includes(strategy)) {
+      throw new Error(`Strategi tidak valid: ${strategy}`);
+    }
+    const mode = input.mode === "SIMULATION" ? "SIMULATION" : "LIVE";
+    const side = input.side === "SELL" ? "SELL" : "BUY";
+    const { baseDecimals, quoteDecimals } = this.getPairDecimals(pair.id);
+    const market = db.markets.get(pair.id);
+    const defaultTickStr = market?.tickSize ? PrecisionMath.formatFromUnits(BigInt(market.tickSize), quoteDecimals, true) : pair.quoteCurrency === "USDT" ? "0.01" : "1";
+    const defaultLotStr = market?.lotSize ? PrecisionMath.formatFromUnits(BigInt(market.lotSize), baseDecimals, true) : PrecisionMath.formatFromUnits(BigInt(pair.minOrderSize || "1"), baseDecimals, true);
+    const normalizedConfig = {
+      pairId: pair.id,
+      side,
+      strategy,
+      mode,
+      targetQuantity: String(input.targetQuantity || "").trim(),
+      sliceMinQuantity: String(input.sliceMinQuantity || input.targetQuantity || "").trim(),
+      sliceMaxQuantity: String(input.sliceMaxQuantity || input.targetQuantity || "").trim(),
+      icebergDisplayQuantity: input.icebergDisplayQuantity ? String(input.icebergDisplayQuantity).trim() : void 0,
+      tickSize: String(input.tickSize || defaultTickStr).trim(),
+      lotSize: String(input.lotSize || defaultLotStr).trim(),
+      durationSeconds: Math.max(5, Math.min(86400 * 7, Math.trunc(Number(input.durationSeconds || 60)))),
+      intervalSeconds: Math.max(1, Math.min(3600, Math.trunc(Number(input.intervalSeconds || 5)))),
+      maxOrderNotionalQuote: String(input.maxOrderNotionalQuote || "0").trim(),
+      maxCumulativeExposureQuote: String(input.maxCumulativeExposureQuote || "0").trim(),
+      maxSlippageBps: Math.max(0, Math.min(5e3, Math.trunc(Number(input.maxSlippageBps ?? 100)))),
+      maxParticipationRateBps: Math.max(1, Math.min(1e4, Math.trunc(Number(input.maxParticipationRateBps ?? 2500)))),
+      priceCollarMin: String(input.priceCollarMin || "0").trim(),
+      priceCollarMax: String(input.priceCollarMax || "0").trim(),
+      maxOrdersPerMinute: Math.max(1, Math.min(120, Math.trunc(Number(input.maxOrdersPerMinute ?? 20)))),
+      dailyExecutionLimitBase: String(input.dailyExecutionLimitBase || input.targetQuantity || "0").trim(),
+      maxPartialFillRetries: Math.max(0, Math.min(20, Math.trunc(Number(input.maxPartialFillRetries ?? 3)))),
+      orderTimeoutSeconds: Math.max(2, Math.min(3600, Math.trunc(Number(input.orderTimeoutSeconds ?? 15)))),
+      passiveOffsetTicks: Math.max(0, Math.min(50, Math.trunc(Number(input.passiveOffsetTicks ?? 1))))
+    };
+    const { tickUnits, lotUnits, minOrderUnits, maxOrderUnits } = this.resolveMarketSteps(pair, normalizedConfig);
+    const rawTarget = PrecisionMath.parseToUnits(normalizedConfig.targetQuantity, baseDecimals);
+    const targetUnits = roundQuantityToLot(rawTarget, lotUnits);
+    if (targetUnits <= 0n || targetUnits < minOrderUnits) {
+      throw new Error(`targetQuantity harus >= minOrderSize (${PrecisionMath.formatFromUnits(minOrderUnits, baseDecimals, true)} ${pair.baseCurrency}).`);
+    }
+    const rawSliceMin = PrecisionMath.parseToUnits(normalizedConfig.sliceMinQuantity, baseDecimals);
+    const rawSliceMax = PrecisionMath.parseToUnits(normalizedConfig.sliceMaxQuantity, baseDecimals);
+    let sliceMinUnits = roundQuantityToLot(rawSliceMin, lotUnits);
+    let sliceMaxUnits = roundQuantityToLot(rawSliceMax, lotUnits);
+    if (sliceMinUnits < minOrderUnits) sliceMinUnits = minOrderUnits;
+    if (sliceMaxUnits < sliceMinUnits) sliceMaxUnits = sliceMinUnits;
+    if (sliceMaxUnits > maxOrderUnits) sliceMaxUnits = roundQuantityToLot(maxOrderUnits, lotUnits);
+    const rawIceberg = normalizedConfig.icebergDisplayQuantity ? PrecisionMath.parseToUnits(normalizedConfig.icebergDisplayQuantity, baseDecimals) : sliceMaxUnits;
+    let icebergDisplayUnits = roundQuantityToLot(rawIceberg, lotUnits);
+    if (icebergDisplayUnits < minOrderUnits) icebergDisplayUnits = sliceMinUnits;
+    const collarMinUnits = roundPriceToTick(
+      PrecisionMath.parseToUnits(normalizedConfig.priceCollarMin, quoteDecimals),
+      tickUnits,
+      "UP"
+    );
+    const collarMaxUnits = roundPriceToTick(
+      PrecisionMath.parseToUnits(normalizedConfig.priceCollarMax, quoteDecimals),
+      tickUnits,
+      "DOWN"
+    );
+    if (collarMinUnits <= 0n || collarMaxUnits <= 0n || collarMinUnits > collarMaxUnits) {
+      throw new Error("Price collar tidak valid: priceCollarMin harus > 0 dan <= priceCollarMax.");
+    }
+    const maxOrderNotionalUnits = PrecisionMath.parseToUnits(normalizedConfig.maxOrderNotionalQuote, quoteDecimals);
+    const maxCumulativeExposureUnits = PrecisionMath.parseToUnits(normalizedConfig.maxCumulativeExposureQuote, quoteDecimals);
+    if (maxOrderNotionalUnits <= 0n || maxCumulativeExposureUnits <= 0n) {
+      throw new Error("maxOrderNotionalQuote dan maxCumulativeExposureQuote harus lebih besar dari 0.");
+    }
+    if (maxCumulativeExposureUnits < maxOrderNotionalUnits) {
+      throw new Error("maxCumulativeExposureQuote tidak boleh lebih kecil dari maxOrderNotionalQuote.");
+    }
+    const dailyLimitBaseUnits = roundQuantityToLot(
+      PrecisionMath.parseToUnits(normalizedConfig.dailyExecutionLimitBase, baseDecimals),
+      lotUnits
+    );
+    if (dailyLimitBaseUnits < minOrderUnits) {
+      throw new Error("dailyExecutionLimitBase harus lebih besar atau sama dengan minOrderSize.");
+    }
+    normalizedConfig.targetQuantity = PrecisionMath.formatFromUnits(targetUnits, baseDecimals, true);
+    normalizedConfig.sliceMinQuantity = PrecisionMath.formatFromUnits(sliceMinUnits, baseDecimals, true);
+    normalizedConfig.sliceMaxQuantity = PrecisionMath.formatFromUnits(sliceMaxUnits, baseDecimals, true);
+    normalizedConfig.icebergDisplayQuantity = PrecisionMath.formatFromUnits(icebergDisplayUnits, baseDecimals, true);
+    normalizedConfig.tickSize = PrecisionMath.formatFromUnits(tickUnits, quoteDecimals, true);
+    normalizedConfig.lotSize = PrecisionMath.formatFromUnits(lotUnits, baseDecimals, true);
+    normalizedConfig.priceCollarMin = PrecisionMath.formatFromUnits(collarMinUnits, quoteDecimals, true);
+    normalizedConfig.priceCollarMax = PrecisionMath.formatFromUnits(collarMaxUnits, quoteDecimals, true);
+    normalizedConfig.dailyExecutionLimitBase = PrecisionMath.formatFromUnits(dailyLimitBaseUnits, baseDecimals, true);
+    return {
+      config: normalizedConfig,
+      pair,
+      targetUnits,
+      sliceMinUnits,
+      sliceMaxUnits,
+      icebergDisplayUnits,
+      collarMinUnits,
+      collarMaxUnits,
+      maxOrderNotionalUnits,
+      maxCumulativeExposureUnits,
+      dailyLimitBaseUnits,
+      tickUnits,
+      lotUnits
+    };
+  }
+  /**
+   * Read-only available ledger balance check. NEVER injects or creates synthetic balances.
+   */
+  getAvailableBalanceUnits(userId, currency) {
+    const acct = db.getAccount(userId, currency);
+    if (!acct) return 0n;
+    return BigInt(acct.balanceAvailable || "0");
+  }
+  /**
+   * Determine arrival benchmark price strictly from genuine OrderBook top of book or pair lastPrice.
+   */
+  getBenchmarkPriceUnits(pairId) {
+    const pair = db.tradingPairs.get(pairId);
+    const book = matchingEngine.getOrderBook(pairId);
+    const depth = book.getDepth(5);
+    const rawBestBid = depth.bids?.[0];
+    const rawBestAsk = depth.asks?.[0];
+    const bestBidUnits = rawBestBid ? BigInt(Array.isArray(rawBestBid) ? rawBestBid[0] : rawBestBid.price) : 0n;
+    const bestAskUnits = rawBestAsk ? BigInt(Array.isArray(rawBestAsk) ? rawBestAsk[0] : rawBestAsk.price) : 0n;
+    const lastUnits = pair?.lastPrice ? BigInt(pair.lastPrice) : 0n;
+    if (bestBidUnits > 0n && bestAskUnits > 0n) {
+      return {
+        benchmarkUnits: (bestBidUnits + bestAskUnits) / 2n,
+        bestBidUnits,
+        bestAskUnits
+      };
+    }
+    const fallback = bestAskUnits > 0n ? bestAskUnits : bestBidUnits > 0n ? bestBidUnits : lastUnits;
+    return {
+      benchmarkUnits: fallback,
+      bestBidUnits,
+      bestAskUnits
+    };
+  }
+  /**
+   * Check whether a candidate limit/IOC order at `orderPriceUnits` would self-trade against any open
+   * order owned by `userId` on the opposing book side.
+   */
+  wouldSelfTrade(userId, pairId, side, orderPriceUnits) {
+    const book = matchingEngine.getOrderBook(pairId);
+    const opposingSideOrders = book.getRawOrders ? book.getRawOrders(side === "BUY" ? "SELL" : "BUY") : [];
+    if (opposingSideOrders.length > 0) {
+      for (const resting of opposingSideOrders) {
+        if (resting.userId !== userId) continue;
+        if (resting.status !== "NEW" && resting.status !== "PARTIALLY_FILLED") continue;
+        const restingPrice = BigInt(resting.price);
+        if (side === "BUY" && restingPrice <= orderPriceUnits) return true;
+        if (side === "SELL" && restingPrice >= orderPriceUnits) return true;
+      }
+      return false;
+    }
+    for (const resting of db.orders.values()) {
+      if (resting.pairId !== pairId) continue;
+      if (resting.userId !== userId) continue;
+      if (resting.status !== "NEW" && resting.status !== "PARTIALLY_FILLED") continue;
+      if (side === "BUY" && resting.side === "SELL" && BigInt(resting.price) <= orderPriceUnits) {
+        return true;
+      }
+      if (side === "SELL" && resting.side === "BUY" && BigInt(resting.price) >= orderPriceUnits) {
+        return true;
+      }
+    }
+    return false;
+  }
+  /**
+   * Idempotent fill accumulation from executed Trade objects.
+   * Counts volume STRICTLY from actual Trade.quantity (filled base units), never requested order qty.
+   */
+  applyTradesIdempotently(bot, trades) {
+    if (!trades || trades.length === 0) return 0;
+    const processedSet = new Set(bot.processedTradeIds);
+    const { baseDecimals } = this.getPairDecimals(bot.pairId);
+    let appliedCount = 0;
+    let executedUnits = BigInt(bot.stats.executedQuantityUnits || "0");
+    let totalQuoteUnits = BigInt(bot.stats.totalQuoteNotionalUnits || "0");
+    let totalFeeQuoteUnits = BigInt(bot.stats.totalFeesQuoteUnits || "0");
+    let totalFeeBaseUnits = BigInt(bot.stats.totalFeesBaseUnits || "0");
+    for (const trade of trades) {
+      if (!trade || !trade.id || processedSet.has(trade.id)) continue;
+      if (trade.pairId !== bot.pairId) continue;
+      const isBotOrder = bot.deployedOrderIds.includes(trade.takerOrderId) || bot.deployedOrderIds.includes(trade.makerOrderId);
+      if (!isBotOrder) continue;
+      if (trade.makerUserId === trade.takerUserId) continue;
+      if (trade.makerUserId !== bot.userId && trade.takerUserId !== bot.userId) continue;
+      processedSet.add(trade.id);
+      bot.processedTradeIds.push(trade.id);
+      if (bot.processedTradeIds.length > MAX_TRACKED_TRADE_IDS) {
+        bot.processedTradeIds.splice(0, bot.processedTradeIds.length - MAX_TRACKED_TRADE_IDS);
+      }
+      const qtyUnits = BigInt(trade.quantity || "0");
+      const quoteUnits = BigInt(trade.quoteVolume || "0");
+      executedUnits += qtyUnits;
+      totalQuoteUnits += quoteUnits;
+      if (bot.deployedOrderIds.includes(trade.takerOrderId)) {
+        if (trade.takerSide === "BUY") {
+          totalFeeQuoteUnits += BigInt(trade.takerFee || "0");
+        } else {
+          totalFeeQuoteUnits += BigInt(trade.takerFee || "0");
+        }
+      } else if (bot.deployedOrderIds.includes(trade.makerOrderId)) {
+        totalFeeQuoteUnits += BigInt(trade.makerFee || "0");
+      }
+      appliedCount++;
+    }
+    if (appliedCount > 0) {
+      const targetUnits = BigInt(bot.stats.targetQuantityUnits);
+      const remainingUnits = targetUnits > executedUnits ? targetUnits - executedUnits : 0n;
+      const fillBpsBig = targetUnits > 0n ? executedUnits * 10000n / targetUnits : 0n;
+      const fillBps = Number(fillBpsBig > 10000n ? 10000n : fillBpsBig);
+      const scale = 10n ** BigInt(baseDecimals);
+      const avgPriceUnits = executedUnits > 0n ? totalQuoteUnits * scale / executedUnits : 0n;
+      bot.stats.executedQuantityUnits = executedUnits.toString();
+      bot.stats.remainingQuantityUnits = remainingUnits.toString();
+      bot.stats.fillPercentageBps = fillBps;
+      bot.stats.totalQuoteNotionalUnits = totalQuoteUnits.toString();
+      bot.stats.totalFeesQuoteUnits = totalFeeQuoteUnits.toString();
+      bot.stats.totalFeesBaseUnits = totalFeeBaseUnits.toString();
+      bot.stats.averageExecutionPriceUnits = avgPriceUnits.toString();
+      const benchmarkUnits = BigInt(bot.checkpoint.arrivalBenchmarkPriceUnits || "0");
+      if (benchmarkUnits > 0n && avgPriceUnits > 0n) {
+        bot.stats.slippageBps = calculateSlippageBps(avgPriceUnits, benchmarkUnits, bot.config.side);
+      }
+      if (bot.startedAt) {
+        bot.stats.executionDurationMs = Math.max(0, Date.now() - bot.startedAt);
+      }
+    }
+    return appliedCount;
+  }
+  /**
+   * Authoritative state reconciliation against db.orders & db.trades.
+   * Ensures stats match real exchange executions 100% without duplicates.
+   */
+  reconcileBotState(botId, requesterUserId, requesterRole) {
+    const bot = db.volumeExecutionV2Bots.get(botId);
+    if (!bot) throw new Error("Bot Volume Execution V2 tidak ditemukan.");
+    if (requesterUserId) {
+      const isAdmin = ["ADMIN", "SUPERADMIN"].includes((requesterRole || "").toUpperCase());
+      if (bot.userId !== requesterUserId && !isAdmin) {
+        throw new Error("Anda tidak memiliki otorisasi mengakses bot ini.");
+      }
+    }
+    this.reconcileBotStateInternal(bot, "MANUAL_OR_API");
+    db.scheduleSave();
+    this.broadcastUpdate(bot);
+    return bot;
+  }
+  reconcileBotStateInternal(bot, triggerSource) {
+    if (bot.mode === "SIMULATION") return;
+    const { baseDecimals } = this.getPairDecimals(bot.pairId);
+    const ownedOrderIds = new Set(bot.deployedOrderIds);
+    const breakdown = emptyOrderBreakdown();
+    for (const orderId of ownedOrderIds) {
+      const order = db.orders.get(orderId);
+      if (!order || order.userId !== bot.userId) continue;
+      breakdown.submitted++;
+      const filled = BigInt(order.filledQuantity || "0");
+      const qty = BigInt(order.quantity || "0");
+      if (order.status === "FILLED") {
+        breakdown.filled++;
+      } else if (order.status === "PARTIALLY_FILLED") {
+        breakdown.partiallyFilled++;
+        breakdown.accepted++;
+      } else if (order.status === "NEW") {
+        breakdown.accepted++;
+      } else if (order.status === "CANCELLED") {
+        if (filled > 0n && filled < qty) {
+          breakdown.partiallyFilled++;
+        }
+        breakdown.cancelled++;
+        if (order.clientOrderId?.includes("-exp")) {
+          breakdown.expired++;
+        }
+      } else if (order.status === "REJECTED") {
+        breakdown.rejected++;
+      }
+    }
+    breakdown.rejected = Math.max(breakdown.rejected, bot.stats.rejectedOrderCount);
+    breakdown.expired = Math.max(breakdown.expired, bot.stats.orderBreakdown.expired);
+    breakdown.submitted = Math.max(
+      breakdown.submitted,
+      bot.submittedClientOrderIds.length
+    );
+    let executedUnits = 0n;
+    let totalQuoteUnits = 0n;
+    let totalFeeQuoteUnits = 0n;
+    const verifiedTradeIds = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const trade of db.trades) {
+      if (trade.pairId !== bot.pairId) continue;
+      if (seen.has(trade.id)) continue;
+      const isMakerBot = ownedOrderIds.has(trade.makerOrderId) && trade.makerUserId === bot.userId;
+      const isTakerBot = ownedOrderIds.has(trade.takerOrderId) && trade.takerUserId === bot.userId;
+      if (!isMakerBot && !isTakerBot) continue;
+      if (trade.makerUserId === trade.takerUserId) continue;
+      seen.add(trade.id);
+      verifiedTradeIds.push(trade.id);
+      executedUnits += BigInt(trade.quantity || "0");
+      totalQuoteUnits += BigInt(trade.quoteVolume || "0");
+      if (isTakerBot) {
+        totalFeeQuoteUnits += BigInt(trade.takerFee || "0");
+      } else {
+        totalFeeQuoteUnits += BigInt(trade.makerFee || "0");
+      }
+    }
+    const targetUnits = BigInt(bot.stats.targetQuantityUnits);
+    const remainingUnits = targetUnits > executedUnits ? targetUnits - executedUnits : 0n;
+    const fillBpsBig = targetUnits > 0n ? executedUnits * 10000n / targetUnits : 0n;
+    const fillBps = Number(fillBpsBig > 10000n ? 10000n : fillBpsBig);
+    const scale = 10n ** BigInt(baseDecimals);
+    const avgPriceUnits = executedUnits > 0n ? totalQuoteUnits * scale / executedUnits : 0n;
+    bot.processedTradeIds = verifiedTradeIds.slice(-MAX_TRACKED_TRADE_IDS);
+    bot.stats.executedQuantityUnits = executedUnits.toString();
+    bot.stats.remainingQuantityUnits = remainingUnits.toString();
+    bot.stats.fillPercentageBps = fillBps;
+    bot.stats.totalQuoteNotionalUnits = totalQuoteUnits.toString();
+    bot.stats.totalFeesQuoteUnits = totalFeeQuoteUnits.toString();
+    bot.stats.averageExecutionPriceUnits = avgPriceUnits.toString();
+    bot.stats.orderBreakdown = breakdown;
+    bot.stats.rejectedOrderCount = breakdown.rejected;
+    const benchmarkUnits = BigInt(bot.checkpoint.arrivalBenchmarkPriceUnits || "0");
+    if (benchmarkUnits > 0n && avgPriceUnits > 0n) {
+      bot.stats.slippageBps = calculateSlippageBps(avgPriceUnits, benchmarkUnits, bot.config.side);
+    }
+    if (bot.startedAt) {
+      bot.stats.executionDurationMs = Math.max(0, Date.now() - bot.startedAt);
+    }
+    if (remainingUnits === 0n && bot.status === "RUNNING") {
+      bot.status = "COMPLETED";
+      bot.completedAt = Date.now();
+      this.clearWorker(bot.id);
+      this.appendLog(bot, "INFO", `Rekonsiliasi (${triggerSource}): Target 100% tercapai.`);
+    }
+    bot.updatedAt = Date.now();
+  }
+  /**
+   * Compute cumulative executed base quantity in the last 24h across ALL V2 LIVE bots for a user.
+   */
+  getUserDailyExecutedBaseUnits(userId, pairId) {
+    const cutoff = Date.now() - 86400 * 1e3;
+    let total = 0n;
+    for (const bot of db.volumeExecutionV2Bots.values()) {
+      if (bot.userId !== userId || bot.pairId !== pairId) continue;
+      if (bot.mode !== "LIVE") continue;
+      if (bot.createdAt >= cutoff || bot.updatedAt >= cutoff && bot.status === "RUNNING") {
+        total += BigInt(bot.stats.executedQuantityUnits || "0");
+      }
+    }
+    return total;
+  }
+  /**
+   * Compute recent market volume (last 24 candles) strictly from actual executed candles/trades.
+   */
+  getGenuineRecentMarketVolumeUnits(pairId, baseDecimals) {
+    const candles = klineService.getCandles(pairId, "15m", 24);
+    let totalUnits = 0n;
+    const cutoff = Date.now() - 6 * 3600 * 1e3;
+    for (const t of db.trades) {
+      if (t.pairId === pairId && t.createdAt >= cutoff) {
+        totalUnits += BigInt(t.quantity || "0");
+      }
+    }
+    if (totalUnits > 0n) return totalUnits;
+    if (candles.length > 0) {
+      let sumScaled = 0n;
+      const scale = 10n ** BigInt(baseDecimals);
+      for (const c of candles) {
+        if (c.volume > 0) {
+          const str = c.volume.toFixed(Math.min(8, baseDecimals));
+          sumScaled += PrecisionMath.parseToUnits(str, baseDecimals);
+        }
+      }
+      if (sumScaled > 0n) return sumScaled;
+      return scale;
+    }
+    return 0n;
+  }
+  /**
+   * Deploy a new Volume Execution V2 bot (either LIVE or SIMULATION).
+   */
+  deployBot(params) {
+    if (db.riskControls.isKillSwitchActive) {
+      throw new Error("Emergency Kill-Switch bursa sedang aktif.");
+    }
+    if (params.idempotencyKey) {
+      for (const existing of db.volumeExecutionV2Bots.values()) {
+        if (existing.userId === params.userId && existing.idempotencyKey === params.idempotencyKey) {
+          return existing;
+        }
+      }
+    }
+    const validated = this.validateAndNormalizeConfig({
+      ...params.config,
+      pairId: params.config.pairId || "BTC-IDR"
+    });
+    const { config, pair, targetUnits, maxCumulativeExposureUnits, dailyLimitBaseUnits } = validated;
+    const { baseDecimals, quoteDecimals } = this.getPairDecimals(pair.id);
+    const { benchmarkUnits, bestBidUnits, bestAskUnits } = this.getBenchmarkPriceUnits(pair.id);
+    if (benchmarkUnits <= 0n) {
+      throw new Error(`Harga referensi/pasar untuk ${pair.id} belum tersedia.`);
+    }
+    if (config.mode === "LIVE") {
+      const dailyUsed = this.getUserDailyExecutedBaseUnits(params.userId, pair.id);
+      if (dailyUsed >= dailyLimitBaseUnits) {
+        throw new Error(
+          `Batas eksekusi harian tercapai (${PrecisionMath.formatFromUnits(
+            dailyUsed,
+            baseDecimals,
+            true
+          )} / ${config.dailyExecutionLimitBase} ${pair.baseCurrency}).`
+        );
+      }
+      if (config.side === "SELL") {
+        const availBase = this.getAvailableBalanceUnits(params.userId, pair.baseCurrency);
+        if (availBase < BigInt(pair.minOrderSize || "1")) {
+          throw new Error(
+            `Saldo tersedia ${pair.baseCurrency} tidak mencukupi (${PrecisionMath.formatFromUnits(
+              availBase,
+              baseDecimals,
+              true
+            )}). Engine V2 tidak melakukan injeksi saldo sintetis.`
+          );
+        }
+      } else {
+        const availQuote = this.getAvailableBalanceUnits(params.userId, pair.quoteCurrency);
+        const minSliceNotional = PrecisionMath.calculateQuoteAmount(
+          validated.sliceMinUnits,
+          baseDecimals,
+          bestAskUnits > 0n ? bestAskUnits : benchmarkUnits
+        );
+        const minFee = PrecisionMath.calculateFee(minSliceNotional, pair.takerFeeBps);
+        if (availQuote < minSliceNotional + minFee) {
+          throw new Error(
+            `Saldo tersedia ${pair.quoteCurrency} tidak mencukupi untuk 1 slice minimum (${PrecisionMath.formatFromUnits(
+              availQuote,
+              quoteDecimals,
+              true
+            )} < ${PrecisionMath.formatFromUnits(minSliceNotional + minFee, quoteDecimals, true)}).`
+          );
+        }
+      }
+    }
+    const now = Date.now();
+    const botId = `vx2-${crypto23.randomUUID().slice(0, 12)}`;
+    const defaultName = `${config.strategy} ${config.side} ${pair.baseCurrency} V2 (${config.mode})`;
+    const bot = {
+      id: botId,
+      userId: params.userId,
+      userEmail: params.userEmail,
+      name: (params.name || defaultName).trim().slice(0, 80),
+      pairId: pair.id,
+      strategy: config.strategy,
+      mode: config.mode,
+      status: "RUNNING",
+      config,
+      checkpoint: {
+        sliceIndex: 0,
+        lastSliceIdempotencyKey: "",
+        lastSliceRetryCount: 0,
+        lastTickAt: now,
+        rateWindowStart: now,
+        ordersInRateWindow: 0,
+        arrivalBenchmarkPriceUnits: benchmarkUnits.toString()
+      },
+      stats: {
+        targetQuantityUnits: targetUnits.toString(),
+        executedQuantityUnits: "0",
+        remainingQuantityUnits: targetUnits.toString(),
+        fillPercentageBps: 0,
+        averageExecutionPriceUnits: "0",
+        totalQuoteNotionalUnits: "0",
+        totalFeesQuoteUnits: "0",
+        totalFeesBaseUnits: "0",
+        slippageBps: 0,
+        executionDurationMs: 0,
+        rejectedOrderCount: 0,
+        orderBreakdown: emptyOrderBreakdown()
+      },
+      processedTradeIds: [],
+      deployedOrderIds: [],
+      submittedClientOrderIds: [],
+      idempotencyKey: params.idempotencyKey,
+      startedAt: now,
+      createdAt: now,
+      updatedAt: now,
+      logs: []
+    };
+    const modeTag = config.mode === "SIMULATION" ? "[SIMULASI DRY-RUN]" : "[LIVE EXECUTION]";
+    this.appendLog(
+      bot,
+      config.mode === "SIMULATION" ? "SIMULATION" : "INFO",
+      `${modeTag} Engine V2 (${config.strategy} ${config.side}) dimulai pada ${pair.id}. Target=${config.targetQuantity} ${pair.baseCurrency}, Collar=[${config.priceCollarMin}..${config.priceCollarMax}], MaxExposure=${config.maxCumulativeExposureQuote} ${pair.quoteCurrency}.`
+    );
+    if (bestBidUnits === 0n && bestAskUnits === 0n && config.strategy === "AGGRESSIVE_LIMIT") {
+      this.appendLog(bot, "INFO", "Order book lawan saat ini kosong; AGGRESSIVE_LIMIT akan menunggu kedalaman riil tanpa membuat likuiditas palsu.");
+    }
+    db.volumeExecutionV2Bots.set(bot.id, bot);
+    db.saveToDisk();
+    this.executeTick(bot.id);
+    if (bot.status === "RUNNING") {
+      this.scheduleWorker(bot.id);
+    }
+    this.broadcastUpdate(bot);
+    return bot;
+  }
+  scheduleWorker(botId) {
+    this.clearWorker(botId);
+    const bot = db.volumeExecutionV2Bots.get(botId);
+    if (!bot || bot.status !== "RUNNING") return;
+    const intervalMs = Math.max(1e3, bot.config.intervalSeconds * 1e3);
+    const timer = setInterval(() => {
+      this.executeTick(botId);
+    }, intervalMs);
+    this.workers.set(botId, timer);
+  }
+  clearWorker(botId) {
+    const existing = this.workers.get(botId);
+    if (existing) {
+      clearInterval(existing);
+      this.workers.delete(botId);
+    }
+  }
+  /**
+   * Risk-halt bot and automatically cancel any open bot-owned orders.
+   */
+  triggerRiskHalt(bot, reason) {
+    bot.status = "RISK_HALTED";
+    bot.lastRiskReason = reason;
+    bot.stoppedAt = Date.now();
+    this.clearWorker(bot.id);
+    this.appendLog(bot, "RISK", `RISK LIMIT BREACH \u2014 Auto-halt & pembatalan order aktif: ${reason}`);
+    if (bot.mode === "LIVE") {
+      this.cancelBotOwnedOpenOrders(bot, "RISK_LIMIT_BREACH");
+    }
+    this.reconcileBotStateInternal(bot, "RISK_HALT");
+    db.scheduleSave();
+    this.broadcastUpdate(bot);
+  }
+  /**
+   * Cancel ONLY open orders inside `bot.deployedOrderIds` that are genuinely owned by `bot.userId`.
+   */
+  cancelBotOwnedOpenOrders(bot, reason) {
+    let cancelled = 0;
+    for (const orderId of bot.deployedOrderIds) {
+      const order = db.orders.get(orderId);
+      if (!order) continue;
+      if (order.userId !== bot.userId) continue;
+      if (order.pairId !== bot.pairId) continue;
+      if (order.status !== "NEW" && order.status !== "PARTIALLY_FILLED") continue;
+      try {
+        const cancelledOrder = matchingEngine.cancelOrder(order.id, bot.userId, bot.pairId, "USER");
+        cancelled++;
+        marketWsService.broadcastOrderUpdate(cancelledOrder);
+      } catch {
+      }
+    }
+    if (cancelled > 0) {
+      marketWsService.broadcastDepth(bot.pairId);
+      this.appendLog(bot, "ORDER", `Membatalkan ${cancelled} open order milik bot (${reason}).`);
+    }
+    return cancelled;
+  }
+  pauseBot(botId, requesterUserId, requesterRole) {
+    const bot = db.volumeExecutionV2Bots.get(botId);
+    if (!bot) throw new Error("Bot tidak ditemukan.");
+    const isAdmin = ["ADMIN", "SUPERADMIN"].includes((requesterRole || "").toUpperCase());
+    if (bot.userId !== requesterUserId && !isAdmin) {
+      throw new Error("Tidak memiliki otorisasi menjeda bot ini.");
+    }
+    if (bot.status !== "RUNNING") return bot;
+    bot.status = "PAUSED";
+    this.clearWorker(bot.id);
+    this.appendLog(bot, "INFO", "Bot dijeda oleh operator.");
+    db.scheduleSave();
+    this.broadcastUpdate(bot);
+    return bot;
+  }
+  resumeBot(botId, requesterUserId, requesterRole) {
+    const bot = db.volumeExecutionV2Bots.get(botId);
+    if (!bot) throw new Error("Bot tidak ditemukan.");
+    const isAdmin = ["ADMIN", "SUPERADMIN"].includes((requesterRole || "").toUpperCase());
+    if (bot.userId !== requesterUserId && !isAdmin) {
+      throw new Error("Tidak memiliki otorisasi melanjutkan bot ini.");
+    }
+    if (bot.status === "COMPLETED" || bot.status === "STOPPED") {
+      throw new Error(`Bot berstatus ${bot.status} tidak dapat dilanjutkan.`);
+    }
+    if (db.riskControls.isKillSwitchActive) {
+      throw new Error("Kill-switch aktif.");
+    }
+    this.reconcileBotStateInternal(bot, "RESUME");
+    if (BigInt(bot.stats.remainingQuantityUnits) <= 0n) {
+      return bot;
+    }
+    bot.status = "RUNNING";
+    bot.lastRiskReason = void 0;
+    this.appendLog(bot, "INFO", "Bot dilanjutkan kembali.");
+    this.scheduleWorker(bot.id);
+    db.scheduleSave();
+    this.broadcastUpdate(bot);
+    return bot;
+  }
+  /**
+   * Authorized stop operation: verifies requester ownership (or admin) and cancels ONLY bot-owned open orders.
+   */
+  stopBot(botId, requesterUserId, requesterRole) {
+    const bot = db.volumeExecutionV2Bots.get(botId);
+    if (!bot) throw new Error("Bot tidak ditemukan.");
+    const isAdmin = ["ADMIN", "SUPERADMIN"].includes((requesterRole || "").toUpperCase());
+    if (bot.userId !== requesterUserId && !isAdmin) {
+      throw new Error("Anda tidak memiliki otorisasi menghentikan bot milik akun lain.");
+    }
+    this.clearWorker(bot.id);
+    const cancelledOrdersCount = bot.mode === "LIVE" ? this.cancelBotOwnedOpenOrders(bot, "MANUAL_STOP") : 0;
+    bot.status = "STOPPED";
+    bot.stoppedAt = Date.now();
+    this.reconcileBotStateInternal(bot, "MANUAL_STOP");
+    this.appendLog(
+      bot,
+      "INFO",
+      `Bot dihentikan aman (${cancelledOrdersCount} order terbuka milik bot dibatalkan).`
+    );
+    db.saveToDisk();
+    this.broadcastUpdate(bot);
+    return { bot, cancelledOrdersCount };
+  }
+  emergencyStopAllForUser(userId) {
+    let stoppedCount = 0;
+    let cancelledOrdersCount = 0;
+    for (const bot of db.volumeExecutionV2Bots.values()) {
+      if (bot.userId !== userId) continue;
+      if (bot.status === "RUNNING" || bot.status === "PAUSED") {
+        const res = this.stopBot(bot.id, userId, "USER");
+        stoppedCount++;
+        cancelledOrdersCount += res.cancelledOrdersCount;
+      }
+    }
+    return { stoppedCount, cancelledOrdersCount };
+  }
+  /**
+   * Execute single algorithmic tick (synchronized per botId).
+   */
+  executeTick(botId) {
+    if (this.runningTicks.has(botId)) return;
+    const bot = db.volumeExecutionV2Bots.get(botId);
+    if (!bot || bot.status !== "RUNNING") {
+      this.clearWorker(botId);
+      return;
+    }
+    this.runningTicks.add(botId);
+    try {
+      if (db.riskControls.isKillSwitchActive) {
+        this.triggerRiskHalt(bot, "Global Exchange Kill-Switch aktif.");
+        return;
+      }
+      const pair = db.tradingPairs.get(bot.pairId);
+      if (!pair || !pair.isActive || pair.isHalted || pair.isDelisted) {
+        this.triggerRiskHalt(bot, `Market ${bot.pairId} halted/non-aktif.`);
+        return;
+      }
+      const now = Date.now();
+      const { baseDecimals, quoteDecimals } = this.getPairDecimals(pair.id);
+      const { tickUnits, lotUnits, minOrderUnits, maxOrderUnits } = this.resolveMarketSteps(pair, bot.config);
+      if (bot.startedAt) {
+        bot.stats.executionDurationMs = Math.max(0, now - bot.startedAt);
+      }
+      if (bot.startedAt && now - bot.startedAt > bot.config.durationSeconds * 1e3) {
+        if (bot.mode === "LIVE") {
+          this.cancelBotOwnedOpenOrders(bot, "EXECUTION_WINDOW_TIMEOUT");
+        }
+        this.reconcileBotStateInternal(bot, "TIMEOUT");
+        if (BigInt(bot.stats.remainingQuantityUnits) === 0n) {
+          bot.status = "COMPLETED";
+        } else {
+          bot.status = "STOPPED";
+          bot.stoppedAt = now;
+          this.appendLog(bot, "INFO", `Durasi eksekusi ${bot.config.durationSeconds}s berakhir. Sisa target belum terisi dihentikan aman.`);
+        }
+        bot.completedAt = bot.status === "COMPLETED" ? now : bot.completedAt;
+        this.clearWorker(bot.id);
+        db.scheduleSave();
+        this.broadcastUpdate(bot);
+        return;
+      }
+      if (bot.mode === "LIVE" && bot.checkpoint.lastActiveOrderId) {
+        const activeOrder = db.orders.get(bot.checkpoint.lastActiveOrderId);
+        if (activeOrder && (activeOrder.status === "NEW" || activeOrder.status === "PARTIALLY_FILLED")) {
+          const ageMs = now - (bot.checkpoint.lastActiveOrderPlacedAt || activeOrder.createdAt);
+          if (ageMs < bot.config.orderTimeoutSeconds * 1e3) {
+            this.reconcileBotStateInternal(bot, "POLL_ACTIVE_ORDER");
+            this.broadcastUpdate(bot);
+            return;
+          }
+          try {
+            const cancelled = matchingEngine.cancelOrder(activeOrder.id, bot.userId, bot.pairId, "USER");
+            if (!cancelled.clientOrderId?.includes("-exp")) {
+              cancelled.clientOrderId = `${cancelled.clientOrderId || ""}-exp`;
+            }
+            marketWsService.broadcastOrderUpdate(cancelled);
+            marketWsService.broadcastDepth(bot.pairId);
+            bot.stats.orderBreakdown.expired++;
+            this.appendLog(
+              bot,
+              "ORDER",
+              `Order ${activeOrder.id} kadaluarsa setelah ${bot.config.orderTimeoutSeconds}s (terisi ${PrecisionMath.formatFromUnits(
+                BigInt(cancelled.filledQuantity),
+                baseDecimals,
+                true
+              )} ${pair.baseCurrency}), membatalkan sisa.`
+            );
+            const wasPartial = BigInt(cancelled.filledQuantity) > 0n;
+            if (wasPartial) {
+              bot.checkpoint.lastSliceRetryCount++;
+              if (bot.checkpoint.lastSliceRetryCount > bot.config.maxPartialFillRetries) {
+                this.appendLog(bot, "INFO", `Batas retry partial-fill (${bot.config.maxPartialFillRetries}x) pada slice terpenuhi; lanjut ke slice berikutnya.`);
+                bot.checkpoint.lastSliceRetryCount = 0;
+              }
+            }
+          } catch {
+          }
+          bot.checkpoint.lastActiveOrderId = void 0;
+          this.reconcileBotStateInternal(bot, "EXPIRE_ORDER");
+        } else {
+          bot.checkpoint.lastActiveOrderId = void 0;
+          bot.checkpoint.lastSliceRetryCount = 0;
+          this.reconcileBotStateInternal(bot, "ORDER_SETTLED");
+        }
+      }
+      const remainingUnits = BigInt(bot.stats.remainingQuantityUnits || "0");
+      if (remainingUnits <= 0n) {
+        bot.status = "COMPLETED";
+        bot.completedAt = now;
+        this.clearWorker(bot.id);
+        this.appendLog(bot, "INFO", "Target kuantitas eksekusi 100% tercapai.");
+        db.scheduleSave();
+        this.broadcastUpdate(bot);
+        return;
+      }
+      const sliceMinUnits = roundQuantityToLot(
+        PrecisionMath.parseToUnits(bot.config.sliceMinQuantity, baseDecimals),
+        lotUnits
+      );
+      const sliceMaxUnits = roundQuantityToLot(
+        PrecisionMath.parseToUnits(bot.config.sliceMaxQuantity, baseDecimals),
+        lotUnits
+      );
+      const effectiveMin = sliceMinUnits >= minOrderUnits ? sliceMinUnits : minOrderUnits;
+      const effectiveMax = sliceMaxUnits >= effectiveMin ? sliceMaxUnits : effectiveMin;
+      let sliceQtyUnits = this.computeAlgorithmicSliceUnits(
+        bot,
+        remainingUnits,
+        effectiveMin,
+        effectiveMax,
+        lotUnits,
+        minOrderUnits,
+        maxOrderUnits,
+        baseDecimals
+      );
+      if (sliceQtyUnits <= 0n || sliceQtyUnits < minOrderUnits) {
+        if (remainingUnits < minOrderUnits) {
+          bot.status = "COMPLETED";
+          bot.completedAt = now;
+          this.clearWorker(bot.id);
+          this.appendLog(bot, "INFO", `Sisa (${PrecisionMath.formatFromUnits(remainingUnits, baseDecimals, true)}) lebih kecil dari minOrderSize; eksekusi diselesaikan.`);
+          db.scheduleSave();
+          this.broadcastUpdate(bot);
+        }
+        return;
+      }
+      const { benchmarkUnits, bestBidUnits, bestAskUnits } = this.getBenchmarkPriceUnits(pair.id);
+      if (benchmarkUnits <= 0n) {
+        this.appendLog(bot, "ERROR", "Harga referensi market tidak tersedia.");
+        return;
+      }
+      const collarMinUnits = PrecisionMath.parseToUnits(bot.config.priceCollarMin, quoteDecimals);
+      const collarMaxUnits = PrecisionMath.parseToUnits(bot.config.priceCollarMax, quoteDecimals);
+      const maxSlippageBpsBig = BigInt(bot.config.maxSlippageBps);
+      let orderPriceUnits = this.computeAlgorithmicPriceUnits(
+        bot,
+        benchmarkUnits,
+        bestBidUnits,
+        bestAskUnits,
+        tickUnits
+      );
+      if (orderPriceUnits < collarMinUnits || orderPriceUnits > collarMaxUnits) {
+        this.triggerRiskHalt(
+          bot,
+          `Harga target (${PrecisionMath.formatFromUnits(
+            orderPriceUnits,
+            quoteDecimals,
+            true
+          )}) melanggar Price Collar [${bot.config.priceCollarMin} .. ${bot.config.priceCollarMax}].`
+        );
+        return;
+      }
+      const refForSlippage = bot.config.side === "BUY" ? bestAskUnits > 0n ? bestAskUnits : benchmarkUnits : bestBidUnits > 0n ? bestBidUnits : benchmarkUnits;
+      const expectedSlippageBps = calculateSlippageBps(orderPriceUnits, refForSlippage, bot.config.side);
+      if (expectedSlippageBps > Number(maxSlippageBpsBig)) {
+        this.triggerRiskHalt(
+          bot,
+          `Estimasi slippage (${expectedSlippageBps} bps) melampaui maxSlippageBps (${bot.config.maxSlippageBps} bps).`
+        );
+        return;
+      }
+      const sliceNotionalUnits = PrecisionMath.calculateQuoteAmount(sliceQtyUnits, baseDecimals, orderPriceUnits);
+      const maxOrderNotionalUnits = PrecisionMath.parseToUnits(bot.config.maxOrderNotionalQuote, quoteDecimals);
+      if (sliceNotionalUnits > maxOrderNotionalUnits) {
+        const cappedQty = roundQuantityToLot(
+          PrecisionMath.calculateBaseQuantity(maxOrderNotionalUnits, baseDecimals, orderPriceUnits),
+          lotUnits
+        );
+        if (cappedQty < minOrderUnits) {
+          this.triggerRiskHalt(
+            bot,
+            `Notional order (${PrecisionMath.formatFromUnits(
+              sliceNotionalUnits,
+              quoteDecimals,
+              true
+            )}) melebihi maxOrderNotionalQuote (${bot.config.maxOrderNotionalQuote}).`
+          );
+          return;
+        }
+        sliceQtyUnits = cappedQty;
+      }
+      const finalNotionalUnits = PrecisionMath.calculateQuoteAmount(sliceQtyUnits, baseDecimals, orderPriceUnits);
+      const currentCumulativeQuote = BigInt(bot.stats.totalQuoteNotionalUnits || "0");
+      const maxCumExposureUnits = PrecisionMath.parseToUnits(bot.config.maxCumulativeExposureQuote, quoteDecimals);
+      if (currentCumulativeQuote + finalNotionalUnits > maxCumExposureUnits) {
+        this.triggerRiskHalt(
+          bot,
+          `Eksposur kumulatif (${PrecisionMath.formatFromUnits(
+            currentCumulativeQuote + finalNotionalUnits,
+            quoteDecimals,
+            true
+          )}) melampaui batas (${bot.config.maxCumulativeExposureQuote}).`
+        );
+        return;
+      }
+      if (now - bot.checkpoint.rateWindowStart >= 6e4) {
+        bot.checkpoint.rateWindowStart = now;
+        bot.checkpoint.ordersInRateWindow = 0;
+      }
+      if (bot.checkpoint.ordersInRateWindow >= bot.config.maxOrdersPerMinute) {
+        this.triggerRiskHalt(
+          bot,
+          `Order-rate limit terlampaui (${bot.checkpoint.ordersInRateWindow}/${bot.config.maxOrdersPerMinute} order/menit).`
+        );
+        return;
+      }
+      if (bot.mode === "LIVE") {
+        const dailyLimitUnits = PrecisionMath.parseToUnits(bot.config.dailyExecutionLimitBase, baseDecimals);
+        const dailyUsedUnits = this.getUserDailyExecutedBaseUnits(bot.userId, pair.id);
+        if (dailyUsedUnits + sliceQtyUnits > dailyLimitUnits) {
+          this.triggerRiskHalt(
+            bot,
+            `Daily execution limit terlampaui (${PrecisionMath.formatFromUnits(
+              dailyUsedUnits,
+              baseDecimals,
+              true
+            )} / ${bot.config.dailyExecutionLimitBase} ${pair.baseCurrency}).`
+          );
+          return;
+        }
+      }
+      const genuineMarketVol = this.getGenuineRecentMarketVolumeUnits(pair.id, baseDecimals);
+      if (genuineMarketVol > 0n) {
+        const maxBotVolByPart = genuineMarketVol * BigInt(bot.config.maxParticipationRateBps) / 10000n;
+        const projectedExecuted = BigInt(bot.stats.executedQuantityUnits || "0") + sliceQtyUnits;
+        if (maxBotVolByPart > minOrderUnits && projectedExecuted > maxBotVolByPart) {
+          this.triggerRiskHalt(
+            bot,
+            `Participation rate melampaui ${bot.config.maxParticipationRateBps} bps dari volume riil pasar (${PrecisionMath.formatFromUnits(
+              genuineMarketVol,
+              baseDecimals,
+              true
+            )} ${pair.baseCurrency}).`
+          );
+          return;
+        }
+      }
+      if (this.wouldSelfTrade(bot.userId, pair.id, bot.config.side, orderPriceUnits)) {
+        if (bot.strategy === "PASSIVE_LIMIT") {
+          const stepped = bot.config.side === "BUY" ? orderPriceUnits > tickUnits ? orderPriceUnits - tickUnits : tickUnits : orderPriceUnits + tickUnits;
+          if (stepped >= collarMinUnits && stepped <= collarMaxUnits && !this.wouldSelfTrade(bot.userId, pair.id, bot.config.side, stepped)) {
+            orderPriceUnits = stepped;
+          } else {
+            this.appendLog(bot, "RISK", `Self-Trade Prevention: order akan bersilangan dengan order aktif akun sendiri; slice dilewati.`);
+            bot.stats.rejectedOrderCount++;
+            bot.stats.orderBreakdown.rejected++;
+            return;
+          }
+        } else {
+          this.appendLog(bot, "RISK", `Self-Trade Prevention: eksekusi dibatalkan karena harga bersilangan dengan order resting akun sendiri.`);
+          bot.stats.rejectedOrderCount++;
+          bot.stats.orderBreakdown.rejected++;
+          return;
+        }
+      }
+      if (bot.mode === "LIVE") {
+        if (bot.config.side === "BUY") {
+          const availQuote = this.getAvailableBalanceUnits(bot.userId, pair.quoteCurrency);
+          const estFee = PrecisionMath.calculateFee(finalNotionalUnits, pair.takerFeeBps);
+          if (availQuote < finalNotionalUnits + estFee) {
+            this.triggerRiskHalt(
+              bot,
+              `Saldo ${pair.quoteCurrency} tidak mencukupi (${PrecisionMath.formatFromUnits(
+                availQuote,
+                quoteDecimals,
+                true
+              )} < ${PrecisionMath.formatFromUnits(finalNotionalUnits + estFee, quoteDecimals, true)}).`
+            );
+            return;
+          }
+        } else {
+          const availBase = this.getAvailableBalanceUnits(bot.userId, pair.baseCurrency);
+          if (availBase < sliceQtyUnits) {
+            this.triggerRiskHalt(
+              bot,
+              `Inventori ${pair.baseCurrency} tidak mencukupi (${PrecisionMath.formatFromUnits(
+                availBase,
+                baseDecimals,
+                true
+              )} < ${PrecisionMath.formatFromUnits(sliceQtyUnits, baseDecimals, true)}).`
+            );
+            return;
+          }
+        }
+      }
+      bot.checkpoint.sliceIndex++;
+      const nextSliceKey = `vx2-${bot.id.slice(-8)}-s${bot.checkpoint.sliceIndex}-r${bot.checkpoint.lastSliceRetryCount}`;
+      if (bot.submittedClientOrderIds.includes(nextSliceKey)) {
+        this.appendLog(bot, "INFO", `Idempotency guard mencegah duplikasi slice ${nextSliceKey}.`);
+        return;
+      }
+      if (bot.mode === "SIMULATION") {
+        this.runSimulationSlice(bot, pair, sliceQtyUnits, orderPriceUnits, nextSliceKey);
+      } else {
+        this.runLiveSlice(bot, pair, sliceQtyUnits, orderPriceUnits, nextSliceKey);
+      }
+      bot.checkpoint.lastTickAt = now;
+      bot.updatedAt = Date.now();
+      db.scheduleSave();
+      this.broadcastUpdate(bot);
+    } finally {
+      this.runningTicks.delete(botId);
+    }
+  }
+  computeAlgorithmicSliceUnits(bot, remainingUnits, minSliceUnits, maxSliceUnits, lotUnits, minOrderUnits, maxOrderUnits, baseDecimals) {
+    let chosen;
+    if (bot.strategy === "ICEBERG") {
+      const displayUnits = bot.config.icebergDisplayQuantity ? roundQuantityToLot(PrecisionMath.parseToUnits(bot.config.icebergDisplayQuantity, baseDecimals), lotUnits) : maxSliceUnits;
+      chosen = displayUnits > 0n ? displayUnits : minSliceUnits;
+    } else if (bot.strategy === "VWAP") {
+      const candles = klineService.getCandles(bot.pairId, "15m", 12);
+      const totalElapsedIntervals = Math.max(1, Math.floor(bot.config.durationSeconds / Math.max(1, bot.config.intervalSeconds)));
+      const slicesLeft = BigInt(Math.max(1, totalElapsedIntervals - bot.checkpoint.sliceIndex));
+      let baseTwapSlice = remainingUnits / slicesLeft;
+      if (baseTwapSlice < minSliceUnits) baseTwapSlice = minSliceUnits;
+      if (candles.length >= 2) {
+        let sumVol = 0n;
+        const vols = candles.map((c) => {
+          const v = PrecisionMath.parseToUnits(Math.max(0, c.volume).toFixed(Math.min(8, baseDecimals)), baseDecimals);
+          sumVol += v;
+          return v;
+        });
+        if (sumVol > 0n) {
+          const avgVol = sumVol / BigInt(candles.length);
+          const latestVol = vols[vols.length - 1];
+          const rawWeightBps = avgVol > 0n ? latestVol * 10000n / avgVol : 10000n;
+          const clampedWeightBps = rawWeightBps < 5000n ? 5000n : rawWeightBps > 20000n ? 20000n : rawWeightBps;
+          chosen = baseTwapSlice * clampedWeightBps / 10000n;
+        } else {
+          chosen = baseTwapSlice;
+        }
+      } else {
+        chosen = baseTwapSlice;
+      }
+    } else if (bot.strategy === "TWAP") {
+      const totalIntervals = Math.max(1, Math.floor(bot.config.durationSeconds / Math.max(1, bot.config.intervalSeconds)));
+      const slicesLeft = BigInt(Math.max(1, totalIntervals - bot.checkpoint.sliceIndex));
+      const linearSlice = remainingUnits / slicesLeft;
+      if (maxSliceUnits > minSliceUnits) {
+        const rand = randomBigIntInRange(minSliceUnits, maxSliceUnits);
+        chosen = linearSlice > rand ? linearSlice : rand;
+      } else {
+        chosen = linearSlice > minSliceUnits ? linearSlice : minSliceUnits;
+      }
+    } else {
+      chosen = maxSliceUnits > minSliceUnits ? randomBigIntInRange(minSliceUnits, maxSliceUnits) : minSliceUnits;
+    }
+    if (chosen > remainingUnits) chosen = remainingUnits;
+    if (chosen > maxOrderUnits) chosen = maxOrderUnits;
+    chosen = roundQuantityToLot(chosen, lotUnits);
+    if (chosen < minOrderUnits && remainingUnits >= minOrderUnits) {
+      chosen = roundQuantityToLot(minOrderUnits, lotUnits);
+    }
+    return chosen > remainingUnits ? roundQuantityToLot(remainingUnits, lotUnits) : chosen;
+  }
+  computeAlgorithmicPriceUnits(bot, benchmarkUnits, bestBidUnits, bestAskUnits, tickUnits) {
+    const side = bot.config.side;
+    const offsetTicks = BigInt(bot.config.passiveOffsetTicks ?? 1);
+    if (bot.strategy === "PASSIVE_LIMIT") {
+      if (side === "BUY") {
+        const anchor = bestBidUnits > 0n ? bestBidUnits : benchmarkUnits;
+        let price = anchor > offsetTicks * tickUnits ? anchor - offsetTicks * tickUnits : tickUnits;
+        if (bestAskUnits > 0n && price >= bestAskUnits) {
+          price = bestAskUnits > tickUnits ? bestAskUnits - tickUnits : tickUnits;
+        }
+        return roundPriceToTick(price, tickUnits, "DOWN");
+      } else {
+        const anchor = bestAskUnits > 0n ? bestAskUnits : benchmarkUnits;
+        let price = anchor + offsetTicks * tickUnits;
+        if (bestBidUnits > 0n && price <= bestBidUnits) {
+          price = bestBidUnits + tickUnits;
+        }
+        return roundPriceToTick(price, tickUnits, "UP");
+      }
+    }
+    if (bot.strategy === "AGGRESSIVE_LIMIT") {
+      const slipBps = BigInt(bot.config.maxSlippageBps);
+      if (side === "BUY") {
+        const ref = bestAskUnits > 0n ? bestAskUnits : benchmarkUnits;
+        const raw = ref * (10000n + slipBps) / 10000n;
+        return roundPriceToTick(raw, tickUnits, "DOWN");
+      } else {
+        const ref = bestBidUnits > 0n ? bestBidUnits : benchmarkUnits;
+        const raw = ref * (10000n - slipBps > 0n ? 10000n - slipBps : 1n) / 10000n;
+        return roundPriceToTick(raw, tickUnits, "UP");
+      }
+    }
+    if (side === "BUY") {
+      const target = bestBidUnits > 0n ? bestBidUnits : benchmarkUnits;
+      return roundPriceToTick(target, tickUnits, "DOWN");
+    } else {
+      const target = bestAskUnits > 0n ? bestAskUnits : benchmarkUnits;
+      return roundPriceToTick(target, tickUnits, "UP");
+    }
+  }
+  /**
+   * Read-only simulation against genuine current OrderBook levels. Does NOT alter balances, orders, or trades.
+   */
+  runSimulationSlice(bot, pair, qtyUnits, priceUnits, clientOrderId) {
+    const { baseDecimals, quoteDecimals } = this.getPairDecimals(pair.id);
+    const book = matchingEngine.getOrderBook(pair.id);
+    const depth = book.getDepth(50);
+    const levels = (bot.config.side === "BUY" ? depth.asks : depth.bids) || [];
+    bot.submittedClientOrderIds.push(clientOrderId);
+    bot.checkpoint.lastSliceIdempotencyKey = clientOrderId;
+    bot.checkpoint.ordersInRateWindow++;
+    bot.stats.orderBreakdown.submitted++;
+    bot.stats.orderBreakdown.accepted++;
+    let remToFill = qtyUnits;
+    let simFilledQty = 0n;
+    let simFilledQuote = 0n;
+    for (const lvl of levels) {
+      if (remToFill <= 0n) break;
+      const lvlPrice = BigInt(Array.isArray(lvl) ? lvl[0] : lvl.price);
+      const crosses = bot.config.side === "BUY" ? lvlPrice <= priceUnits : lvlPrice >= priceUnits;
+      if (!crosses) break;
+      const lvlQty = BigInt(Array.isArray(lvl) ? lvl[1] : lvl.quantity);
+      const fillHere = remToFill < lvlQty ? remToFill : lvlQty;
+      simFilledQty += fillHere;
+      simFilledQuote += PrecisionMath.calculateQuoteAmount(fillHere, baseDecimals, lvlPrice);
+      remToFill -= fillHere;
+    }
+    if (simFilledQty > 0n) {
+      const prevExec = BigInt(bot.stats.executedQuantityUnits || "0");
+      const prevQuote = BigInt(bot.stats.totalQuoteNotionalUnits || "0");
+      const prevFees = BigInt(bot.stats.totalFeesQuoteUnits || "0");
+      const nextExec = prevExec + simFilledQty;
+      const nextQuote = prevQuote + simFilledQuote;
+      const feeBps = simFilledQty === qtyUnits ? pair.takerFeeBps : pair.takerFeeBps;
+      const simFee = PrecisionMath.calculateFee(simFilledQuote, feeBps);
+      const nextFees = prevFees + simFee;
+      const targetUnits = BigInt(bot.stats.targetQuantityUnits);
+      const remaining = targetUnits > nextExec ? targetUnits - nextExec : 0n;
+      const scale = 10n ** BigInt(baseDecimals);
+      const avgPrice = nextExec > 0n ? nextQuote * scale / nextExec : 0n;
+      const fillBps = Number(targetUnits > 0n ? nextExec * 10000n / targetUnits > 10000n ? 10000n : nextExec * 10000n / targetUnits : 0n);
+      bot.stats.executedQuantityUnits = nextExec.toString();
+      bot.stats.remainingQuantityUnits = remaining.toString();
+      bot.stats.totalQuoteNotionalUnits = nextQuote.toString();
+      bot.stats.totalFeesQuoteUnits = nextFees.toString();
+      bot.stats.averageExecutionPriceUnits = avgPrice.toString();
+      bot.stats.fillPercentageBps = fillBps;
+      const bench = BigInt(bot.checkpoint.arrivalBenchmarkPriceUnits || "0");
+      if (bench > 0n && avgPrice > 0n) {
+        bot.stats.slippageBps = calculateSlippageBps(avgPrice, bench, bot.config.side);
+      }
+      if (simFilledQty === qtyUnits) {
+        bot.stats.orderBreakdown.filled++;
+      } else {
+        bot.stats.orderBreakdown.partiallyFilled++;
+      }
+      this.appendLog(
+        bot,
+        "SIMULATION",
+        `[SIMULASI] Slice #${bot.checkpoint.sliceIndex} (${clientOrderId}): terisi simulasi ${PrecisionMath.formatFromUnits(
+          simFilledQty,
+          baseDecimals,
+          true
+        )} / ${PrecisionMath.formatFromUnits(qtyUnits, baseDecimals, true)} ${pair.baseCurrency} @ ${PrecisionMath.formatFromUnits(
+          avgPrice,
+          quoteDecimals,
+          true
+        )} ${pair.quoteCurrency}.`
+      );
+      if (remaining === 0n) {
+        bot.status = "COMPLETED";
+        bot.completedAt = Date.now();
+        this.clearWorker(bot.id);
+        this.appendLog(bot, "SIMULATION", "[SIMULASI] Target eksekusi 100% tercapai (zero ledger mutation).");
+      }
+    } else {
+      this.appendLog(
+        bot,
+        "SIMULATION",
+        `[SIMULASI] Slice #${bot.checkpoint.sliceIndex} (${bot.strategy} ${bot.config.side}) ditempatkan secara virtual: ${PrecisionMath.formatFromUnits(
+          qtyUnits,
+          baseDecimals,
+          true
+        )} ${pair.baseCurrency} @ ${PrecisionMath.formatFromUnits(priceUnits, quoteDecimals, true)} ${pair.quoteCurrency} (resting / menunggu depth lawan).`
+      );
+    }
+  }
+  /**
+   * Real execution via DIMONEX MatchingEngine & LedgerService.
+   */
+  runLiveSlice(bot, pair, qtyUnits, priceUnits, clientOrderId) {
+    const { baseDecimals, quoteDecimals } = this.getPairDecimals(pair.id);
+    const tif = bot.strategy === "AGGRESSIVE_LIMIT" ? "IOC" : "GTC";
+    bot.submittedClientOrderIds.push(clientOrderId);
+    bot.checkpoint.lastSliceIdempotencyKey = clientOrderId;
+    bot.checkpoint.ordersInRateWindow++;
+    bot.stats.orderBreakdown.submitted++;
+    try {
+      const result = matchingEngine.placeOrder({
+        userId: bot.userId,
+        pairId: pair.id,
+        side: bot.config.side,
+        orderType: "LIMIT",
+        timeInForce: tif,
+        price: priceUnits.toString(),
+        quantity: qtyUnits.toString(),
+        clientOrderId
+      });
+      const order = result.takerOrder;
+      bot.deployedOrderIds.push(order.id);
+      if (bot.deployedOrderIds.length > 500) {
+        bot.deployedOrderIds.splice(0, bot.deployedOrderIds.length - 500);
+      }
+      if (order.status === "FILLED") {
+        bot.stats.orderBreakdown.accepted++;
+        bot.stats.orderBreakdown.filled++;
+      } else if (order.status === "PARTIALLY_FILLED") {
+        bot.stats.orderBreakdown.accepted++;
+        bot.stats.orderBreakdown.partiallyFilled++;
+      } else if (order.status === "NEW") {
+        bot.stats.orderBreakdown.accepted++;
+        bot.checkpoint.lastActiveOrderId = order.id;
+        bot.checkpoint.lastActiveOrderPlacedAt = Date.now();
+      } else if (order.status === "CANCELLED") {
+        if (BigInt(order.filledQuantity || "0") > 0n) {
+          bot.stats.orderBreakdown.accepted++;
+          bot.stats.orderBreakdown.partiallyFilled++;
+        }
+        bot.stats.orderBreakdown.cancelled++;
+        if (tif === "IOC" && BigInt(order.filledQuantity || "0") === 0n) {
+          bot.stats.orderBreakdown.expired++;
+        }
+      } else if (order.status === "REJECTED") {
+        bot.stats.orderBreakdown.rejected++;
+        bot.stats.rejectedOrderCount++;
+      }
+      for (const trade of result.trades) {
+        marketWsService.broadcastTrade(trade);
+      }
+      marketWsService.broadcastOrderUpdate(order);
+      for (const maker of result.makerOrdersUpdated) {
+        marketWsService.broadcastOrderUpdate(maker);
+      }
+      marketWsService.broadcastDepth(pair.id);
+      this.applyTradesIdempotently(bot, result.trades);
+      this.appendLog(
+        bot,
+        result.trades.length > 0 ? "FILL" : "ORDER",
+        `Order ${order.id} (${tif} ${bot.config.side}): qty=${PrecisionMath.formatFromUnits(
+          qtyUnits,
+          baseDecimals,
+          true
+        )}, filled=${PrecisionMath.formatFromUnits(
+          BigInt(order.filledQuantity || "0"),
+          baseDecimals,
+          true
+        )} ${pair.baseCurrency} @ ${PrecisionMath.formatFromUnits(priceUnits, quoteDecimals, true)} [${order.status}]`
+      );
+      const unfilled = qtyUnits - BigInt(order.filledQuantity || "0");
+      if (tif === "IOC" && unfilled > 0n && BigInt(order.filledQuantity || "0") > 0n) {
+        bot.checkpoint.lastSliceRetryCount++;
+      } else {
+        bot.checkpoint.lastSliceRetryCount = 0;
+      }
+      if (BigInt(bot.stats.remainingQuantityUnits || "0") <= 0n) {
+        bot.status = "COMPLETED";
+        bot.completedAt = Date.now();
+        this.clearWorker(bot.id);
+        this.appendLog(bot, "INFO", `Eksekusi selesai 100%! Total terisi ${PrecisionMath.formatFromUnits(
+          BigInt(bot.stats.executedQuantityUnits),
+          baseDecimals,
+          true
+        )} ${pair.baseCurrency}.`);
+      }
+    } catch (err) {
+      bot.stats.orderBreakdown.rejected++;
+      bot.stats.rejectedOrderCount++;
+      this.appendLog(bot, "ERROR", `Order ditolak engine (${clientOrderId}): ${err?.message || "Error"}`);
+      if ((err?.message || "").toLowerCase().includes("saldo") || (err?.message || "").toLowerCase().includes("halted") || (err?.message || "").toLowerCase().includes("insufficient")) {
+        this.triggerRiskHalt(bot, err.message);
+      }
+    }
+  }
+  listBotsForUser(userId, scopeAllAdmin = false) {
+    const items = Array.from(db.volumeExecutionV2Bots.values());
+    const filtered = scopeAllAdmin ? items : items.filter((b) => b.userId === userId);
+    return filtered.sort((a, b) => b.createdAt - a.createdAt);
+  }
+  broadcastUpdate(bot) {
+    marketWsService.broadcast(`bots:${bot.userId}`, {
+      type: "volume_v2_updated",
+      channel: `bots:${bot.userId}`,
+      data: bot
+    });
+  }
+};
+var volumeExecutionV2Service = new VolumeExecutionV2Service();
+
+// server/routes/volumeExecutionV2.ts
+var volumeExecutionV2Router = Router11();
+volumeExecutionV2Router.get("/list", requireAuthOrHmac, (req, res) => {
+  try {
+    const user = req.user;
+    const roleUpper = String(user.role || "").toUpperCase();
+    const isAdmin = roleUpper === "ADMIN" || roleUpper === "SUPERADMIN";
+    const scopeAll = isAdmin && req.query.scope === "all";
+    const bots = volumeExecutionV2Service.listBotsForUser(user.id, scopeAll);
+    res.json(bots);
+  } catch (err) {
+    res.status(500).json({ error: err?.message || "Gagal memuat daftar bot V2" });
+  }
+});
+volumeExecutionV2Router.get("/:botId", requireAuthOrHmac, (req, res) => {
+  try {
+    const user = req.user;
+    const roleUpper = String(user.role || "").toUpperCase();
+    const bot = volumeExecutionV2Service.reconcileBotState(req.params.botId, user.id, roleUpper);
+    res.json(bot);
+  } catch (err) {
+    const msg = err?.message || "Bot tidak ditemukan";
+    res.status(msg.includes("otorisasi") ? 403 : 404).json({ error: msg });
+  }
+});
+volumeExecutionV2Router.post("/deploy", requireAuthOrHmac, (req, res) => {
+  try {
+    const user = req.user;
+    const body = req.body || {};
+    const config = body.config || body;
+    const bot = volumeExecutionV2Service.deployBot({
+      userId: user.id,
+      userEmail: user.email,
+      name: body.name,
+      idempotencyKey: body.idempotencyKey || req.headers["x-idempotency-key"]?.toString(),
+      config
+    });
+    res.status(201).json({
+      success: true,
+      message: bot.mode === "SIMULATION" ? `Simulasi Engine V2 (${bot.strategy}) berjalan tanpa mutasi ledger.` : `Volume Execution Engine V2 (${bot.strategy}) aktif dengan eksekusi order riil.`,
+      bot
+    });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "Gagal meluncurkan Engine V2" });
+  }
+});
+volumeExecutionV2Router.post("/pause", requireAuthOrHmac, (req, res) => {
+  try {
+    const user = req.user;
+    const { botId } = req.body || {};
+    if (!botId) return res.status(400).json({ error: "botId wajib diisi." });
+    const bot = volumeExecutionV2Service.pauseBot(botId, user.id, user.role);
+    res.json({ success: true, bot });
+  } catch (err) {
+    const msg = err?.message || "Gagal menjeda bot";
+    res.status(msg.includes("otorisasi") ? 403 : 400).json({ error: msg });
+  }
+});
+volumeExecutionV2Router.post("/resume", requireAuthOrHmac, (req, res) => {
+  try {
+    const user = req.user;
+    const { botId } = req.body || {};
+    if (!botId) return res.status(400).json({ error: "botId wajib diisi." });
+    const bot = volumeExecutionV2Service.resumeBot(botId, user.id, user.role);
+    res.json({ success: true, bot });
+  } catch (err) {
+    const msg = err?.message || "Gagal melanjutkan bot";
+    res.status(msg.includes("otorisasi") ? 403 : 400).json({ error: msg });
+  }
+});
+volumeExecutionV2Router.post("/stop", requireAuthOrHmac, (req, res) => {
+  try {
+    const user = req.user;
+    const { botId } = req.body || {};
+    if (!botId) return res.status(400).json({ error: "botId wajib diisi." });
+    const { bot, cancelledOrdersCount } = volumeExecutionV2Service.stopBot(botId, user.id, user.role);
+    res.json({
+      success: true,
+      message: `Bot dihentikan dan ${cancelledOrdersCount} order terbuka milik bot dibatalkan.`,
+      cancelledOrdersCount,
+      bot
+    });
+  } catch (err) {
+    const msg = err?.message || "Gagal menghentikan bot";
+    res.status(msg.includes("otorisasi") ? 403 : 400).json({ error: msg });
+  }
+});
+volumeExecutionV2Router.post("/emergency-stop-all", requireAuthOrHmac, (req, res) => {
+  try {
+    const user = req.user;
+    const result = volumeExecutionV2Service.emergencyStopAllForUser(user.id);
+    res.json({
+      success: true,
+      message: `Emergency stop selesai: ${result.stoppedCount} bot dihentikan, ${result.cancelledOrdersCount} order terbuka dibatalkan.`,
+      ...result
+    });
+  } catch (err) {
+    res.status(400).json({ error: err?.message || "Emergency stop gagal" });
+  }
+});
+volumeExecutionV2Router.post("/:botId/reconcile", requireAuthOrHmac, (req, res) => {
+  try {
+    const user = req.user;
+    const bot = volumeExecutionV2Service.reconcileBotState(req.params.botId, user.id, user.role);
+    res.json({ success: true, bot });
+  } catch (err) {
+    const msg = err?.message || "Rekonsiliasi gagal";
+    res.status(msg.includes("otorisasi") ? 403 : 400).json({ error: msg });
+  }
+});
+
 // server/routes/mmConsole.ts
+import fs4 from "fs";
+import path4 from "path";
+import { Router as Router12 } from "express";
+import crypto25 from "crypto";
+init_database();
 init_PriceAggregatorService();
 init_FxConversionService();
 
 // server/services/backtest/HftBacktestEngine.ts
 init_database();
-import crypto19 from "crypto";
+import crypto24 from "crypto";
 init_PrecisionMath();
 var HftBacktestEngine = class {
   static {
@@ -15900,7 +22220,7 @@ var HftBacktestEngine = class {
     if (replayTicks.length === 0) {
       throw new Error(`Tidak ada event harga valid untuk disimulasikan pada ${req.pairId}.`);
     }
-    const hash = crypto19.createHash("sha256");
+    const hash = crypto24.createHash("sha256");
     hash.update(`${req.pairId}:${dataSourceMode}:${replayTicks.length}`);
     for (const tk of replayTicks) {
       hash.update(`|${tk.id}:${tk.journalId || "none"}:${tk.timestamp}:${tk.priceUnits.toString()}:${tk.qtyUnits.toString()}`);
@@ -16225,7 +22545,7 @@ var HftBacktestEngine = class {
       return a.level - b.level;
     });
     const result = {
-      runId: `bt-${Date.now()}-${crypto19.randomBytes(2).toString("hex")}`,
+      runId: `bt-${Date.now()}-${crypto24.randomBytes(2).toString("hex")}`,
       label: req.label?.trim() || `${pattern.replace(/_/g, " ")} (${timeframe}, \xB1${boundPct ?? "custom"}%)`,
       createdAt: Date.now(),
       pairId: pair.id,
@@ -16763,462 +23083,7 @@ var portfolioRebalanceService = PortfolioRebalanceService.getInstance();
 
 // server/routes/mmConsole.ts
 init_PrecisionMath();
-
-// server/services/PriceThresholdService.ts
-init_database();
-init_PrecisionMath();
-import crypto20 from "crypto";
-var LADDER_CAPABLE_BOT_TYPES = /* @__PURE__ */ new Set([
-  "SMART_HFT_LADDER",
-  "DEPTH_LIQUIDITY",
-  "MOVEMENT_DEPTH_LIQUIDITY",
-  "QUANT_HFT_MM",
-  "ADVANCED_MM"
-]);
-var PriceThresholdService = class {
-  constructor() {
-    this.timer = null;
-    this.isTickRunning = false;
-  }
-  start() {
-    if (this.timer) return;
-    this.timer = setInterval(() => {
-      this.evaluateAll();
-    }, 1e3);
-    console.log("[DIMONEX PriceThresholdService] Monitor threshold harga MM aktif (interval 1000ms).");
-  }
-  stop() {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
-  }
-  createTrigger(input) {
-    const pair = db.tradingPairs.get(input.pairId);
-    if (!pair) {
-      throw new Error(`Trading pair ${input.pairId} tidak ditemukan.`);
-    }
-    const quoteDecimals = pair.quoteDecimals !== void 0 && pair.quoteDecimals !== null ? pair.quoteDecimals : pair.quoteCurrency === "USDT" ? 6 : 2;
-    const thresholdPriceUnits = PrecisionMath.parseToUnits(input.thresholdPrice, quoteDecimals);
-    if (thresholdPriceUnits <= 0n) {
-      throw new Error("Harga threshold harus lebih besar dari 0.");
-    }
-    if (input.targetBotId) {
-      const targetBot = db.botInstances.get(input.targetBotId);
-      if (!targetBot) {
-        throw new Error(`Target bot ${input.targetBotId} tidak ditemukan.`);
-      }
-    }
-    const now = Date.now();
-    const trigger = {
-      id: `pt-${crypto20.randomUUID().slice(0, 8)}`,
-      name: (input.name || `${input.pairId} ${input.condition}`).trim(),
-      pairId: pair.id,
-      environment: input.environment || "DEMO",
-      condition: input.condition || "ABOVE_OR_EQUAL",
-      thresholdPrice: PrecisionMath.formatFromUnits(thresholdPriceUnits, quoteDecimals),
-      thresholdPriceUnits: thresholdPriceUnits.toString(),
-      quoteCurrency: pair.quoteCurrency,
-      quoteDecimals,
-      soundEnabled: input.soundEnabled !== false && input.soundTone !== "NONE",
-      soundTone: input.soundTone || "CHIME",
-      action: input.action || "NONE",
-      targetBotId: input.targetBotId || void 0,
-      adjustStepPct: Math.max(0.1, Math.min(25, Number(input.adjustStepPct ?? 1.5))),
-      cooldownSec: Math.max(5, Math.min(86400, Math.round(Number(input.cooldownSec ?? 30)))),
-      autoResetAfterCooldown: input.autoResetAfterCooldown !== false,
-      enabled: true,
-      status: "ARMED",
-      triggerCount: 0,
-      lastObservedPriceUnits: pair.lastPrice || "0",
-      createdBy: input.createdBy || "MM_OPERATOR",
-      createdAt: now,
-      updatedAt: now
-    };
-    db.priceThresholdTriggers.set(trigger.id, trigger);
-    db.auditLogs.push({
-      id: crypto20.randomUUID(),
-      actorId: trigger.createdBy,
-      action: "PRICE_THRESHOLD_CREATED",
-      resource: trigger.id,
-      details: `Threshold "${trigger.name}" pada ${trigger.pairId} (${trigger.condition} @ ${trigger.thresholdPrice} ${trigger.quoteCurrency}, aksi: ${trigger.action}).`,
-      createdAt: now
-    });
-    db.scheduleSave();
-    return trigger;
-  }
-  updateTrigger(id, patch) {
-    const existing = db.priceThresholdTriggers.get(id);
-    if (!existing) {
-      throw new Error("Aturan price threshold tidak ditemukan.");
-    }
-    const pair = db.tradingPairs.get(existing.pairId);
-    const quoteDecimals = pair?.quoteDecimals ?? existing.quoteDecimals;
-    if (patch.name !== void 0) existing.name = patch.name.trim() || existing.name;
-    if (patch.condition !== void 0) existing.condition = patch.condition;
-    if (patch.thresholdPrice !== void 0) {
-      const units = PrecisionMath.parseToUnits(patch.thresholdPrice, quoteDecimals);
-      if (units <= 0n) throw new Error("Harga threshold harus lebih besar dari 0.");
-      existing.thresholdPrice = PrecisionMath.formatFromUnits(units, quoteDecimals);
-      existing.thresholdPriceUnits = units.toString();
-      existing.quoteDecimals = quoteDecimals;
-    }
-    if (patch.soundEnabled !== void 0) existing.soundEnabled = Boolean(patch.soundEnabled);
-    if (patch.soundTone !== void 0) existing.soundTone = patch.soundTone;
-    if (patch.action !== void 0) existing.action = patch.action;
-    if (patch.targetBotId !== void 0) existing.targetBotId = patch.targetBotId || void 0;
-    if (patch.adjustStepPct !== void 0) {
-      existing.adjustStepPct = Math.max(0.1, Math.min(25, Number(patch.adjustStepPct)));
-    }
-    if (patch.cooldownSec !== void 0) {
-      existing.cooldownSec = Math.max(5, Math.min(86400, Math.round(Number(patch.cooldownSec))));
-    }
-    if (patch.autoResetAfterCooldown !== void 0) {
-      existing.autoResetAfterCooldown = Boolean(patch.autoResetAfterCooldown);
-    }
-    if (patch.enabled !== void 0) {
-      existing.enabled = Boolean(patch.enabled);
-      if (existing.enabled && existing.status === "TRIGGERED") {
-        existing.status = "ARMED";
-      }
-    }
-    if (patch.rearm) {
-      existing.enabled = true;
-      existing.status = "ARMED";
-      if (pair?.lastPrice) {
-        existing.lastObservedPriceUnits = pair.lastPrice;
-      }
-    }
-    existing.updatedAt = Date.now();
-    db.priceThresholdTriggers.set(existing.id, existing);
-    db.scheduleSave();
-    return existing;
-  }
-  deleteTrigger(id) {
-    const deleted = db.priceThresholdTriggers.delete(id);
-    if (deleted) db.scheduleSave();
-    return deleted;
-  }
-  listTriggers(environment, pairId) {
-    let items = Array.from(db.priceThresholdTriggers.values());
-    if (environment) items = items.filter((t) => t.environment === environment);
-    if (pairId) items = items.filter((t) => t.pairId === pairId);
-    return items.sort((a, b) => b.createdAt - a.createdAt);
-  }
-  listEvents(environment, limit = 60) {
-    let items = db.priceThresholdEvents;
-    if (environment) items = items.filter((e) => e.environment === environment);
-    return items.slice(-limit).reverse();
-  }
-  triggerManualTest(id, executeBotAdjustment = true) {
-    const trigger = db.priceThresholdTriggers.get(id);
-    if (!trigger) {
-      throw new Error("Aturan price threshold tidak ditemukan.");
-    }
-    const pair = db.tradingPairs.get(trigger.pairId);
-    const liveUnits = pair?.lastPrice || trigger.thresholdPriceUnits;
-    let adjustmentSummary = "Notifikasi suara uji coba dipicu (tanpa modifikasi bot).";
-    if (executeBotAdjustment && trigger.action !== "NONE") {
-      adjustmentSummary = this.executeLadderAction(trigger, BigInt(liveUnits), true);
-    }
-    const event = {
-      id: `pte-${crypto20.randomUUID().slice(0, 8)}`,
-      triggerId: trigger.id,
-      triggerName: trigger.name,
-      pairId: trigger.pairId,
-      environment: trigger.environment,
-      condition: trigger.condition,
-      thresholdPriceUnits: trigger.thresholdPriceUnits,
-      breachedPriceUnits: liveUnits,
-      quoteCurrency: trigger.quoteCurrency,
-      quoteDecimals: trigger.quoteDecimals,
-      soundEnabled: trigger.soundEnabled,
-      soundTone: trigger.soundTone,
-      action: trigger.action,
-      targetBotId: trigger.targetBotId,
-      adjustmentSummary,
-      timestamp: Date.now(),
-      isTest: true
-    };
-    this.recordEvent(event);
-    return event;
-  }
-  evaluateAll() {
-    if (this.isTickRunning) return;
-    this.isTickRunning = true;
-    try {
-      const now = Date.now();
-      for (const trigger of db.priceThresholdTriggers.values()) {
-        const pair = db.tradingPairs.get(trigger.pairId);
-        if (!pair || !pair.lastPrice) continue;
-        const currentUnits = BigInt(pair.lastPrice);
-        const thresholdUnits = BigInt(trigger.thresholdPriceUnits);
-        if (trigger.status === "COOLDOWN" && trigger.lastTriggeredAt) {
-          const elapsedMs = now - trigger.lastTriggeredAt;
-          if (elapsedMs >= trigger.cooldownSec * 1e3) {
-            if (trigger.autoResetAfterCooldown && trigger.enabled) {
-              trigger.status = "ARMED";
-              trigger.updatedAt = now;
-              db.priceThresholdTriggers.set(trigger.id, trigger);
-            }
-          } else {
-            trigger.lastObservedPriceUnits = currentUnits.toString();
-            continue;
-          }
-        }
-        if (!trigger.enabled || trigger.status !== "ARMED") {
-          trigger.lastObservedPriceUnits = currentUnits.toString();
-          continue;
-        }
-        const prevUnits = trigger.lastObservedPriceUnits ? BigInt(trigger.lastObservedPriceUnits) : currentUnits;
-        let breached = false;
-        if (trigger.condition === "ABOVE_OR_EQUAL") {
-          breached = currentUnits >= thresholdUnits;
-        } else if (trigger.condition === "BELOW_OR_EQUAL") {
-          breached = currentUnits <= thresholdUnits;
-        } else if (trigger.condition === "CROSS_EITHER") {
-          const crossedUp = prevUnits < thresholdUnits && currentUnits >= thresholdUnits;
-          const crossedDown = prevUnits > thresholdUnits && currentUnits <= thresholdUnits;
-          breached = crossedUp || crossedDown || currentUnits === thresholdUnits;
-        }
-        trigger.lastObservedPriceUnits = currentUnits.toString();
-        if (breached) {
-          this.fireTrigger(trigger, currentUnits, now);
-        }
-      }
-    } catch (err) {
-      console.error("[PriceThresholdService] Evaluation loop error:", err);
-    } finally {
-      this.isTickRunning = false;
-    }
-  }
-  fireTrigger(trigger, currentUnits, now) {
-    const adjustmentSummary = trigger.action !== "NONE" ? this.executeLadderAction(trigger, currentUnits, false) : `Alert threshold tercapai pada ${trigger.pairId} (Suara: ${trigger.soundEnabled ? trigger.soundTone : "OFF"}).`;
-    trigger.triggerCount += 1;
-    trigger.lastTriggeredAt = now;
-    trigger.updatedAt = now;
-    if (trigger.autoResetAfterCooldown) {
-      trigger.status = "COOLDOWN";
-    } else {
-      trigger.status = "TRIGGERED";
-      trigger.enabled = false;
-    }
-    db.priceThresholdTriggers.set(trigger.id, trigger);
-    const event = {
-      id: `pte-${crypto20.randomUUID().slice(0, 8)}`,
-      triggerId: trigger.id,
-      triggerName: trigger.name,
-      pairId: trigger.pairId,
-      environment: trigger.environment,
-      condition: trigger.condition,
-      thresholdPriceUnits: trigger.thresholdPriceUnits,
-      breachedPriceUnits: currentUnits.toString(),
-      quoteCurrency: trigger.quoteCurrency,
-      quoteDecimals: trigger.quoteDecimals,
-      soundEnabled: trigger.soundEnabled,
-      soundTone: trigger.soundTone,
-      action: trigger.action,
-      targetBotId: trigger.targetBotId,
-      adjustmentSummary,
-      timestamp: now
-    };
-    this.recordEvent(event);
-    db.auditLogs.push({
-      id: crypto20.randomUUID(),
-      actorId: "PRICE_THRESHOLD_ENGINE",
-      action: "PRICE_THRESHOLD_TRIGGERED",
-      resource: trigger.id,
-      details: `${trigger.name} (${trigger.pairId}): ${adjustmentSummary}`,
-      createdAt: now
-    });
-    db.scheduleSave();
-  }
-  recordEvent(event) {
-    db.priceThresholdEvents.push(event);
-    if (db.priceThresholdEvents.length > 500) {
-      db.priceThresholdEvents = db.priceThresholdEvents.slice(-500);
-    }
-    marketWsService.broadcast("ticker", {
-      type: "price_threshold_triggered",
-      event
-    });
-  }
-  resolveTargetBots(trigger) {
-    if (trigger.targetBotId) {
-      const bot = db.botInstances.get(trigger.targetBotId);
-      return bot ? [bot] : [];
-    }
-    return Array.from(db.botInstances.values()).filter(
-      (b) => b.pairId === trigger.pairId && b.environment === trigger.environment && LADDER_CAPABLE_BOT_TYPES.has(b.botType) && (b.status === "RUNNING" || b.status === "PAUSED" || b.status === "READY")
-    );
-  }
-  executeLadderAction(trigger, currentPriceUnits, isTest) {
-    const bots = this.resolveTargetBots(trigger);
-    if (bots.length === 0) {
-      return `Tidak ada bot ladder/MM aktif pada ${trigger.pairId} (${trigger.environment}) untuk disesuaikan.`;
-    }
-    const pair = db.tradingPairs.get(trigger.pairId);
-    const quoteDec = pair?.quoteDecimals ?? trigger.quoteDecimals;
-    const currentPriceFloat = Number(currentPriceUnits) / 10 ** quoteDec;
-    const stepRatio = Math.max(1e-3, trigger.adjustStepPct / 100);
-    const tag = isTest ? "[TEST THRESHOLD]" : "[PRICE THRESHOLD]";
-    let adjustedCount = 0;
-    const adjustedNames = [];
-    for (const bot of bots) {
-      const addLog = botWorkerManager.addLog.bind(botWorkerManager);
-      if (trigger.action === "PAUSE_BOT") {
-        if (bot.status === "RUNNING") {
-          botWorkerManager.pauseWorker(bot.id);
-          addLog(bot, `${tag} Bot dijeda otomatis oleh trigger "${trigger.name}".`, "RISK");
-          adjustedCount++;
-          adjustedNames.push(bot.name);
-        }
-        continue;
-      }
-      if (bot.botType === "SMART_HFT_LADDER" && bot.smartHftConfig) {
-        const cfg = bot.smartHftConfig;
-        const oldMin = parseFloat(String(cfg.min_price_bound || currentPriceFloat * 0.96));
-        const oldMax = parseFloat(String(cfg.max_price_bound || currentPriceFloat * 1.04));
-        const halfBandRatio = oldMin > 0 && oldMax > oldMin ? Math.min(0.15, Math.max(0.01, (oldMax - oldMin) / (2 * Math.max(1e-8, (oldMax + oldMin) / 2)))) : 0.04;
-        if (trigger.action === "LADDER_RECENTER") {
-          cfg.bound_percentage = void 0;
-          cfg.min_price_bound = (currentPriceFloat * (1 - halfBandRatio)).toFixed(quoteDec);
-          cfg.max_price_bound = (currentPriceFloat * (1 + halfBandRatio)).toFixed(quoteDec);
-          cfg.lastAnchorPrice = currentPriceFloat.toFixed(quoteDec);
-        } else if (trigger.action === "LADDER_WIDEN_SPREAD") {
-          const newHalf = Math.min(0.15, halfBandRatio * (1 + stepRatio * 4));
-          cfg.min_price_bound = (currentPriceFloat * (1 - newHalf)).toFixed(quoteDec);
-          cfg.max_price_bound = (currentPriceFloat * (1 + newHalf)).toFixed(quoteDec);
-          cfg.min_spread_bps = Math.min(500, Math.round((cfg.min_spread_bps || 20) * (1 + stepRatio * 2)));
-          cfg.spread_percentage = Number(((cfg.spread_percentage || 0.2) * (1 + stepRatio * 2)).toFixed(3));
-        } else if (trigger.action === "LADDER_SHIFT_UP") {
-          cfg.bound_percentage = void 0;
-          cfg.min_price_bound = (oldMin * (1 + stepRatio)).toFixed(quoteDec);
-          cfg.max_price_bound = (oldMax * (1 + stepRatio)).toFixed(quoteDec);
-        } else if (trigger.action === "LADDER_SHIFT_DOWN") {
-          cfg.bound_percentage = void 0;
-          cfg.min_price_bound = Math.max(1 / 10 ** quoteDec, oldMin * (1 - stepRatio)).toFixed(quoteDec);
-          cfg.max_price_bound = Math.max(2 / 10 ** quoteDec, oldMax * (1 - stepRatio)).toFixed(quoteDec);
-        }
-        cfg.lastRepriceTimestamp = 0;
-        addLog(
-          bot,
-          `${tag} Penyesuaian Smart HFT Ladder (${trigger.action}, step ${trigger.adjustStepPct}%) -> Bounds [${cfg.min_price_bound} .. ${cfg.max_price_bound}]`,
-          "ORDER"
-        );
-        if (bot.status === "RUNNING") {
-          SmartHftLadderBotExecutor.executeCycle(bot, addLog);
-        }
-        adjustedCount++;
-        adjustedNames.push(bot.name);
-      } else if (bot.botType === "DEPTH_LIQUIDITY" && bot.depthLiquidityConfig) {
-        const cfg = bot.depthLiquidityConfig;
-        if (trigger.action === "LADDER_RECENTER") {
-          cfg.min_limit_buy_price = (currentPriceFloat * (1 - stepRatio * 3)).toFixed(quoteDec);
-          cfg.max_limit_buy_price = (currentPriceFloat * (1 - stepRatio * 0.4)).toFixed(quoteDec);
-          cfg.min_limit_sell_price = (currentPriceFloat * (1 + stepRatio * 0.4)).toFixed(quoteDec);
-          cfg.max_limit_sell_price = (currentPriceFloat * (1 + stepRatio * 3)).toFixed(quoteDec);
-        } else if (trigger.action === "LADDER_WIDEN_SPREAD") {
-          cfg.bid_level_offsets_bps = cfg.bid_level_offsets_bps.map((b) => Math.round(b * (1 + stepRatio * 2)));
-          cfg.ask_level_offsets_bps = cfg.ask_level_offsets_bps.map((a) => Math.round(a * (1 + stepRatio * 2)));
-          if (cfg.min_limit_buy_price) cfg.min_limit_buy_price = (parseFloat(cfg.min_limit_buy_price) * (1 - stepRatio)).toFixed(quoteDec);
-          if (cfg.max_limit_sell_price) cfg.max_limit_sell_price = (parseFloat(cfg.max_limit_sell_price) * (1 + stepRatio)).toFixed(quoteDec);
-        } else if (trigger.action === "LADDER_SHIFT_UP" || trigger.action === "LADDER_SHIFT_DOWN") {
-          const factor = trigger.action === "LADDER_SHIFT_UP" ? 1 + stepRatio : Math.max(0.1, 1 - stepRatio);
-          if (cfg.min_limit_buy_price) cfg.min_limit_buy_price = (parseFloat(cfg.min_limit_buy_price) * factor).toFixed(quoteDec);
-          if (cfg.max_limit_buy_price) cfg.max_limit_buy_price = (parseFloat(cfg.max_limit_buy_price) * factor).toFixed(quoteDec);
-          if (cfg.min_limit_sell_price) cfg.min_limit_sell_price = (parseFloat(cfg.min_limit_sell_price) * factor).toFixed(quoteDec);
-          if (cfg.max_limit_sell_price) cfg.max_limit_sell_price = (parseFloat(cfg.max_limit_sell_price) * factor).toFixed(quoteDec);
-        }
-        cfg.last_refresh_timestamp = 0;
-        cfg.next_refresh_timestamp = 0;
-        addLog(
-          bot,
-          `${tag} Penyesuaian Depth Ladder (${trigger.action}, step ${trigger.adjustStepPct}%) diterapkan.`,
-          "ORDER"
-        );
-        if (bot.status === "RUNNING") {
-          DepthLiquidityBotExecutor.cancelOpenDepthOrders(bot, addLog, `${tag} ${trigger.action}`);
-          DepthLiquidityBotExecutor.executeCycle(bot, addLog);
-        }
-        adjustedCount++;
-        adjustedNames.push(bot.name);
-      } else if (bot.botType === "MOVEMENT_DEPTH_LIQUIDITY" && bot.movementDepthConfig) {
-        const cfg = bot.movementDepthConfig;
-        if (trigger.action === "LADDER_RECENTER") {
-          MovementDepthLiquidityBotExecutor.resetAnchor(bot, currentPriceFloat.toFixed(quoteDec), addLog);
-        } else if (trigger.action === "LADDER_WIDEN_SPREAD") {
-          cfg.spread_bps = Math.min(500, Math.round((cfg.spread_bps || 20) * (1 + stepRatio * 2)));
-          cfg.bid_level_offsets_bps = cfg.bid_level_offsets_bps.map((b) => Math.round(b * (1 + stepRatio * 2)));
-          cfg.ask_level_offsets_bps = cfg.ask_level_offsets_bps.map((a) => Math.round(a * (1 + stepRatio * 2)));
-        } else if (trigger.action === "LADDER_SHIFT_UP" || trigger.action === "LADDER_SHIFT_DOWN") {
-          const factor = trigger.action === "LADDER_SHIFT_UP" ? 1 + stepRatio : Math.max(0.1, 1 - stepRatio);
-          const nextAnchor = (parseFloat(cfg.anchor_local_price || String(currentPriceFloat)) * factor).toFixed(quoteDec);
-          MovementDepthLiquidityBotExecutor.resetAnchor(bot, nextAnchor, addLog);
-        }
-        cfg.last_refresh_timestamp = 0;
-        cfg.next_refresh_timestamp = 0;
-        addLog(
-          bot,
-          `${tag} Penyesuaian Movement Depth (${trigger.action}, step ${trigger.adjustStepPct}%) diterapkan.`,
-          "ORDER"
-        );
-        if (bot.status === "RUNNING") {
-          MovementDepthLiquidityBotExecutor.cancelOpenBotOrders(bot, addLog, `${tag} ${trigger.action}`);
-          MovementDepthLiquidityBotExecutor.executeCycle(bot, addLog);
-        }
-        adjustedCount++;
-        adjustedNames.push(bot.name);
-      } else if (bot.botType === "QUANT_HFT_MM" && bot.quantHftConfig) {
-        const cfg = bot.quantHftConfig;
-        if (trigger.action === "LADDER_WIDEN_SPREAD") {
-          cfg.target_spread_pct = Number((cfg.target_spread_pct * (1 + stepRatio * 2)).toFixed(4));
-          cfg.max_spread_pct = Number(Math.max(cfg.target_spread_pct * 2, cfg.max_spread_pct * (1 + stepRatio)).toFixed(4));
-        } else if (trigger.action === "LADDER_SHIFT_UP") {
-          cfg.inventory_skew_factor = Math.min(1, Number((cfg.inventory_skew_factor + 0.15).toFixed(2)));
-        } else if (trigger.action === "LADDER_SHIFT_DOWN") {
-          cfg.inventory_skew_factor = Math.max(-1, Number((cfg.inventory_skew_factor - 0.15).toFixed(2)));
-        }
-        addLog(bot, `${tag} Parameter Quant HFT disesuaikan (${trigger.action}).`, "ORDER");
-        if (bot.status === "RUNNING") {
-          QuantHftBotExecutor.executeCycle(bot, addLog);
-        }
-        adjustedCount++;
-        adjustedNames.push(bot.name);
-      } else if (bot.botType === "ADVANCED_MM" && bot.advancedMMConfig) {
-        const cfg = bot.advancedMMConfig;
-        if (trigger.action === "LADDER_WIDEN_SPREAD") {
-          cfg.spread_min_bps = Math.min(500, Math.round(cfg.spread_min_bps * (1 + stepRatio * 2)));
-          cfg.spread_max_bps = Math.min(1e3, Math.round(cfg.spread_max_bps * (1 + stepRatio * 2)));
-        } else if (trigger.action === "LADDER_SHIFT_UP") {
-          cfg.price_offset_bps = Math.min(500, Math.round((cfg.price_offset_bps || 0) + trigger.adjustStepPct * 100));
-        } else if (trigger.action === "LADDER_SHIFT_DOWN") {
-          cfg.price_offset_bps = Math.max(-500, Math.round((cfg.price_offset_bps || 0) - trigger.adjustStepPct * 100));
-        } else if (trigger.action === "LADDER_RECENTER") {
-          cfg.price_offset_bps = 0;
-        }
-        cfg.lastRepriceTimestamp = 0;
-        addLog(bot, `${tag} Parameter Advanced MM disesuaikan (${trigger.action}).`, "ORDER");
-        if (bot.status === "RUNNING") {
-          AdvancedMarketMakerBotExecutor.executeTick(bot, addLog);
-        }
-        adjustedCount++;
-        adjustedNames.push(bot.name);
-      }
-      bot.updatedAt = Date.now();
-      db.botInstances.set(bot.id, bot);
-      marketWsService.broadcastBotUpdate(bot);
-    }
-    if (adjustedCount === 0) {
-      return `Bot ditemukan (${bots.length}) tetapi tidak memerlukan perubahan status saat ini.`;
-    }
-    return `${trigger.action} (${trigger.adjustStepPct}%) dieksekusi pada ${adjustedCount} bot: ${adjustedNames.join(", ")}.`;
-  }
-};
-var priceThresholdService = new PriceThresholdService();
-
-// server/routes/mmConsole.ts
-var mmConsoleRouter = Router11();
+var mmConsoleRouter = Router12();
 var requireMMOrAdmin = (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith("Bearer ")) {
@@ -17354,7 +23219,7 @@ mmConsoleRouter.post("/order-bot/create", requireMMOrAdmin, (req, res) => {
       jitter_timing_pct: Number(jitter_timing_pct || 10),
       jitter_price_pct: Number(jitter_price_pct || 2)
     };
-    const botId = `bot-ord-${crypto21.randomUUID().slice(0, 8)}`;
+    const botId = `bot-ord-${crypto25.randomUUID().slice(0, 8)}`;
     const bot = {
       id: botId,
       name,
@@ -17431,7 +23296,7 @@ mmConsoleRouter.post("/volume-bot/create", requireMMOrAdmin, (req, res) => {
       vol_idr_start_threshold: String(vol_idr_start_threshold || "0"),
       volume_sell_account_id: volume_sell_account_id || void 0
     };
-    const botId = `bot-vol-${crypto21.randomUUID().slice(0, 8)}`;
+    const botId = `bot-vol-${crypto25.randomUUID().slice(0, 8)}`;
     const bot = {
       id: botId,
       name,
@@ -17465,6 +23330,105 @@ mmConsoleRouter.post("/volume-bot/create", requireMMOrAdmin, (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
+mmConsoleRouter.post("/volume-spread-bot/create", requireMMOrAdmin, (req, res) => {
+  try {
+    const user = req.user;
+    const {
+      name,
+      pairId,
+      environment,
+      account_id,
+      counterparty_account_id,
+      spread_mode,
+      side_pattern,
+      random_min_quantity,
+      random_max_quantity,
+      min_delay,
+      max_delay,
+      spread_band_min_pct,
+      spread_band_max_pct,
+      min_spread_bps,
+      fallback_half_spread_bps,
+      require_two_sided_book,
+      cross_delay_ms,
+      tick_size,
+      min_limit_price,
+      max_limit_price,
+      vol_quote_stop_target
+    } = req.body;
+    if (!name || !pairId || !random_min_quantity || !random_max_quantity || !vol_quote_stop_target) {
+      return res.status(400).json({ error: "Field konfigurasi Volume Spread Bot (Phase 2) belum lengkap." });
+    }
+    const pair = db.tradingPairs.get(pairId);
+    const defaultMinPrice = pair && BigInt(pair.lastPrice || "0") > 0n ? PrecisionMath.formatFromUnits(BigInt(pair.lastPrice) * 70n / 100n, pair.quoteDecimals) : "1000000000";
+    const defaultMaxPrice = pair && BigInt(pair.lastPrice || "0") > 0n ? PrecisionMath.formatFromUnits(BigInt(pair.lastPrice) * 130n / 100n, pair.quoteDecimals) : "2000000000";
+    const parsedMinDelay = Math.max(1, parseInt(String(min_delay ?? 2), 10) || 2);
+    const parsedMaxDelay = Math.max(parsedMinDelay, parseInt(String(max_delay ?? 5), 10) || parsedMinDelay);
+    const parsedBandMin = Math.max(1, Math.min(99, parseInt(String(spread_band_min_pct ?? 15), 10) || 15));
+    const parsedBandMax = Math.max(parsedBandMin, Math.min(99, parseInt(String(spread_band_max_pct ?? 85), 10) || 85));
+    const volumeSpreadConfig = {
+      account_id: account_id || user.id,
+      counterparty_account_id: counterparty_account_id ? String(counterparty_account_id).trim() : void 0,
+      spread_mode: ["INSIDE_SPREAD", "MIDPOINT_JITTER", "PING_PONG_EDGE"].includes(spread_mode) ? spread_mode : "INSIDE_SPREAD",
+      side_pattern: ["ALTERNATE", "RANDOM", "BUY_EATS_SELL", "SELL_EATS_BUY"].includes(side_pattern) ? side_pattern : "ALTERNATE",
+      random_min_quantity: String(random_min_quantity),
+      random_max_quantity: String(random_max_quantity),
+      min_delay: parsedMinDelay,
+      max_delay: parsedMaxDelay,
+      spread_band_min_pct: parsedBandMin,
+      spread_band_max_pct: parsedBandMax,
+      min_spread_bps: Math.max(1, parseInt(String(min_spread_bps ?? 2), 10) || 2),
+      fallback_half_spread_bps: Math.max(1, parseInt(String(fallback_half_spread_bps ?? 15), 10) || 15),
+      require_two_sided_book: Boolean(require_two_sided_book ?? false),
+      cross_delay_ms: Math.min(2e3, Math.max(0, parseInt(String(cross_delay_ms ?? 150), 10) || 0)),
+      tick_size: tick_size ? String(tick_size).trim() : void 0,
+      min_limit_price: String(min_limit_price || defaultMinPrice),
+      max_limit_price: String(max_limit_price || defaultMaxPrice),
+      vol_quote_stop_target: String(vol_quote_stop_target),
+      executedQuoteVolumeUnits: "0",
+      spreadSelfTradesCount: 0
+    };
+    const botId = `bot-vsp-${crypto25.randomUUID().slice(0, 8)}`;
+    const bot = {
+      id: botId,
+      name: String(name).trim(),
+      botType: "VOLUME_SPREAD_BOT",
+      pairId,
+      environment: environment || "DEMO",
+      ownerUserId: user.id,
+      accountId: account_id || user.id,
+      version: 1,
+      status: "READY",
+      lastHeartbeat: Date.now(),
+      volumeSpreadConfig,
+      stats: {
+        ordersSubmitted: 0,
+        ordersAccepted: 0,
+        ordersFilled: 0,
+        executedVolume: "0",
+        totalTrades: 0
+      },
+      deployedOrderIds: [],
+      logs: [],
+      createdBy: user.email,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    const validation = botWorkerManager.validateConfig(bot);
+    if (!validation.isValid) {
+      return res.status(400).json({ error: validation.errors.join("; "), details: validation.errors });
+    }
+    botWorkerManager.addLog(
+      bot,
+      `Volume Spread Bot (Phase 2) dibuat oleh ${user.email} (${volumeSpreadConfig.spread_mode} / ${volumeSpreadConfig.side_pattern}, Target: ${vol_quote_stop_target}).`
+    );
+    db.botInstances.set(bot.id, bot);
+    db.scheduleSave();
+    res.json({ success: true, bot });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 mmConsoleRouter.post("/instance/clone", requireMMOrAdmin, (req, res) => {
   try {
     const user = req.user;
@@ -17473,7 +23437,7 @@ mmConsoleRouter.post("/instance/clone", requireMMOrAdmin, (req, res) => {
     if (!sourceBot) {
       return res.status(404).json({ error: "Source bot tidak ditemukan." });
     }
-    const clonedId = `bot-${sourceBot.botType.toLowerCase().slice(0, 3)}-${crypto21.randomUUID().slice(0, 8)}`;
+    const clonedId = `bot-${sourceBot.botType.toLowerCase().slice(0, 3)}-${crypto25.randomUUID().slice(0, 8)}`;
     const clonedOrderConfig = sourceBot.orderBotConfig ? {
       ...JSON.parse(JSON.stringify(sourceBot.orderBotConfig)),
       ...overrides?.orderBotConfig || {}
@@ -17486,6 +23450,15 @@ mmConsoleRouter.post("/instance/clone", requireMMOrAdmin, (req, res) => {
     const clonedVolumeConfig = sourceBot.volumeBotConfig ? {
       ...JSON.parse(JSON.stringify(sourceBot.volumeBotConfig)),
       ...overrides?.volumeBotConfig || {}
+    } : void 0;
+    const clonedVolumeSpreadConfig = sourceBot.volumeSpreadConfig ? {
+      ...JSON.parse(JSON.stringify(sourceBot.volumeSpreadConfig)),
+      ...overrides?.volumeSpreadConfig || {},
+      lastSideExecuted: void 0,
+      lastSpreadBps: void 0,
+      lastExecPriceUnits: void 0,
+      spreadSelfTradesCount: 0,
+      executedQuoteVolumeUnits: "0"
     } : void 0;
     const clonedPfConfig = sourceBot.priceFollowerConfig ? {
       ...JSON.parse(JSON.stringify(sourceBot.priceFollowerConfig)),
@@ -17527,6 +23500,7 @@ mmConsoleRouter.post("/instance/clone", requireMMOrAdmin, (req, res) => {
       lastHeartbeat: Date.now(),
       orderBotConfig: clonedOrderConfig,
       volumeBotConfig: clonedVolumeConfig,
+      volumeSpreadConfig: clonedVolumeSpreadConfig,
       priceFollowerConfig: clonedPfConfig,
       depthLiquidityConfig: clonedDlConfig,
       movementDepthConfig: clonedMdConfig,
@@ -17621,6 +23595,39 @@ mmConsoleRouter.post("/instance/:id/update", requireMMOrAdmin, (req, res) => {
         vol_idr_start_threshold: String(volumeBotConfig.vol_idr_start_threshold || "0"),
         volume_sell_account_id: volumeBotConfig.volume_sell_account_id || void 0
       };
+    }
+    if (req.body.volumeSpreadConfig) {
+      const nextVsb = req.body.volumeSpreadConfig;
+      const minD = Math.max(1, parseInt(String(nextVsb.min_delay ?? bot.volumeSpreadConfig?.min_delay ?? 2), 10) || 2);
+      const maxD = Math.max(minD, parseInt(String(nextVsb.max_delay ?? bot.volumeSpreadConfig?.max_delay ?? 5), 10) || minD);
+      const bMin = Math.max(1, Math.min(99, parseInt(String(nextVsb.spread_band_min_pct ?? bot.volumeSpreadConfig?.spread_band_min_pct ?? 15), 10) || 15));
+      const bMax = Math.max(bMin, Math.min(99, parseInt(String(nextVsb.spread_band_max_pct ?? bot.volumeSpreadConfig?.spread_band_max_pct ?? 85), 10) || 85));
+      bot.volumeSpreadConfig = {
+        ...bot.volumeSpreadConfig,
+        ...nextVsb,
+        account_id: nextVsb.account_id || bot.accountId,
+        counterparty_account_id: nextVsb.counterparty_account_id ? String(nextVsb.counterparty_account_id).trim() : void 0,
+        spread_mode: ["INSIDE_SPREAD", "MIDPOINT_JITTER", "PING_PONG_EDGE"].includes(nextVsb.spread_mode) ? nextVsb.spread_mode : bot.volumeSpreadConfig?.spread_mode || "INSIDE_SPREAD",
+        side_pattern: ["ALTERNATE", "RANDOM", "BUY_EATS_SELL", "SELL_EATS_BUY"].includes(nextVsb.side_pattern) ? nextVsb.side_pattern : bot.volumeSpreadConfig?.side_pattern || "ALTERNATE",
+        random_min_quantity: String(nextVsb.random_min_quantity ?? bot.volumeSpreadConfig?.random_min_quantity ?? "0.01"),
+        random_max_quantity: String(nextVsb.random_max_quantity ?? bot.volumeSpreadConfig?.random_max_quantity ?? "0.05"),
+        min_delay: minD,
+        max_delay: maxD,
+        spread_band_min_pct: bMin,
+        spread_band_max_pct: bMax,
+        min_spread_bps: Math.max(1, parseInt(String(nextVsb.min_spread_bps ?? bot.volumeSpreadConfig?.min_spread_bps ?? 2), 10) || 2),
+        fallback_half_spread_bps: Math.max(1, parseInt(String(nextVsb.fallback_half_spread_bps ?? bot.volumeSpreadConfig?.fallback_half_spread_bps ?? 15), 10) || 15),
+        require_two_sided_book: Boolean(nextVsb.require_two_sided_book ?? bot.volumeSpreadConfig?.require_two_sided_book ?? false),
+        cross_delay_ms: Math.min(2e3, Math.max(0, parseInt(String(nextVsb.cross_delay_ms ?? bot.volumeSpreadConfig?.cross_delay_ms ?? 150), 10) || 0)),
+        tick_size: nextVsb.tick_size ? String(nextVsb.tick_size).trim() : void 0,
+        min_limit_price: String(nextVsb.min_limit_price ?? bot.volumeSpreadConfig?.min_limit_price ?? "1000000000"),
+        max_limit_price: String(nextVsb.max_limit_price ?? bot.volumeSpreadConfig?.max_limit_price ?? "2000000000"),
+        vol_quote_stop_target: String(nextVsb.vol_quote_stop_target ?? bot.volumeSpreadConfig?.vol_quote_stop_target ?? "5000000000")
+      };
+      const validation = botWorkerManager.validateConfig(bot);
+      if (!validation.isValid) {
+        return res.status(400).json({ error: validation.errors.join("; "), details: validation.errors });
+      }
     }
     if (req.body.priceFollowerConfig) {
       bot.priceFollowerConfig = {
@@ -17854,7 +23861,7 @@ mmConsoleRouter.post("/instance/:id/reset-anchor", requireMMOrAdmin, (req, res) 
       });
     }
     db.auditLogs.push({
-      id: crypto21.randomUUID(),
+      id: crypto25.randomUUID(),
       actorId: user.id,
       action: "MOVEMENT_BOT_ANCHOR_RESET",
       resource: `bot:${bot.id}`,
@@ -18009,7 +24016,7 @@ mmConsoleRouter.post("/csv/import-confirm", requireMMOrAdmin, (req, res) => {
     for (const r of rows) {
       const data = r.data || r;
       const bType = data.botType || defaultBotType || "ORDER_BOT";
-      const botId = `bot-${bType.toLowerCase().slice(0, 3)}-${crypto21.randomUUID().slice(0, 8)}`;
+      const botId = `bot-${bType.toLowerCase().slice(0, 3)}-${crypto25.randomUUID().slice(0, 8)}`;
       let orderCfg;
       let volCfg;
       if (bType === "ORDER_BOT") {
@@ -18480,7 +24487,7 @@ mmConsoleRouter.post("/price-follower/create", requireMMOrAdmin, (req, res) => {
       enabled: true,
       dry_run: Boolean(dry_run)
     };
-    const botId = `bot-fol-${crypto21.randomUUID().slice(0, 8)}`;
+    const botId = `bot-fol-${crypto25.randomUUID().slice(0, 8)}`;
     const bot = {
       id: botId,
       name,
@@ -18605,7 +24612,7 @@ mmConsoleRouter.post("/depth-liquidity/create", requireMMOrAdmin, (req, res) => 
       enabled: true,
       activeOrderIds: []
     };
-    const botId = `bot-dep-${crypto21.randomUUID().slice(0, 8)}`;
+    const botId = `bot-dep-${crypto25.randomUUID().slice(0, 8)}`;
     const bot = {
       id: botId,
       name,
@@ -18766,7 +24773,7 @@ mmConsoleRouter.post("/movement-depth/create", requireMMOrAdmin, (req, res) => {
       enabled: true,
       activeOrderIds: []
     };
-    const botId = `bot-mov-${crypto21.randomUUID().slice(0, 8)}`;
+    const botId = `bot-mov-${crypto25.randomUUID().slice(0, 8)}`;
     const bot = {
       id: botId,
       name,
@@ -18800,7 +24807,7 @@ mmConsoleRouter.post("/movement-depth/create", requireMMOrAdmin, (req, res) => {
     };
     db.botInstances.set(botId, bot);
     db.auditLogs.push({
-      id: crypto21.randomUUID(),
+      id: crypto25.randomUUID(),
       actorId: user.id,
       action: "MOVEMENT_DEPTH_BOT_CREATED",
       resource: `bot:${botId}`,
@@ -18873,7 +24880,7 @@ mmConsoleRouter.post("/quant-hft/create", requireMMOrAdmin, (req, res) => {
       reprice_interval_ms: Number(reprice_interval_ms || 1500),
       activeOrderIds: []
     };
-    const botId = `bot-qhft-${Date.now()}-${crypto21.randomBytes(2).toString("hex")}`;
+    const botId = `bot-qhft-${Date.now()}-${crypto25.randomBytes(2).toString("hex")}`;
     const bot = {
       id: botId,
       name,
@@ -19102,7 +25109,7 @@ mmConsoleRouter.post("/smart-hft/create", requireMMOrAdmin, (req, res) => {
       totalBars,
       lastRepriceTimestamp: 0
     };
-    const botId = `bot-shft-${Date.now()}-${crypto21.randomBytes(2).toString("hex")}`;
+    const botId = `bot-shft-${Date.now()}-${crypto25.randomBytes(2).toString("hex")}`;
     const bot = {
       id: botId,
       name,
@@ -19312,7 +25319,7 @@ mmConsoleRouter.post("/advanced-bot/create", requireMMOrAdmin, (req, res) => {
       activeOrderIds: [],
       riskWarnings: []
     };
-    const botId = `bot-amm-${Date.now()}-${crypto21.randomBytes(2).toString("hex")}`;
+    const botId = `bot-amm-${Date.now()}-${crypto25.randomBytes(2).toString("hex")}`;
     const bot = {
       id: botId,
       name,
@@ -19688,11 +25695,11 @@ mmConsoleRouter.post("/thresholds/:id/test", requireMMOrAdmin, (req, res) => {
 });
 
 // server/routes/futures.ts
-import { Router as Router12 } from "express";
+import { Router as Router13 } from "express";
 
 // server/services/FuturesEngine.ts
 init_database();
-import crypto22 from "crypto";
+import crypto26 from "crypto";
 init_PrecisionMath();
 var FuturesEngineService = class {
   constructor() {
@@ -19908,7 +25915,7 @@ var FuturesEngineService = class {
     LedgerService.lockBalance(user.id, pair.quoteCurrency, totalLockNeeded);
     const now = Date.now();
     const order = {
-      id: `ford-${crypto22.randomUUID().slice(0, 8)}`,
+      id: `ford-${crypto26.randomUUID().slice(0, 8)}`,
       userId: user.id,
       pairId: pair.id,
       baseCurrency: pair.baseCurrency,
@@ -20000,7 +26007,7 @@ var FuturesEngineService = class {
         order.leverage
       );
       position = {
-        id: `fpos-${crypto22.randomUUID().slice(0, 8)}`,
+        id: `fpos-${crypto26.randomUUID().slice(0, 8)}`,
         userId: order.userId,
         pairId: order.pairId,
         baseCurrency: order.baseCurrency,
@@ -20219,7 +26226,7 @@ var futuresEngine = new FuturesEngineService();
 
 // server/routes/futures.ts
 init_database();
-var futuresRouter = Router12();
+var futuresRouter = Router13();
 futuresRouter.get("/markets", (_req, res) => {
   try {
     const markets = futuresEngine.getFuturesMarkets();
@@ -20304,8 +26311,8 @@ futuresRouter.post("/position/:positionId/close", requireAuth, (req, res) => {
 
 // server/routes/observability.ts
 init_database();
-import { Router as Router13 } from "express";
-var observabilityRouter = Router13();
+import { Router as Router14 } from "express";
+var observabilityRouter = Router14();
 observabilityRouter.get("/health", (req, res) => {
   const invariantCheck = LedgerService.verifyGlobalInvariants();
   res.json({
@@ -20364,12 +26371,12 @@ init_database();
 init_PriceAggregatorService();
 
 // server/routes/newsAdmin.ts
-import { Router as Router14 } from "express";
+import { Router as Router15 } from "express";
 init_database();
 
 // server/services/cms/NewsCmsService.ts
 init_database();
-import crypto25 from "crypto";
+import crypto29 from "crypto";
 
 // server/services/cms/HtmlSanitizer.ts
 var ALLOWED_TAGS = /* @__PURE__ */ new Set([
@@ -20545,11 +26552,11 @@ function generateSlug(title) {
 
 // server/services/cms/CmsAuditService.ts
 init_database();
-import crypto23 from "crypto";
+import crypto27 from "crypto";
 function recordCmsAudit(input) {
   const prev = db.cmsAuditLogs.length > 0 ? db.cmsAuditLogs[db.cmsAuditLogs.length - 1].currentHash : "0".repeat(64);
   const createdAt = Date.now();
-  const id = crypto23.randomUUID();
+  const id = crypto27.randomUUID();
   const canonical = JSON.stringify({
     id,
     entityType: input.entityType,
@@ -20561,7 +26568,7 @@ function recordCmsAudit(input) {
     previousHash: prev,
     createdAt
   });
-  const currentHash = crypto23.createHash("sha256").update(canonical).digest("hex");
+  const currentHash = crypto27.createHash("sha256").update(canonical).digest("hex");
   const log = {
     id,
     entityType: input.entityType,
@@ -20578,7 +26585,7 @@ function recordCmsAudit(input) {
   };
   db.cmsAuditLogs.push(log);
   db.auditLogs.push({
-    id: crypto23.randomUUID(),
+    id: crypto27.randomUUID(),
     actorId: input.actorId,
     action: `CMS_${input.action}`,
     resource: `${input.entityType}:${input.entityId}`,
@@ -20595,7 +26602,7 @@ function getAuditLogsForEntity(entityType, entityId) {
 
 // server/services/cms/NotificationBroadcastService.ts
 init_database();
-import crypto24 from "crypto";
+import crypto28 from "crypto";
 var NotificationBroadcastService = class {
   constructor() {
     this.workerInterval = null;
@@ -20655,7 +26662,7 @@ var NotificationBroadcastService = class {
         );
         if (!hasActiveJob && campaign.queuedCount > 0) {
           const recoveryJob = {
-            id: crypto24.randomUUID(),
+            id: crypto28.randomUUID(),
             campaignId: campaign.id,
             idempotencyKey: `recover:${campaign.id}:${now}`,
             eventType: "CAMPAIGN_DISPATCH",
@@ -20769,7 +26776,7 @@ var NotificationBroadcastService = class {
     const targetSegment = options.targetSegment || announcement.targetSegment || "ALL_USERS";
     const targetConfig = options.targetConfig || announcement.targetConfig;
     const eligibleUsers = this.resolveEligibleUsers(targetSegment, targetConfig);
-    const campaignId = crypto24.randomUUID();
+    const campaignId = crypto28.randomUUID();
     let queuedDeliveries = 0;
     for (const user of eligibleUsers) {
       for (const channel of requestedChannels) {
@@ -20778,7 +26785,7 @@ var NotificationBroadcastService = class {
         }
         const deliveryKey = `${campaignId}:${user.id}:${channel}`;
         const record = {
-          id: crypto24.randomUUID(),
+          id: crypto28.randomUUID(),
           campaignId,
           userId: user.id,
           channel,
@@ -20820,7 +26827,7 @@ var NotificationBroadcastService = class {
     db.notificationCampaigns.set(campaign.id, campaign);
     if (queuedDeliveries > 0) {
       const outboxJob = {
-        id: crypto24.randomUUID(),
+        id: crypto28.randomUUID(),
         campaignId: campaign.id,
         idempotencyKey: `outbox:${campaignIdempotencyKey}`,
         eventType: "CAMPAIGN_DISPATCH",
@@ -21001,7 +27008,7 @@ var NotificationBroadcastService = class {
         const existing = this.findUserNotificationByIdempotencyKey(delivery.idempotencyKey);
         if (!existing) {
           const notif = {
-            id: crypto24.randomUUID(),
+            id: crypto28.randomUUID(),
             userId: user.id,
             campaignId: campaign.id,
             announcementId: campaign.announcementId,
@@ -21165,7 +27172,7 @@ var NotificationBroadcastService = class {
     campaign.updatedAt = now;
     this.recomputeCampaignMetrics(campaignId);
     const retryJob = {
-      id: crypto24.randomUUID(),
+      id: crypto28.randomUUID(),
       campaignId: campaign.id,
       idempotencyKey: `retry:${campaign.id}:${now}`,
       eventType: "CAMPAIGN_RETRY",
@@ -21370,7 +27377,7 @@ var NewsCmsService = class {
   }
   recordVersionSnapshot(announcement, editedBy, changeSummary) {
     const snapshot = {
-      id: crypto25.randomUUID(),
+      id: crypto29.randomUUID(),
       announcementId: announcement.id,
       version: announcement.version,
       title: announcement.title,
@@ -21412,7 +27419,7 @@ var NewsCmsService = class {
     const authorUser = db.users.get(actor.id);
     const authorKyc = db.kyc.get(actor.id);
     const announcement = {
-      id: crypto25.randomUUID(),
+      id: crypto29.randomUUID(),
       title,
       slug,
       category,
@@ -21856,11 +27863,16 @@ var NewsCmsService = class {
   // PUBLIC QUERIES (STRICTLY PUBLISHED ONLY — ZERO DRAFTS/ARCHIVED LEAKAGE)
   // ---------------------------------------------------------------------------
   listPublicAnnouncements(params) {
-    let items = Array.from(db.announcements.values()).filter(
+    const allPublished = Array.from(db.announcements.values()).filter(
       (a) => a.status === "PUBLISHED" && a.publishedAt !== void 0
     );
+    const pinnedCount = allPublished.filter((a) => a.isPinned).length;
+    let items = allPublished;
     if (params?.category && params.category !== "ALL") {
       items = items.filter((a) => a.category === params.category);
+    }
+    if (params?.pinnedOnly) {
+      items = items.filter((a) => a.isPinned);
     }
     if (params?.search && params.search.trim()) {
       const q = params.search.trim().toLowerCase();
@@ -21884,10 +27896,12 @@ var NewsCmsService = class {
         category: a.category,
         shortDescription: a.shortDescription,
         coverImageUrl: a.coverImageUrl,
-        isPinned: a.isPinned,
+        status: "PUBLISHED",
+        isPinned: Boolean(a.isPinned),
         publishedAt: a.publishedAt,
         authorName: a.authorName || "DIMONEX Official"
       })),
+      pinnedCount,
       pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) }
     };
   }
@@ -21918,10 +27932,10 @@ var newsCmsService = new NewsCmsService();
 
 // server/services/cms/MediaValidationService.ts
 init_database();
-import crypto26 from "crypto";
+import crypto30 from "crypto";
 import fs5 from "fs";
 import path5 from "path";
-var MAX_MEDIA_UPLOAD_BYTES = 2 * 1024 * 1024;
+var MAX_MEDIA_UPLOAD_BYTES = 5 * 1024 * 1024;
 var MIME_TO_EXT = {
   "image/png": "png",
   "image/jpeg": "jpg",
@@ -21942,14 +27956,17 @@ function getMediaDirectory() {
   return dir;
 }
 function detectImageSignature(buffer) {
-  if (!buffer || buffer.length < 12) return null;
-  if (buffer[0] === 137 && buffer[1] === 80 && buffer[2] === 78 && buffer[3] === 71 && buffer[4] === 13 && buffer[5] === 10 && buffer[6] === 26 && buffer[7] === 10) {
+  if (!buffer || buffer.length < 16) return null;
+  if (buffer[0] === 137 && buffer[1] === 80 && buffer[2] === 78 && buffer[3] === 71 && buffer[4] === 13 && buffer[5] === 10 && buffer[6] === 26 && buffer[7] === 10 && buffer[12] === 73 && // 'I'
+  buffer[13] === 72 && // 'H'
+  buffer[14] === 68 && // 'D'
+  buffer[15] === 82) {
     return "image/png";
   }
-  if (buffer[0] === 255 && buffer[1] === 216 && buffer[2] === 255) {
+  if (buffer[0] === 255 && buffer[1] === 216 && buffer[2] === 255 && buffer[3] >= 192) {
     return "image/jpeg";
   }
-  if (buffer[0] === 82 && buffer[1] === 73 && buffer[2] === 70 && buffer[3] === 70 && buffer[8] === 87 && buffer[9] === 69 && buffer[10] === 66 && buffer[11] === 80) {
+  if (buffer[0] === 82 && buffer[1] === 73 && buffer[2] === 70 && buffer[3] === 70 && buffer[8] === 87 && buffer[9] === 69 && buffer[10] === 66 && buffer[11] === 80 && buffer[12] === 86 && buffer[13] === 80 && buffer[14] === 56) {
     return "image/webp";
   }
   if (buffer[0] === 71 && buffer[1] === 73 && buffer[2] === 70 && buffer[3] === 56 && (buffer[4] === 55 || buffer[4] === 57) && buffer[5] === 97) {
@@ -21958,18 +27975,25 @@ function detectImageSignature(buffer) {
   return null;
 }
 function containsEmbeddedScriptPayload(buffer) {
-  const sample = buffer.subarray(0, Math.min(buffer.length, 4096)).toString("utf8").toLowerCase();
-  return sample.includes("<script") || sample.includes("<svg") || sample.includes("<?php") || sample.includes("<html") || sample.includes("javascript:");
+  const sample = buffer.subarray(0, Math.min(buffer.length, 4096)).toString("latin1");
+  return /<script[\s>]/i.test(sample) || /<\?php\b/i.test(sample) || /<!doctype\s+html\b/i.test(sample) || /<html[\s>]/i.test(sample) || /<iframe[\s>]/i.test(sample);
+}
+function normalizeImageMime(mime) {
+  const normalized = (mime || "").toLowerCase().trim();
+  if (normalized === "image/jpg" || normalized === "image/pjpeg") {
+    return "image/jpeg";
+  }
+  return normalized;
 }
 function validateImagePayload(base64Data, declaredMimeType) {
   if (!base64Data || typeof base64Data !== "string") {
     throw new Error("File image data is required");
   }
-  let effectiveMime = declaredMimeType?.toLowerCase().trim() || "";
+  let effectiveMime = normalizeImageMime(declaredMimeType);
   let rawBase64 = base64Data.trim();
   const dataUrlMatch = /^data:([a-zA-Z0-9/+.-]+);base64,([\s\S]+)$/.exec(rawBase64);
   if (dataUrlMatch) {
-    const dataUrlMime = dataUrlMatch[1].toLowerCase().trim();
+    const dataUrlMime = normalizeImageMime(dataUrlMatch[1]);
     if (effectiveMime && effectiveMime !== dataUrlMime) {
       throw new Error("Declared MIME type does not match data URL MIME type");
     }
@@ -22005,7 +28029,7 @@ function validateImagePayload(base64Data, declaredMimeType) {
   if (containsEmbeddedScriptPayload(buffer)) {
     throw new Error("Security check failed: suspicious script or markup payload detected in image.");
   }
-  const sha256Hash = crypto26.createHash("sha256").update(buffer).digest("hex");
+  const sha256Hash = crypto30.createHash("sha256").update(buffer).digest("hex");
   return {
     buffer,
     mimeType: detectedMime,
@@ -22030,7 +28054,7 @@ function resolveSafeMediaPath(filename) {
 }
 function saveUploadedMedia(input) {
   const validated = validateImagePayload(input.base64Data, input.declaredMimeType);
-  const id = crypto26.randomUUID();
+  const id = crypto30.randomUUID();
   const safeFilename = `${id.replace(/-/g, "")}.${validated.ext}`;
   const resolved = resolveSafeMediaPath(safeFilename);
   if (!resolved) {
@@ -22070,7 +28094,7 @@ function deleteUploadedMedia(mediaId) {
 }
 
 // server/routes/newsAdmin.ts
-var newsAdminRouter = Router14();
+var newsAdminRouter = Router15();
 var adminPublishRateMap = /* @__PURE__ */ new Map();
 function createAdminRateLimiter(windowMs, maxRequests, label) {
   return (req, res, next) => {
@@ -22338,14 +28362,15 @@ newsAdminRouter.delete("/media/:id", requireAdmin, (req, res) => {
 });
 
 // server/routes/newsPublic.ts
-import { Router as Router15 } from "express";
+import { Router as Router16 } from "express";
 import fs6 from "fs";
-var newsPublicRouter = Router15();
+var newsPublicRouter = Router16();
 newsPublicRouter.get("/news", (req, res) => {
   try {
     const result = newsCmsService.listPublicAnnouncements({
       category: typeof req.query.category === "string" ? req.query.category : void 0,
       search: typeof req.query.search === "string" ? req.query.search : void 0,
+      pinnedOnly: req.query.pinnedOnly === "true" || req.query.pinnedOnly === "1",
       page: req.query.page ? Number(req.query.page) : 1,
       limit: req.query.limit ? Number(req.query.limit) : 12
     });
@@ -22368,14 +28393,15 @@ newsPublicRouter.get("/media/:filename", (req, res) => {
   }
   res.setHeader("Content-Type", resolved.mimeType);
   res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
   res.setHeader("Content-Disposition", "inline");
   res.setHeader("Cache-Control", "public, max-age=86400");
   res.sendFile(resolved.filePath);
 });
 
 // server/routes/notifications.ts
-import { Router as Router16 } from "express";
-var notificationsRouter = Router16();
+import { Router as Router17 } from "express";
+var notificationsRouter = Router17();
 notificationsRouter.get("/", requireAuth, (req, res) => {
   const user = req.user;
   const result = notificationBroadcastService.listUserNotifications(user.id, {
@@ -22431,6 +28457,341 @@ notificationsRouter.post("/:id/read", requireAuth, (req, res) => {
   });
 });
 
+// server/routes/rewards.ts
+import { Router as Router18 } from "express";
+var rewardsRouter = Router18();
+var mutationRateBuckets = /* @__PURE__ */ new Map();
+function rateLimitMutation(keyPrefix, maxPerMinute) {
+  return (req, res, next) => {
+    const user = req.user;
+    const key = `${keyPrefix}:${user?.id || req.ip || "anon"}`;
+    const now = Date.now();
+    const recent = (mutationRateBuckets.get(key) || []).filter((ts) => now - ts < 6e4);
+    if (recent.length >= maxPerMinute) {
+      return res.status(429).json({ error: "Too many requests. Please wait a moment and try again." });
+    }
+    recent.push(now);
+    mutationRateBuckets.set(key, recent);
+    next();
+  };
+}
+rewardsRouter.get("/schedule", (_req, res) => {
+  res.json(vipRewardsService.getPublicSchedule());
+});
+rewardsRouter.get("/summary", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const summary = vipRewardsService.getUserSummary(user.id);
+    res.json(summary);
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to compute VIP summary" });
+  }
+});
+rewardsRouter.get("/history", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    const type = typeof req.query.type === "string" ? req.query.type : "ALL";
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 15;
+    const history = vipRewardsService.getUserRewardsHistory(user.id, { type, page, limit });
+    res.json(history);
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to fetch rewards history" });
+  }
+});
+rewardsRouter.post(
+  "/tasks/:taskId/claim",
+  requireAuth,
+  rateLimitMutation("reward-claim", 15),
+  (req, res) => {
+    try {
+      const user = req.user;
+      const taskId = String(req.params.taskId || "").trim().toUpperCase();
+      if (!/^[A-Z0-9_-]{2,64}$/.test(taskId)) {
+        return res.status(400).json({ error: "Invalid reward task ID" });
+      }
+      const claim = vipRewardsService.claimTaskReward(user.id, taskId);
+      const summary = vipRewardsService.getUserSummary(user.id);
+      res.json({ success: true, claim, summary });
+    } catch (err) {
+      res.status(400).json({ error: err.message || "Reward claim failed" });
+    }
+  }
+);
+rewardsRouter.post(
+  "/vouchers/redeem",
+  requireAuth,
+  rateLimitMutation("voucher-redeem", 12),
+  (req, res) => {
+    try {
+      const user = req.user;
+      const code = typeof req.body?.code === "string" ? req.body.code : "";
+      if (!code.trim()) {
+        return res.status(400).json({ error: "Voucher code is required." });
+      }
+      const redemption = vipRewardsService.redeemVoucher(user.id, code);
+      const summary = vipRewardsService.getUserSummary(user.id);
+      res.json({ success: true, redemption, summary });
+    } catch (err) {
+      res.status(400).json({ error: err.message || "Voucher redemption failed" });
+    }
+  }
+);
+rewardsRouter.post(
+  "/referral/apply",
+  requireAuth,
+  rateLimitMutation("referral-apply", 10),
+  (req, res) => {
+    try {
+      const user = req.user;
+      const code = typeof req.body?.referralCode === "string" ? req.body.referralCode : "";
+      if (!code.trim()) {
+        return res.status(400).json({ error: "Referral code is required" });
+      }
+      const relation = vipRewardsService.bindReferralCode(user.id, code);
+      const summary = vipRewardsService.getUserSummary(user.id);
+      res.json({ success: true, relation, summary });
+    } catch (err) {
+      res.status(400).json({ error: err.message || "Failed to apply referral code" });
+    }
+  }
+);
+rewardsRouter.post(
+  "/referral/claim",
+  requireAuth,
+  rateLimitMutation("referral-claim", 10),
+  (req, res) => {
+    try {
+      const user = req.user;
+      const payout = vipRewardsService.claimReferralCommission(user.id);
+      const summary = vipRewardsService.getUserSummary(user.id);
+      res.json({ success: true, payout, summary });
+    } catch (err) {
+      res.status(400).json({ error: err.message || "Referral commission claim failed" });
+    }
+  }
+);
+
+// server/routes/rewardsAdmin.ts
+import { Router as Router19 } from "express";
+var rewardsAdminRouter = Router19();
+var adminRewardsRateBuckets = /* @__PURE__ */ new Map();
+function rateLimitAdmin(label, maxPerMinute) {
+  return (req, res, next) => {
+    const user = req.user;
+    const key = `${label}:${user?.id || req.ip || "anon"}`;
+    const now = Date.now();
+    const recent = (adminRewardsRateBuckets.get(key) || []).filter((ts) => now - ts < 6e4);
+    if (recent.length >= maxPerMinute) {
+      return res.status(429).json({ error: "Rate limit exceeded. Please wait before retrying." });
+    }
+    recent.push(now);
+    adminRewardsRateBuckets.set(key, recent);
+    next();
+  };
+}
+rewardsAdminRouter.use(requireAdmin);
+rewardsAdminRouter.get("/overview", (_req, res) => {
+  try {
+    res.json(vipRewardsService.getAdminRewardsOverview());
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to load rewards overview" });
+  }
+});
+rewardsAdminRouter.get("/tasks", (_req, res) => {
+  try {
+    res.json({ tasks: vipRewardsService.listAdminTasks() });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to list reward tasks" });
+  }
+});
+rewardsAdminRouter.post("/tasks", rateLimitAdmin("admin-task-create", 30), (req, res) => {
+  try {
+    const actor = req.user;
+    const task = vipRewardsService.createAdminTask(req.body || {}, actor.id);
+    res.status(201).json({ success: true, task, overview: vipRewardsService.getAdminRewardsOverview() });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to create reward task" });
+  }
+});
+rewardsAdminRouter.patch("/tasks/:id", rateLimitAdmin("admin-task-update", 40), (req, res) => {
+  try {
+    const actor = req.user;
+    const taskId = String(req.params.id || "").trim().toUpperCase();
+    const task = vipRewardsService.updateAdminTask(taskId, req.body || {}, actor.id);
+    res.json({ success: true, task, overview: vipRewardsService.getAdminRewardsOverview() });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to update reward task" });
+  }
+});
+rewardsAdminRouter.delete("/tasks/:id", rateLimitAdmin("admin-task-delete", 30), (req, res) => {
+  try {
+    const actor = req.user;
+    const taskId = String(req.params.id || "").trim().toUpperCase();
+    const result = vipRewardsService.deleteAdminTask(taskId, actor.id);
+    res.json({ success: true, ...result, overview: vipRewardsService.getAdminRewardsOverview() });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to delete reward task" });
+  }
+});
+rewardsAdminRouter.get("/vouchers", (_req, res) => {
+  try {
+    res.json({ vouchers: vipRewardsService.listAdminVouchers() });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to list vouchers" });
+  }
+});
+rewardsAdminRouter.post("/vouchers", rateLimitAdmin("admin-voucher-create", 30), (req, res) => {
+  try {
+    const actor = req.user;
+    const voucher = vipRewardsService.createAdminVoucher(req.body || {}, actor.id);
+    res.status(201).json({ success: true, voucher, overview: vipRewardsService.getAdminRewardsOverview() });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to create voucher" });
+  }
+});
+rewardsAdminRouter.patch("/vouchers/:id", rateLimitAdmin("admin-voucher-update", 40), (req, res) => {
+  try {
+    const actor = req.user;
+    const voucherId = String(req.params.id || "").trim();
+    const voucher = vipRewardsService.updateAdminVoucher(voucherId, req.body || {}, actor.id);
+    res.json({ success: true, voucher, overview: vipRewardsService.getAdminRewardsOverview() });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to update voucher" });
+  }
+});
+rewardsAdminRouter.delete("/vouchers/:id", rateLimitAdmin("admin-voucher-delete", 30), (req, res) => {
+  try {
+    const actor = req.user;
+    const voucherId = String(req.params.id || "").trim();
+    const result = vipRewardsService.deleteAdminVoucher(voucherId, actor.id);
+    res.json({ success: true, ...result, overview: vipRewardsService.getAdminRewardsOverview() });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to delete voucher" });
+  }
+});
+rewardsAdminRouter.get("/history", (req, res) => {
+  try {
+    const type = typeof req.query.type === "string" ? req.query.type : "ALL";
+    const search = typeof req.query.search === "string" ? req.query.search : "";
+    const page = Number(req.query.page) || 1;
+    const limit = Number(req.query.limit) || 25;
+    res.json(vipRewardsService.listAdminRewardsHistory({ type, search, page, limit }));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Failed to load rewards settlement ledger" });
+  }
+});
+
+// server/routes/earn.ts
+import { Router as Router20 } from "express";
+var earnRouter = Router20();
+var earnMutationBuckets = /* @__PURE__ */ new Map();
+function rateLimitEarn(keyPrefix, maxPerMinute) {
+  return (req, res, next) => {
+    const user = req.user;
+    const key = `${keyPrefix}:${user?.id || req.ip || "anon"}`;
+    const now = Date.now();
+    const recent = (earnMutationBuckets.get(key) || []).filter((ts) => now - ts < 6e4);
+    if (recent.length >= maxPerMinute) {
+      return res.status(429).json({ error: "Terlalu banyak permintaan. Silakan tunggu sebentar sebelum mencoba lagi." });
+    }
+    recent.push(now);
+    earnMutationBuckets.set(key, recent);
+    next();
+  };
+}
+earnRouter.get("/vaults", (_req, res) => {
+  try {
+    res.json(earnService.listPublicVaults());
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Gagal memuat daftar vault Earn" });
+  }
+});
+earnRouter.get("/summary", requireAuth, (req, res) => {
+  try {
+    const user = req.user;
+    res.json(earnService.getUserSummary(user.id));
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Gagal memuat ringkasan Earn" });
+  }
+});
+earnRouter.post("/subscribe", requireAuth, rateLimitEarn("earn-subscribe", 20), (req, res) => {
+  try {
+    const user = req.user;
+    const { vaultId, amount, autoCompound, idempotencyKey } = req.body || {};
+    if (!vaultId || typeof vaultId !== "string") {
+      return res.status(400).json({ error: "vaultId wajib diisi" });
+    }
+    if (amount === void 0 || amount === null || String(amount).trim() === "") {
+      return res.status(400).json({ error: "Nominal stake wajib diisi" });
+    }
+    const position = earnService.subscribeToVault({
+      userId: user.id,
+      vaultId: vaultId.trim(),
+      amount: String(amount).trim(),
+      autoCompound: Boolean(autoCompound),
+      idempotencyKey: typeof idempotencyKey === "string" && idempotencyKey.trim() ? idempotencyKey.trim() : void 0
+    });
+    const summary = earnService.getUserSummary(user.id);
+    res.status(201).json({ success: true, position, summary });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Gagal melakukan subscription vault" });
+  }
+});
+earnRouter.post("/positions/:id/claim", requireAuth, rateLimitEarn("earn-claim", 20), (req, res) => {
+  try {
+    const user = req.user;
+    const positionId = String(req.params.id || "").trim();
+    if (!/^[a-zA-Z0-9_-]{3,64}$/.test(positionId)) {
+      return res.status(400).json({ error: "ID posisi tidak valid" });
+    }
+    const result = earnService.claimPositionYield({ userId: user.id, positionId });
+    const summary = earnService.getUserSummary(user.id);
+    res.json({ success: true, ...result, summary });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Gagal mengklaim imbal hasil" });
+  }
+});
+earnRouter.post("/positions/:id/redeem", requireAuth, rateLimitEarn("earn-redeem", 20), (req, res) => {
+  try {
+    const user = req.user;
+    const positionId = String(req.params.id || "").trim();
+    if (!/^[a-zA-Z0-9_-]{3,64}$/.test(positionId)) {
+      return res.status(400).json({ error: "ID posisi tidak valid" });
+    }
+    const { amount, confirmEarlyRedeem } = req.body || {};
+    const result = earnService.redeemPosition({
+      userId: user.id,
+      positionId,
+      amount: amount !== void 0 && amount !== null && String(amount).trim() !== "" ? String(amount).trim() : void 0,
+      confirmEarlyRedeem: Boolean(confirmEarlyRedeem)
+    });
+    const summary = earnService.getUserSummary(user.id);
+    res.json({ success: true, ...result, summary });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Gagal mencairkan posisi Earn" });
+  }
+});
+earnRouter.post("/positions/:id/auto-compound", requireAuth, rateLimitEarn("earn-compound", 30), (req, res) => {
+  try {
+    const user = req.user;
+    const positionId = String(req.params.id || "").trim();
+    if (!/^[a-zA-Z0-9_-]{3,64}$/.test(positionId)) {
+      return res.status(400).json({ error: "ID posisi tidak valid" });
+    }
+    const { autoCompound } = req.body || {};
+    const position = earnService.toggleAutoCompound({
+      userId: user.id,
+      positionId,
+      autoCompound: Boolean(autoCompound)
+    });
+    const summary = earnService.getUserSummary(user.id);
+    res.json({ success: true, position, summary });
+  } catch (err) {
+    res.status(400).json({ error: err.message || "Gagal mengubah pengaturan Auto-Compound" });
+  }
+});
+
 // server/serverApp.ts
 async function startServer() {
   const app = express();
@@ -22441,7 +28802,7 @@ async function startServer() {
     portVal || (process.env.PORT && process.env.PORT !== "8080" ? process.env.PORT : "3000"),
     10
   );
-  app.use(express.json({ limit: "5mb" }));
+  app.use(express.json({ limit: "10mb" }));
   const wss = new WebSocketServer2({ server, path: "/ws" });
   wss.on("error", (err) => {
     console.error("[DIMONEX] WebSocket Server error:", err?.message || err);
@@ -22455,11 +28816,15 @@ async function startServer() {
   app.use("/api/api-keys", apiKeyRouter);
   app.use("/api/admin/listings", listingRouter);
   app.use("/api/listing", listingRouter);
+  app.use("/api/admin/rewards", rewardsAdminRouter);
   app.use("/api/admin", newsAdminRouter);
   app.use("/api/admin", adminRouter);
   app.use("/api/public", newsPublicRouter);
   app.use("/api/notifications", notificationsRouter);
+  app.use("/api/rewards", rewardsRouter);
+  app.use("/api/earn", earnRouter);
   app.use("/api/risk", riskRouter);
+  app.use("/api/bot/volume-v2", volumeExecutionV2Router);
   app.use("/api/bot", botRouter);
   app.use("/api/mm", mmConsoleRouter);
   app.use("/api/bot/mm", mmConsoleRouter);
@@ -22541,6 +28906,8 @@ async function startServer() {
     marketLifecycleScheduler.start();
     newsCmsService.startScheduler();
     notificationBroadcastService.start();
+    volumeExecutionV2Service.startRecoveryScheduler();
+    earnService.startScheduler();
     setInterval(() => {
       fxConversionService.fetchAndSyncLiveRate("system@dimonex.id", 12).catch(() => {
       });
@@ -22622,6 +28989,32 @@ export {
  * @license
  * SPDX-License-Identifier: Apache-2.0
  * 
+ * LedgerService.ts
+ * Double-Entry Immutable Atomic Ledger Service for DIMONEX.
+ * 
+ * INVARIANTS ENFORCED:
+ * 1. For every journal: Sum(Debits) === Sum(Credits)
+ * 2. User balance invariants: BalanceAvailable >= 0, BalanceLocked >= 0
+ * 3. Total Balance = BalanceAvailable + BalanceLocked
+ * 4. Idempotency: Duplicate idempotency keys return existing transaction
+ * 5. Append-only ledger entries: Records cannot be updated or deleted
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * VipRewardsService.ts
+ * Authoritative Institutional VIP Tier Engine, Dynamic Trader Task Center,
+ * Redeemable Voucher Engine & Referral Commission System backed by live
+ * DIMONEX trades, futures orders, deposits, KYC/2FA status, and
+ * Double-Entry Atomic Ledger payouts.
+ *
+ * ZERO mock metrics, ZERO hardcoded user volumes, ZERO fake payouts.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
  * AuthService.ts
  * Multi-layer Authentication, RFC-6238 TOTP 2FA, Anti-Brute-Force, and Session Manager.
  */
@@ -22638,20 +29031,6 @@ export {
  * 
  * kyc.ts
  * KYC management with Indonesian KTP & Selfie verification, OCR simulation, and Tier limits.
- */
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- * 
- * LedgerService.ts
- * Double-Entry Immutable Atomic Ledger Service for DIMONEX.
- * 
- * INVARIANTS ENFORCED:
- * 1. For every journal: Sum(Debits) === Sum(Credits)
- * 2. User balance invariants: BalanceAvailable >= 0, BalanceLocked >= 0
- * 3. Total Balance = BalanceAvailable + BalanceLocked
- * 4. Idempotency: Duplicate idempotency keys return existing transaction
- * 5. Append-only ledger entries: Records cannot be updated or deleted
  */
 /**
  * @license
@@ -22736,90 +29115,6 @@ export {
  * 2. Automatically activates SCHEDULED listings when `Date.now() >= listing.scheduledAt`.
  * 3. Manages Market Delisting (Scheduled Delisting with live chart countdown, Immediate Delisting
  *    with atomic order cancellation & ledger refund, Cancel Delist, and Relist).
- */
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- * 
- * trading.ts
- * Core trading REST endpoints: order placement, cancellation, depth, trades, and pairs.
- */
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- * 
- * wallet.ts
- * Wallet management: balances, Virtual Account IDR deposits/withdrawals,
- * name matching verification with KYC, crypto address generator, and block listener.
- */
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- * 
- * apiKeys.ts
- * Public API & API Key Management with HMAC-SHA256 signature authentication.
- */
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- * 
- * admin.ts
- * Admin Panel routes: KYC review, pair listing/halt, fee configuration,
- * withdrawal approvals, and system audit logs.
- */
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- * 
- * server/services/listing/ListingService.ts
- * Core Initial Listing Domain Service for DIMONEX.
- * Enforces Zero-Float BigInt math, Maker-Checker authorization,
- * State Machine transitions, Asset Validation, and Immutable Audit Trail.
- */
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- * 
- * server/services/listingService.ts
- * DIMONEX Centralized Cryptocurrency Spot Exchange — Core Initial Listing Service.
- * Implements:
- * 1. CRUD operations for Listing Requests with Zero-Float BigInt financial parameter validation.
- * 2. Strict Maker-Checker authorization workflow (Checker != Maker, version locking).
- * 3. Idempotent Market Activation Orchestrator that validates Engine Readiness before status transitions.
- * 4. Transactional Outbox pattern and Cryptographic Audit Trail integration.
- */
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- * 
- * server/routes/listing.ts
- * Admin Initial Listing Endpoints with Maker-Checker Authorization,
- * Idempotency, Input Validation, and Structured Error Responses.
- */
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- * 
- * server/routes/markets.ts
- * Public Market Catalogue endpoints for DIMONEX.
- * Exposes ONLY active markets with exact integer specifications and 24h tickers.
- * Does NOT expose draft, pending, or preparing markets.
- */
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- * 
- * risk.ts
- * Risk & Compliance module: suspicious transaction monitoring, account freezing, AML reports.
- */
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- * 
- * bot.ts
- * Algorithmic Trading Bot Manager for DIMONEX.
- * Integrates directly with HMAC-SHA256 API Key authentication and assigns
- * all limit orders to the deploying user's account with clear clientOrderId tags.
  */
 /**
  * @license
@@ -22961,6 +29256,23 @@ export {
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
+ *
+ * VolumeSpreadBot.ts
+ * Volume Bot Phase 2 — Inside-Spread Self-Cross Execution Engine for DIMONEX.
+ *
+ * Behavior:
+ * - Reads live OrderBook bestBid & bestAsk.
+ * - Selects an execution price strictly inside the spread (between bestBid and bestAsk)
+ *   clamped to [min_limit_price, max_limit_price] and aligned to tickSize.
+ * - Submits Maker LIMIT GTC inside the spread, then submits opposing Taker LIMIT IOC
+ *   at the exact same price ("makan order sendiri") either synchronously (cross_delay_ms === 0)
+ *   or after a configurable micro-delay (cross_delay_ms > 0).
+ * - Uses strict BigInt + PrecisionMath + crypto.randomBytes arithmetic (zero floats).
+ * - Validates real available Base & Quote balances prior to order submission (no synthetic balance injection).
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
  * 
  * BotWorkerManager.ts
  * Authoritative Algorithmic Worker & MM Concurrency Manager for DIMONEX.
@@ -22971,6 +29283,139 @@ export {
  * - Strict risk boundaries and common-ownership self-trade prevention
  * - Real matching-engine submission (no mock balances or simulated trades)
  * - Safe emergency stop and order cancellation
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * PriceThresholdService.ts
+ * Real-time Market Maker Price Threshold Monitor & Automated Ladder Adjustment Engine.
+ * Evaluates authoritative pair.lastPrice in exact BigInt quote units, emits WebSocket alerts
+ * (triggering client-side Web Audio notifications), and executes automated ladder adjustments
+ * across targeted or pair-matched MM/Ladder bots.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
+ * trading.ts
+ * Core trading REST endpoints: order placement, cancellation, depth, trades, and pairs.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
+ * wallet.ts
+ * Wallet management: balances, Virtual Account IDR deposits/withdrawals,
+ * name matching verification with KYC, crypto address generator, and block listener.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
+ * apiKeys.ts
+ * Public API & API Key Management with HMAC-SHA256 signature authentication.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * server/services/earn/EarnService.ts
+ * Institutional Earn & Staking Vaults Engine for DIMONEX.
+ *
+ * Guarantees:
+ * - Zero-float BigInt atomic arithmetic for all principal, caps, penalties, and yields
+ * - Real custody transfers via double-entry LedgerService (User <-> SYSTEM_EARN_CUSTODY_ID)
+ * - Real yield payouts via double-entry LedgerService (SYSTEM_TREASURY_ID -> User or Auto-Compound Custody)
+ * - Live TVL & staker counts computed strictly from persisted EarnPosition records
+ * - Real asset definitions strictly backed by db.assets
+ * - Idempotent UTC daily yield settlement scheduler + manual claim + flexible/fixed redemption
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
+ * admin.ts
+ * Admin Panel routes: KYC review, pair listing/halt, fee configuration,
+ * withdrawal approvals, and system audit logs.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
+ * server/services/listing/ListingService.ts
+ * Core Initial Listing Domain Service for DIMONEX.
+ * Enforces Zero-Float BigInt math, Maker-Checker authorization,
+ * State Machine transitions, Asset Validation, and Immutable Audit Trail.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
+ * server/services/listingService.ts
+ * DIMONEX Centralized Cryptocurrency Spot Exchange — Core Initial Listing Service.
+ * Implements:
+ * 1. CRUD operations for Listing Requests with Zero-Float BigInt financial parameter validation.
+ * 2. Strict Maker-Checker authorization workflow (Checker != Maker, version locking).
+ * 3. Idempotent Market Activation Orchestrator that validates Engine Readiness before status transitions.
+ * 4. Transactional Outbox pattern and Cryptographic Audit Trail integration.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
+ * server/routes/listing.ts
+ * Admin Initial Listing Endpoints with Maker-Checker Authorization,
+ * Idempotency, Input Validation, and Structured Error Responses.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
+ * server/routes/markets.ts
+ * Public Market Catalogue endpoints for DIMONEX.
+ * Exposes ONLY active markets with exact integer specifications and 24h tickers.
+ * Does NOT expose draft, pending, or preparing markets.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
+ * risk.ts
+ * Risk & Compliance module: suspicious transaction monitoring, account freezing, AML reports.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ * 
+ * bot.ts
+ * Algorithmic Trading Bot Manager for DIMONEX.
+ * Integrates directly with HMAC-SHA256 API Key authentication and assigns
+ * all limit orders to the deploying user's account with clear clientOrderId tags.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * VolumeExecutionV2Service.ts
+ * DIMONEX Volume Execution & Liquidity Management Engine (V2).
+ *
+ * Design Guarantees:
+ * - Zero-float BigInt fixed-point calculations across all prices, quantities, fees, and exposure.
+ * - Legitimate user-authorized execution & liquidity management ONLY.
+ * - Explicitly prohibits wash trading, self-trading, fake fills, artificial counterparties,
+ *   treasury volume manufacture, or synthetic balance injection.
+ * - Counts volume strictly from deduplicated authoritative Trade records (`trade.id`).
+ * - Supports TWAP, VWAP (real market volume), ICEBERG, PASSIVE_LIMIT, AGGRESSIVE_LIMIT.
+ * - Supports LIVE vs SIMULATION mode with full risk limits, timeout cancellation, and crash recovery.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * server/routes/volumeExecutionV2.ts
+ * Authenticated REST API for DIMONEX Volume Execution & Liquidity Management Engine V2.
+ * Leaves legacy V1 (/api/bot/volume/deploy) completely untouched.
  */
 /**
  * @license
@@ -23001,16 +29446,6 @@ export {
  * - Automated Internal Limit Order Rebalancing via Matching Engine
  * - Zero Mock Data: Exact double-entry ledger balances & real trade accounting
  * - Time-series aggregation for D3 Performance Charts (PnL, Inventory Skew, Execution Latency)
- */
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- *
- * PriceThresholdService.ts
- * Real-time Market Maker Price Threshold Monitor & Automated Ladder Adjustment Engine.
- * Evaluates authoritative pair.lastPrice in exact BigInt quote units, emits WebSocket alerts
- * (triggering client-side Web Audio notifications), and executes automated ladder adjustments
- * across targeted or pair-matched MM/Ladder bots.
  */
 /**
  * @license
@@ -23122,6 +29557,30 @@ export {
  * notifications.ts
  * Authenticated user Notification Inbox & Preferences API.
  * Strictly isolates each user's notifications to prevent IDOR access.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * server/routes/rewards.ts
+ * Institutional VIP, Dynamic Trader Task Center, Vouchers, Rewards History & Referral APIs.
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * server/routes/rewardsAdmin.ts
+ * Admin Console RBAC-Protected APIs for Institutional VIP & Trader Rewards Management:
+ * - Task Center CRUD
+ * - Voucher Campaign CRUD
+ * - Global Rewards & Payout Ledger
+ */
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * server/routes/earn.ts
+ * Institutional Earn & Staking Vaults REST APIs.
  */
 /**
  * @license

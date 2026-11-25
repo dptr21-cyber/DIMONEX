@@ -1429,6 +1429,12 @@ export interface EarnPositionItem {
   updatedAt: number;
 }
 
+export type EarnPayoutFundingSource =
+  | 'EXCHANGE_FEE_POOL'
+  | 'HYBRID_FEE_AND_TREASURY'
+  | 'TREASURY_RESERVE'
+  | 'ACCRUAL_LEDGER';
+
 export interface EarnPayoutItem {
   id: string;
   userId: string;
@@ -1443,6 +1449,9 @@ export interface EarnPayoutItem {
   apyPct: number;
   settlementDayIndex?: number;
   journalId: string;
+  fundingSource?: EarnPayoutFundingSource;
+  feeFundedUnits?: string;
+  treasuryFundedUnits?: string;
   createdAt: number;
 }
 
@@ -1483,5 +1492,98 @@ export interface EarnCustodySolvencyReport {
     accruedLiabilityUnits: string;
     accruedLiabilityDisplay: string;
     isBalanced: boolean;
+  }>;
+}
+
+export interface AdminTreasuryFeeOverview {
+  generatedAt: number;
+  fxRateIdr: number;
+  summary: {
+    totalExchangeFeesIdr: number;
+    totalExchangeFeesUsd: number;
+    fees24hIdr: number;
+    fees24hUsd: number;
+    spotFeesIdr: number;
+    spotMakerFeesIdr: number;
+    spotTakerFeesIdr: number;
+    futuresFeesIdr: number;
+    userDirectFeesIdr: number;
+    mmBotFeesIdr: number;
+    totalTradesCount: number;
+    trades24hCount: number;
+    feeCollectorLiveIdr: number;
+    feeCollectorLiveUsd: number;
+    treasuryReserveLiveIdr: number;
+    treasuryReserveLiveUsd: number;
+    totalSweptToTreasuryIdr: number;
+    stakingClaimedAllTimeIdr: number;
+    stakingClaimedAllTimeUsd: number;
+    stakingClaimed24hIdr: number;
+    stakingFeePoolFundedIdr: number;
+    stakingTreasuryFundedIdr: number;
+    stakingPendingClaimableIdr: number;
+    stakingPendingClaimableUsd: number;
+    netTreasuryFeePoolIdr: number;
+    netTreasuryFeePoolUsd: number;
+    feeCoverageRatioPct: number;
+  };
+  byCurrency: Array<{
+    currency: string;
+    decimals: number;
+    feeEarnedAllTimeUnits: string;
+    feeEarnedAllTimeDisplay: string;
+    feeCollectorBalanceUnits: string;
+    feeCollectorBalanceDisplay: string;
+    treasuryReserveBalanceUnits: string;
+    treasuryReserveBalanceDisplay: string;
+    sweptToTreasuryUnits: string;
+    sweptToTreasuryDisplay: string;
+    stakingClaimedUnits: string;
+    stakingClaimedDisplay: string;
+    stakingFeeFundedUnits: string;
+    stakingPendingUnits: string;
+    stakingPendingDisplay: string;
+    netFeeSurplusUnits: string;
+    netFeeSurplusDisplay: string;
+    feeEarnedIdr: number;
+    stakingClaimedIdr: number;
+    feeCollectorLiveIdr: number;
+    treasuryReserveLiveIdr: number;
+  }>;
+  byPair: Array<{
+    pairId: string;
+    baseCurrency: string;
+    quoteCurrency: string;
+    quoteDecimals: number;
+    tradeCount: number;
+    trades24hCount: number;
+    makerFeesUnits: string;
+    takerFeesUnits: string;
+    totalFeesUnits: string;
+    totalFeesDisplay: string;
+    userFeesUnits: string;
+    userFeesDisplay: string;
+    totalFeesIdr: number;
+    totalFeesUsd: number;
+    sharePct: number;
+  }>;
+  recentStakingClaims: Array<{
+    id: string;
+    userId: string;
+    userEmail: string;
+    positionId: string;
+    vaultId: string;
+    vaultName: string;
+    asset: string;
+    decimals: number;
+    payoutType: EarnPayoutType;
+    amountUnits: string;
+    amountDisplay: string;
+    amountIdr: number;
+    fundingSource: EarnPayoutFundingSource;
+    feeFundedUnits: string;
+    treasuryFundedUnits: string;
+    journalId: string;
+    createdAt: number;
   }>;
 }

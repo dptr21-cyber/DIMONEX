@@ -455,6 +455,8 @@ adminRouter.get('/stats', requireAdmin, (req, res) => {
       cur.total = (av + lk).toString();
     }
 
+    const treasuryFeeOverview = earnService.getExchangeFeeAndEarnTreasuryStats();
+
     res.json({
       totalUsers,
       totalPairs,
@@ -467,6 +469,7 @@ adminRouter.get('/stats', requireAdmin, (req, res) => {
       uptimeSeconds: Math.floor(process.uptime()),
       memoryUsage: process.memoryUsage(),
       liabilitiesByCurrency,
+      treasuryFeeSummary: treasuryFeeOverview.summary,
       serverTime: Date.now()
     });
   } catch (err: any) {
@@ -857,6 +860,30 @@ adminRouter.post('/earn/settle-yield', requireAdmin, (req, res) => {
     });
   } catch (err: any) {
     res.status(400).json({ error: err.message || 'Gagal menjalankan distribusi imbal hasil' });
+  }
+});
+
+// 15b. Exchange Transaction Fee Revenue & Staking Earn Treasury Funding Monitor
+adminRouter.get('/treasury-fees', requireAdmin, (_req, res) => {
+  try {
+    res.json(earnService.getExchangeFeeAndEarnTreasuryStats());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Gagal memuat laporan fee transaksi dan treasury staking' });
+  }
+});
+
+adminRouter.post('/treasury-fees/sweep', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const result = earnService.sweepCollectedFeesToTreasury(adminUser.id);
+    const overview = earnService.getExchangeFeeAndEarnTreasuryStats();
+    res.json({
+      success: true,
+      ...result,
+      overview,
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message || 'Gagal melakukan sweep fee ke treasury' });
   }
 });
 

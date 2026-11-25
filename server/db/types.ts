@@ -110,7 +110,8 @@ export type JournalTxType =
   | 'VOUCHER_REDEMPTION'
   | 'EARN_STAKE'
   | 'EARN_REDEEM'
-  | 'EARN_YIELD';
+  | 'EARN_YIELD'
+  | 'FEE_TREASURY_SWEEP';
 
 export type LedgerEntryType = 'DEBIT' | 'CREDIT';
 
@@ -1633,6 +1634,12 @@ export interface EarnPosition {
   updatedAt: number;
 }
 
+export type EarnPayoutFundingSource =
+  | 'EXCHANGE_FEE_POOL'
+  | 'HYBRID_FEE_AND_TREASURY'
+  | 'TREASURY_RESERVE'
+  | 'ACCRUAL_LEDGER';
+
 export interface EarnPayoutRecord {
   id: string;
   userId: string;
@@ -1645,5 +1652,8 @@ export interface EarnPayoutRecord {
   apyBps: number;
   settlementDayIndex?: number;
   journalId: string;
+  fundingSource?: EarnPayoutFundingSource;
+  feeFundedUnits?: string;
+  treasuryFundedUnits?: string;
   createdAt: number;
 }

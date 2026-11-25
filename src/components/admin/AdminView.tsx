@@ -72,6 +72,7 @@ import {
   EarnVaultItem,
   EarnPositionItem,
   EarnCustodySolvencyReport,
+  AdminTreasuryFeeOverview,
 } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
 import { formatCountdownCompact } from '../trading/MarketCountdownOverlay.js';
@@ -140,6 +141,9 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
   const [earnpools, setEarnPools] = useState<EarnVaultItem[]>([]);
   const [earnPositions, setEarnPositions] = useState<EarnPositionItem[]>([]);
   const [earnSolvency, setEarnSolvency] = useState<EarnCustodySolvencyReport | null>(null);
+  const [treasuryFeesReport, setTreasuryFeesReport] = useState<AdminTreasuryFeeOverview | null>(null);
+  const [feeMonitorView, setFeeMonitorView] = useState<'CURRENCY' | 'PAIR' | 'CLAIMS'>('CURRENCY');
+  const [isSweepingFees, setIsSweepingFees] = useState(false);
   const [showCreateEarnModal, setShowCreateEarnModal] = useState(false);
   const [isSettlingYield, setIsSettlingYield] = useState(false);
   const [newEarnVaultForm, setNewEarnVaultForm] = useState({
@@ -470,6 +474,7 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         earnRes,
         earnPosRes,
         earnSolvRes,
+        treasuryFeesRes,
         copyRes,
         vipRes,
         fxRes,
@@ -484,6 +489,7 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         fetch('/api/admin/earn/pools', { headers }),
         fetch('/api/admin/earn/positions?limit=50', { headers }),
         fetch('/api/admin/earn/solvency', { headers }),
+        fetch('/api/admin/treasury-fees', { headers }),
         fetch('/api/admin/copy-trading/masters', { headers }),
         fetch('/api/admin/vip-tiers', { headers }),
         fetch('/api/mm/fx-status', { headers }),
@@ -502,6 +508,7 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         setEarnPositions(epData.positions || []);
       }
       if (earnSolvRes.ok) setEarnSolvency(await earnSolvRes.json());
+      if (treasuryFeesRes.ok) setTreasuryFeesReport(await treasuryFeesRes.json());
       if (copyRes.ok) setCopyMasters(await copyRes.json());
       if (vipRes.ok) setVipTiers(await vipRes.json());
       if (fxRes.ok) setFxStatus(await fxRes.json());
@@ -516,6 +523,40 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
       setIsLoading(false);
     }
   }, [isAdmin]);
+
+  const handleSweepTreasuryFees = () => {
+    const liveFeeIdr = treasuryFeesReport?.summary?.feeCollectorLiveIdr ?? 0;
+    if (liveFeeIdr <= 0) {
+      showToast('error', 'Saldo Fee Collector (SYS_FEES) saat ini kosong, tidak ada yang perlu disweep.');
+      return;
+    }
+    setConfirmConfig({
+      isOpen: true,
+      title: 'Sweep Akumulasi Fee ke Treasury Reserve',
+      description: `Pindahkan seluruh saldo fee aktif di akun Fee Collector (estimasi Rp ${Math.round(liveFeeIdr).toLocaleString('id-ID')}) ke akun Treasury Reserve melalui Double-Entry Ledger? Catatan: setelah disweep, klaim staking berikutnya akan otomatis menarik dari Treasury Reserve apabila saldo SYS_FEES kosong.`,
+      confirmLabel: 'Sweep ke Treasury',
+      tone: 'brand',
+      onSubmit: async () => {
+        setIsSweepingFees(true);
+        try {
+          const token = localStorage.getItem('dimonex_auth_token');
+          const res = await fetch('/api/admin/treasury-fees/sweep', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Gagal melakukan sweep fee');
+          showToast('success', data.message || 'Fee berhasil disweep ke Treasury Reserve');
+          if (data.overview) setTreasuryFeesReport(data.overview);
+          await loadAllData();
+        } catch (err: any) {
+          showToast('error', err.message || 'Gagal melakukan sweep fee');
+        } finally {
+          setIsSweepingFees(false);
+        }
+      },
+    });
+  };
 
   const loadWsCatalog = useCallback(async (q = wsCatalogSearch, prov = wsCatalogProvider, force = false) => {
     if (!isAdmin) return;
@@ -1476,6 +1517,300 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
             </div>
           </div>
 
+          {/* Exchange Transaction Fee Revenue & Staking Earn Treasury Monitor */}
+          {(() => {
+            const feeSum = treasuryFeesReport?.summary;
+            const totalFeeIdr = feeSum?.totalExchangeFeesIdr ?? 0;
+            const totalFeeUsd = feeSum?.totalExchangeFeesUsd ?? 0;
+            const fees24hIdr = feeSum?.fees24hIdr ?? 0;
+            const userDirectFeesIdr = feeSum?.userDirectFeesIdr ?? 0;
+            const mmBotFeesIdr = feeSum?.mmBotFeesIdr ?? 0;
+            const stakingClaimedIdr = feeSum?.stakingClaimedAllTimeIdr ?? 0;
+            const stakingFeeFundedIdr = feeSum?.stakingFeePoolFundedIdr ?? 0;
+            const stakingPendingIdr = feeSum?.stakingPendingClaimableIdr ?? 0;
+            const netPoolIdr = feeSum?.netTreasuryFeePoolIdr ?? 0;
+            const coveragePct = feeSum?.feeCoverageRatioPct ?? 0;
+            const liveCollectorIdr = feeSum?.feeCollectorLiveIdr ?? 0;
+            const liveTreasuryIdr = feeSum?.treasuryReserveLiveIdr ?? 0;
+            const sweptIdr = feeSum?.totalSweptToTreasuryIdr ?? 0;
+
+            return (
+              <div className="p-5 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Coins className="w-4 h-4 text-[#D6A85C]" />
+                      <h3 className="text-sm font-semibold text-[#E4EBEF]">
+                        Monitor Fee Transaksi Exchange &amp; Sumber Pembayaran Staking Earn
+                      </h3>
+                    </div>
+                    <p className="text-xs text-[#A1AFB8] mt-1">
+                      Akumulasi riil seluruh fee Spot &amp; Futures transaksi pengguna/MM dialokasikan lebih dulu untuk klaim imbal hasil Staking Earn (<span className="font-mono text-[#E4EBEF]">SYS_FEES</span>), dengan fallback ke Treasury Reserve.
+                    </p>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={isSweepingFees || liveCollectorIdr <= 0}
+                    onClick={handleSweepTreasuryFees}
+                    icon={<ArrowUpRight className="w-3.5 h-3.5 text-[#D6A85C]" />}
+                    className="self-start sm:self-auto whitespace-nowrap"
+                  >
+                    {isSweepingFees ? 'Memproses...' : 'Sweep Fee → Treasury'}
+                  </Button>
+                </div>
+
+                {/* 4 Financial KPI Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+                  <div className="p-3.5 rounded-[8px] bg-[#17212B] border border-[#202B34] space-y-1">
+                    <span className="text-[11px] text-[#A1AFB8] block">Total Fee Transaksi (All-Time)</span>
+                    <span className="text-lg font-bold font-mono tabular-nums text-[#E4EBEF] block">
+                      Rp {Math.round(totalFeeIdr).toLocaleString('id-ID')}
+                    </span>
+                    <span className="text-[10px] font-mono tabular-nums text-[#8DA5B1] block">
+                      ${totalFeeUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · 24j: Rp {Math.round(fees24hIdr).toLocaleString('id-ID')}
+                    </span>
+                    <span className="text-[10px] font-mono tabular-nums text-[#71818B] block">
+                      User: Rp {Math.round(userDirectFeesIdr).toLocaleString('id-ID')} · MM/Bot: Rp {Math.round(mmBotFeesIdr).toLocaleString('id-ID')}
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-[8px] bg-[#17212B] border border-[#202B34] space-y-1">
+                    <span className="text-[11px] text-[#A1AFB8] block">Staking Earn Claimed (Terbayar)</span>
+                    <span className="text-lg font-bold font-mono tabular-nums text-[#D6A85C] block">
+                      Rp {Math.round(stakingClaimedIdr).toLocaleString('id-ID')}
+                    </span>
+                    <span className="text-[10px] font-mono tabular-nums text-[#35B887] block">
+                      Dari Fee Pool: Rp {Math.round(stakingFeeFundedIdr).toLocaleString('id-ID')}
+                    </span>
+                    <span className="text-[10px] font-mono tabular-nums text-[#71818B] block">
+                      Pending Klaim Aktif: Rp {Math.round(stakingPendingIdr).toLocaleString('id-ID')}
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-[8px] bg-[#17212B] border border-[#202B34] space-y-1">
+                    <span className="text-[11px] text-[#A1AFB8] block">Net Surplus Treasury Fee Pool</span>
+                    <span className={`text-lg font-bold font-mono tabular-nums block ${netPoolIdr >= 0 ? 'text-[#35B887]' : 'text-[#EA5B65]'}`}>
+                      {netPoolIdr < 0 ? '-' : ''}Rp {Math.abs(Math.round(netPoolIdr)).toLocaleString('id-ID')}
+                    </span>
+                    <span className="text-[10px] font-mono tabular-nums text-[#8DA5B1] block">
+                      Rasio Coverage Fee: {coveragePct.toFixed(1)}%
+                    </span>
+                    <span className="text-[10px] font-mono tabular-nums text-[#71818B] block">
+                      {feeSum?.totalTradesCount ?? 0} total trade ({feeSum?.trades24hCount ?? 0} dlm 24j)
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 rounded-[8px] bg-[#17212B] border border-[#202B34] space-y-1">
+                    <span className="text-[11px] text-[#A1AFB8] block">Fee Collector &amp; Treasury Live</span>
+                    <span className="text-lg font-bold font-mono tabular-nums text-[#6D9FE8] block">
+                      Rp {Math.round(liveCollectorIdr).toLocaleString('id-ID')}
+                    </span>
+                    <span className="text-[10px] font-mono tabular-nums text-[#A1AFB8] block">
+                      Treasury Reserve: Rp {Math.round(liveTreasuryIdr).toLocaleString('id-ID')}
+                    </span>
+                    <span className="text-[10px] font-mono tabular-nums text-[#71818B] block">
+                      Sudah di-Sweep: Rp {Math.round(sweptIdr).toLocaleString('id-ID')}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Sub-view Tabs */}
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                  <div className="flex items-center gap-1.5 overflow-x-auto">
+                    {([
+                      { id: 'CURRENCY', label: 'Per Aset & Treasury' },
+                      { id: 'PAIR', label: `Per Pair Trading (${treasuryFeesReport?.byPair?.length ?? 0})` },
+                      { id: 'CLAIMS', label: `Klaim Staking (${treasuryFeesReport?.recentStakingClaims?.length ?? 0})` },
+                    ] as const).map(tab => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setFeeMonitorView(tab.id)}
+                        className={`px-3 py-1.5 rounded-[6px] text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${
+                          feeMonitorView === tab.id
+                            ? 'bg-[#1D2832] text-[#E4EBEF] border border-[#40515D]'
+                            : 'bg-[#111820] text-[#71818B] border border-[#202B34] hover:text-[#E4EBEF]'
+                        }`}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="text-[11px] font-mono tabular-nums text-[#71818B]">
+                    FX Acuan: 1 USDT = Rp {Math.round(treasuryFeesReport?.fxRateIdr ?? 16350).toLocaleString('id-ID')}
+                  </span>
+                </div>
+
+                {/* View 1: Per Currency */}
+                {feeMonitorView === 'CURRENCY' && (
+                  <div className="overflow-x-auto rounded-[8px] border border-[#202B34]">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-[#111820] border-b border-[#202B34] text-[11px] font-mono uppercase tracking-wider text-[#71818B]">
+                          <th className="py-2.5 px-3">Aset</th>
+                          <th className="py-2.5 px-3 text-right">Fee Terkumpul</th>
+                          <th className="py-2.5 px-3 text-right">Fee Collector (SYS_FEES)</th>
+                          <th className="py-2.5 px-3 text-right">Staking Claimed</th>
+                          <th className="py-2.5 px-3 text-right">Pending Klaim</th>
+                          <th className="py-2.5 px-3 text-right">Net Surplus Pool</th>
+                          <th className="py-2.5 px-3 text-right">Treasury Reserve</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#202B34] font-mono tabular-nums">
+                        {!treasuryFeesReport || treasuryFeesReport.byCurrency.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="py-6 text-center text-[#71818B] font-sans">
+                              Memuat data fee per aset...
+                            </td>
+                          </tr>
+                        ) : (
+                          treasuryFeesReport.byCurrency.map(row => (
+                            <tr key={row.currency} className="hover:bg-[#17212B]/60 transition-colors">
+                              <td className="py-2.5 px-3 font-semibold text-[#E4EBEF]">{row.currency}</td>
+                              <td className="py-2.5 px-3 text-right text-[#E4EBEF]">
+                                {row.feeEarnedAllTimeDisplay} {row.currency}
+                              </td>
+                              <td className="py-2.5 px-3 text-right text-[#6D9FE8]">
+                                {row.feeCollectorBalanceDisplay} {row.currency}
+                              </td>
+                              <td className="py-2.5 px-3 text-right text-[#D6A85C]">
+                                {row.stakingClaimedDisplay} {row.currency}
+                              </td>
+                              <td className="py-2.5 px-3 text-right text-[#A1AFB8]">
+                                {row.stakingPendingDisplay} {row.currency}
+                              </td>
+                              <td
+                                className={`py-2.5 px-3 text-right font-semibold ${
+                                  row.netFeeSurplusDisplay.startsWith('-') ? 'text-[#EA5B65]' : 'text-[#35B887]'
+                                }`}
+                              >
+                                {row.netFeeSurplusDisplay} {row.currency}
+                              </td>
+                              <td className="py-2.5 px-3 text-right text-[#C1D0D6]">
+                                {row.treasuryReserveBalanceDisplay} {row.currency}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* View 2: Per Trading Pair */}
+                {feeMonitorView === 'PAIR' && (
+                  <div className="overflow-x-auto rounded-[8px] border border-[#202B34]">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-[#111820] border-b border-[#202B34] text-[11px] font-mono uppercase tracking-wider text-[#71818B]">
+                          <th className="py-2.5 px-3">Pair Trading</th>
+                          <th className="py-2.5 px-3 text-right">Trades (24j / All)</th>
+                          <th className="py-2.5 px-3 text-right">Fee dari User</th>
+                          <th className="py-2.5 px-3 text-right">Total Fee (Native)</th>
+                          <th className="py-2.5 px-3 text-right">Ekuivalen IDR</th>
+                          <th className="py-2.5 px-3 text-right">Kontribusi</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#202B34] font-mono tabular-nums">
+                        {!treasuryFeesReport || treasuryFeesReport.byPair.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="py-6 text-center text-[#71818B] font-sans">
+                              Belum ada eksekusi trade berbayar fee di Spot Engine.
+                            </td>
+                          </tr>
+                        ) : (
+                          treasuryFeesReport.byPair.map(p => (
+                            <tr key={p.pairId} className="hover:bg-[#17212B]/60 transition-colors">
+                              <td className="py-2.5 px-3 font-semibold text-[#E4EBEF]">{p.pairId}</td>
+                              <td className="py-2.5 px-3 text-right text-[#A1AFB8]">
+                                {p.trades24hCount} / {p.tradeCount}
+                              </td>
+                              <td className="py-2.5 px-3 text-right text-[#35B887]">
+                                {p.userFeesDisplay} {p.quoteCurrency}
+                              </td>
+                              <td className="py-2.5 px-3 text-right text-[#E4EBEF]">
+                                {p.totalFeesDisplay} {p.quoteCurrency}
+                              </td>
+                              <td className="py-2.5 px-3 text-right text-[#D6A85C]">
+                                Rp {Math.round(p.totalFeesIdr).toLocaleString('id-ID')}
+                              </td>
+                              <td className="py-2.5 px-3 text-right text-[#8DA5B1]">
+                                {p.sharePct.toFixed(1)}%
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* View 3: Recent Staking Claims */}
+                {feeMonitorView === 'CLAIMS' && (
+                  <div className="overflow-x-auto rounded-[8px] border border-[#202B34]">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-[#111820] border-b border-[#202B34] text-[11px] font-mono uppercase tracking-wider text-[#71818B]">
+                          <th className="py-2.5 px-3">Waktu</th>
+                          <th className="py-2.5 px-3">Staker</th>
+                          <th className="py-2.5 px-3">Vault</th>
+                          <th className="py-2.5 px-3">Sumber Dana</th>
+                          <th className="py-2.5 px-3 text-right">Claimed Yield</th>
+                          <th className="py-2.5 px-3 text-right">Journal ID</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#202B34]">
+                        {!treasuryFeesReport || treasuryFeesReport.recentStakingClaims.length === 0 ? (
+                          <tr>
+                            <td colSpan={6} className="py-6 text-center text-[#71818B]">
+                              Belum ada riwayat klaim atau settlement imbal hasil staking.
+                            </td>
+                          </tr>
+                        ) : (
+                          treasuryFeesReport.recentStakingClaims.map(c => (
+                            <tr key={c.id} className="hover:bg-[#17212B]/60 transition-colors">
+                              <td className="py-2.5 px-3 font-mono text-[11px] text-[#A1AFB8] whitespace-nowrap">
+                                {new Date(c.createdAt).toLocaleString('id-ID')}
+                              </td>
+                              <td className="py-2.5 px-3 text-[#E4EBEF] truncate max-w-[170px]">
+                                {c.userEmail}
+                              </td>
+                              <td className="py-2.5 px-3 text-[#A1AFB8]">{c.vaultName}</td>
+                              <td className="py-2.5 px-3">
+                                <StatusBadge
+                                  tone={
+                                    c.fundingSource === 'EXCHANGE_FEE_POOL'
+                                      ? 'success'
+                                      : c.fundingSource === 'HYBRID_FEE_AND_TREASURY'
+                                        ? 'warning'
+                                        : 'info'
+                                  }
+                                >
+                                  {c.fundingSource === 'EXCHANGE_FEE_POOL'
+                                    ? 'FEE POOL'
+                                    : c.fundingSource === 'HYBRID_FEE_AND_TREASURY'
+                                      ? 'HYBRID FEE+TREASURY'
+                                      : 'TREASURY'}
+                                </StatusBadge>
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono tabular-nums font-semibold text-[#35B887]">
+                                +{c.amountDisplay} {c.asset}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono text-[11px] text-[#71818B]">
+                                {c.journalId}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Double-Entry Ledger Invariant Verification */}
           <div className="p-5 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1497,17 +1832,21 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
             {/* Solvency Liabilities Table */}
             {stats?.liabilitiesByCurrency && (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
-                {Object.entries(stats.liabilitiesByCurrency).map(([curr, val]: [string, any]) => (
-                  <div key={curr} className="p-3 rounded-[10px] bg-[#17212B] border border-[#202B34] font-mono tabular-nums text-xs">
-                    <span className="text-[#A1AFB8] text-[10px] block">{curr} Liabilitas Sirkulasi</span>
-                    <span className="font-bold text-[#E4EBEF] text-sm block mt-0.5">
-                      {curr === 'IDR' ? formatIDR(val.total) : `${(Number(safeBigInt(val.total)) / 1e8).toLocaleString()} ${curr}`}
-                    </span>
-                    <span className="text-[10px] text-[#71818B] block mt-0.5">
-                      Terkunci order: {curr === 'IDR' ? formatIDR(val.locked) : `${(Number(safeBigInt(val.locked)) / 1e8).toLocaleString()}`}
-                    </span>
-                  </div>
-                ))}
+                {Object.entries(stats.liabilitiesByCurrency).map(([curr, val]: [string, any]) => {
+                  const dec = curr === 'IDR' ? 2 : curr === 'USDT' || curr === 'USDC' ? 6 : 8;
+                  const div = 10 ** dec;
+                  return (
+                    <div key={curr} className="p-3 rounded-[10px] bg-[#17212B] border border-[#202B34] font-mono tabular-nums text-xs">
+                      <span className="text-[#A1AFB8] text-[10px] block">{curr} Liabilitas Sirkulasi</span>
+                      <span className="font-bold text-[#E4EBEF] text-sm block mt-0.5">
+                        {curr === 'IDR' ? formatIDR(val.total) : `${(Number(safeBigInt(val.total)) / div).toLocaleString()} ${curr}`}
+                      </span>
+                      <span className="text-[10px] text-[#71818B] block mt-0.5">
+                        Terkunci order: {curr === 'IDR' ? formatIDR(val.locked) : `${(Number(safeBigInt(val.locked)) / div).toLocaleString()}`}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -2244,33 +2583,50 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
             </Button>
           </div>
 
-          {/* Solvency Audit Status */}
-          <div className="p-5 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-3">
-            <h4 className="text-xs font-semibold text-[#C1D0D6] uppercase tracking-wider font-mono">
-              Ringkasan Saldo Cadangan Treasury Bursa (Sistem Kepatuhan)
-            </h4>
+          {/* Solvency Audit Status & Live Treasury + Fee Collector Balances */}
+          <div className="p-5 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h4 className="text-xs font-semibold text-[#C1D0D6] uppercase tracking-wider font-mono">
+                  Ringkasan Saldo Riil Treasury &amp; Fee Collector Bursa (Double-Entry Live)
+                </h4>
+                <p className="text-xs text-[#71818B] mt-0.5">
+                  Saldo riil rekening <span className="font-mono text-[#A1AFB8]">SYS_TREASURY</span> &amp; <span className="font-mono text-[#A1AFB8]">SYS_FEES</span> langsung dari Ledger Storage.
+                </p>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={isSweepingFees || (treasuryFeesReport?.summary?.feeCollectorLiveIdr ?? 0) <= 0}
+                onClick={handleSweepTreasuryFees}
+                icon={<ArrowUpRight className="w-3.5 h-3.5 text-[#D6A85C]" />}
+                className="self-start sm:self-auto whitespace-nowrap"
+              >
+                {isSweepingFees ? 'Menyapu...' : 'Sweep Fee Collector → Treasury'}
+              </Button>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <div className="p-3.5 rounded-[10px] bg-[#17212B] border border-[#202B34] font-mono tabular-nums text-xs">
-                <span className="text-[#A1AFB8] block">Akun Cadangan Treasury IDR</span>
-                <span className="text-lg font-bold text-[#35B887] mt-1 block">
-                  Rp 100.000.000.000,00
-                </span>
-                <span className="text-[10px] text-[#71818B] mt-0.5 block">Penjamin likuiditas fiat bursa</span>
-              </div>
-              <div className="p-3.5 rounded-[10px] bg-[#17212B] border border-[#202B34] font-mono tabular-nums text-xs">
-                <span className="text-[#A1AFB8] block">Akun Cadangan Treasury BTC</span>
-                <span className="text-lg font-bold text-[#D6A85C] mt-1 block">
-                  500.00000000 BTC
-                </span>
-                <span className="text-[10px] text-[#71818B] mt-0.5 block">Cadangan cold storage dompet dingin</span>
-              </div>
-              <div className="p-3.5 rounded-[10px] bg-[#17212B] border border-[#202B34] font-mono tabular-nums text-xs">
-                <span className="text-[#A1AFB8] block">Akun Cadangan Treasury USDT</span>
-                <span className="text-lg font-bold text-[#6D9FE8] mt-1 block">
-                  5.000.000,00 USDT
-                </span>
-                <span className="text-[10px] text-[#71818B] mt-0.5 block">Kolateral FX matching engine</span>
-              </div>
+              {(treasuryFeesReport?.byCurrency || []).slice(0, 6).map(item => (
+                <div key={item.currency} className="p-3.5 rounded-[10px] bg-[#17212B] border border-[#202B34] font-mono tabular-nums text-xs space-y-1">
+                  <span className="text-[#A1AFB8] block">Treasury Reserve {item.currency}</span>
+                  <span className="text-base font-bold text-[#35B887] block">
+                    {item.treasuryReserveBalanceDisplay} {item.currency}
+                  </span>
+                  <div className="flex justify-between text-[11px] text-[#6D9FE8] pt-1 border-t border-[#202B34]">
+                    <span>Fee Collector:</span>
+                    <span>{item.feeCollectorBalanceDisplay} {item.currency}</span>
+                  </div>
+                  <div className="flex justify-between text-[10px] text-[#71818B]">
+                    <span>Total Fee / Klaim Earn:</span>
+                    <span>{item.feeEarnedAllTimeDisplay} / {item.stakingClaimedDisplay}</span>
+                  </div>
+                </div>
+              ))}
+              {(!treasuryFeesReport || treasuryFeesReport.byCurrency.length === 0) && (
+                <div className="col-span-3 p-4 rounded-[10px] bg-[#17212B] border border-[#202B34] text-xs text-[#71818B]">
+                  Memuat saldo Treasury &amp; Fee Collector...
+                </div>
+              )}
             </div>
           </div>
         </div>

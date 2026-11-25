@@ -34,6 +34,7 @@ import { StatusBadge } from '../../ui/StatusBadge.js';
 import { SegmentedTabs } from '../../ui/Tabs.js';
 import { AssetIcon } from '../../ui/AssetIcon.js';
 import {
+  AdminTreasuryFeeOverview,
   EarnCustodySolvencyReport,
   EarnPayoutItem,
   EarnPayoutType,
@@ -101,6 +102,7 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
   const [payouts, setPayouts] = useState<AdminEarnPayout[]>([]);
   const [solvency, setSolvency] = useState<EarnCustodySolvencyReport | null>(null);
   const [earnAssets, setEarnAssets] = useState<AdminEarnAsset[]>([]);
+  const [treasuryFees, setTreasuryFees] = useState<AdminTreasuryFeeOverview | null>(null);
 
   // Filters
   const [vaultSearch, setVaultSearch] = useState('');
@@ -170,12 +172,13 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
 
     const headers = { Authorization: `Bearer ${token}` };
     try {
-      const [poolsRes, posRes, payRes, solvRes, assetsRes] = await Promise.all([
+      const [poolsRes, posRes, payRes, solvRes, assetsRes, feesRes] = await Promise.all([
         fetch('/api/admin/earn/pools', { headers }),
         fetch('/api/admin/earn/positions?limit=150', { headers }),
         fetch('/api/admin/earn/payouts?limit=150', { headers }),
         fetch('/api/admin/earn/solvency', { headers }),
         fetch('/api/admin/earn/assets', { headers }),
+        fetch('/api/admin/treasury-fees', { headers }),
       ]);
 
       if (!poolsRes.ok) {
@@ -197,6 +200,9 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
       if (solvRes.ok) {
         setSolvency(await solvRes.json());
       }
+      if (feesRes.ok) {
+        setTreasuryFees(await feesRes.json());
+      }
       if (assetsRes.ok) {
         const assetsData = await assetsRes.json();
         const list: AdminEarnAsset[] = assetsData.assets || [];
@@ -211,6 +217,27 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
       setIsLoading(false);
     }
   }, [createForm.asset]);
+
+  const handleSweepFeesToTreasury = async () => {
+    setActionBusy(true);
+    try {
+      const token = localStorage.getItem('dimonex_auth_token');
+      const res = await fetch('/api/admin/treasury-fees/sweep', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gagal menyapu fee ke treasury');
+      notify('success', data.message || 'Fee berhasil disweep ke Treasury Reserve.');
+      if (data.overview) setTreasuryFees(data.overview);
+      await loadConsoleData(true);
+      onAuditRefresh?.();
+    } catch (err: any) {
+      notify('error', err.message || 'Gagal melakukan sweep fee');
+    } finally {
+      setActionBusy(false);
+    }
+  };
 
   useEffect(() => {
     loadConsoleData(false);
@@ -575,6 +602,61 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
         </div>
       </div>
 
+      {/* Treasury Fee Funding Provenance Strip */}
+      <div className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 flex-1 font-mono tabular-nums text-xs">
+          <div>
+            <span className="text-[11px] font-sans text-[#71818B] block">Total Fee Exchange (All-Time)</span>
+            <span className="text-sm font-bold text-[#E4EBEF] mt-0.5 block">
+              {formatIdr(treasuryFees?.summary?.totalExchangeFeesIdr ?? 0)}
+            </span>
+            <span className="text-[10px] text-[#8DA5B1]">
+              User: {formatIdr(treasuryFees?.summary?.userDirectFeesIdr ?? 0)}
+            </span>
+          </div>
+          <div>
+            <span className="text-[11px] font-sans text-[#71818B] block">Total Claimed Yield Paid</span>
+            <span className="text-sm font-bold text-[#D6A85C] mt-0.5 block">
+              {formatIdr(treasuryFees?.summary?.stakingClaimedAllTimeIdr ?? 0)}
+            </span>
+            <span className="text-[10px] text-[#35B887]">
+              Fee Pool: {formatIdr(treasuryFees?.summary?.stakingFeePoolFundedIdr ?? 0)}
+            </span>
+          </div>
+          <div>
+            <span className="text-[11px] font-sans text-[#71818B] block">Sisa Fee Pool Net &amp; Coverage</span>
+            <span
+              className={`text-sm font-bold mt-0.5 block ${
+                (treasuryFees?.summary?.netTreasuryFeePoolIdr ?? 0) >= 0 ? 'text-[#35B887]' : 'text-[#EA5B65]'
+              }`}
+            >
+              {formatIdr(treasuryFees?.summary?.netTreasuryFeePoolIdr ?? 0)}
+            </span>
+            <span className="text-[10px] text-[#8DA5B1]">
+              Rasio Coverage: {(treasuryFees?.summary?.feeCoverageRatioPct ?? 0).toFixed(1)}%
+            </span>
+          </div>
+          <div>
+            <span className="text-[11px] font-sans text-[#71818B] block">Live Fee Collector (SYS_FEES)</span>
+            <span className="text-sm font-bold text-[#6D9FE8] mt-0.5 block">
+              {formatIdr(treasuryFees?.summary?.feeCollectorLiveIdr ?? 0)}
+            </span>
+            <span className="text-[10px] text-[#71818B]">
+              Pending Klaim: {formatIdr(treasuryFees?.summary?.stakingPendingClaimableIdr ?? 0)}
+            </span>
+          </div>
+        </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={actionBusy || (treasuryFees?.summary?.feeCollectorLiveIdr ?? 0) <= 0}
+          onClick={handleSweepFeesToTreasury}
+          className="self-start lg:self-auto whitespace-nowrap"
+        >
+          Sweep Fee → Treasury
+        </Button>
+      </div>
+
       {/* Sub-Tabs Navigation */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <SegmentedTabs<ConsoleSubTab>
@@ -923,6 +1005,7 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
                   <th className="py-2.5 px-3">User</th>
                   <th className="py-2.5 px-3">Vault &amp; Aset</th>
                   <th className="py-2.5 px-3">Tipe Pembayaran</th>
+                  <th className="py-2.5 px-3">Sumber Dana</th>
                   <th className="py-2.5 px-3 text-right">Nominal Yield</th>
                   <th className="py-2.5 px-3 text-right">APY%</th>
                   <th className="py-2.5 px-4 text-right">Ledger Journal ID</th>
@@ -931,7 +1014,7 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
               <tbody className="divide-y divide-[#202B34]">
                 {filteredPayouts.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-10 text-center text-xs text-[#71818B]">
+                    <td colSpan={8} className="py-10 text-center text-xs text-[#71818B]">
                       {isLoading ? 'Memuat riwayat distribusi yield...' : 'Belum ada catatan distribusi yield.'}
                     </td>
                   </tr>
@@ -957,6 +1040,27 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
                           }
                         >
                           {row.payoutType}
+                        </StatusBadge>
+                      </td>
+                      <td className="py-3 px-3">
+                        <StatusBadge
+                          tone={
+                            row.fundingSource === 'EXCHANGE_FEE_POOL'
+                              ? 'success'
+                              : row.fundingSource === 'HYBRID_FEE_AND_TREASURY'
+                                ? 'warning'
+                                : row.fundingSource === 'ACCRUAL_LEDGER'
+                                  ? 'neutral'
+                                  : 'info'
+                          }
+                        >
+                          {row.fundingSource === 'EXCHANGE_FEE_POOL'
+                            ? 'FEE POOL'
+                            : row.fundingSource === 'HYBRID_FEE_AND_TREASURY'
+                              ? 'HYBRID'
+                              : row.fundingSource === 'ACCRUAL_LEDGER'
+                                ? 'ACCRUAL'
+                                : 'TREASURY'}
                         </StatusBadge>
                       </td>
                       <td className="py-3 px-3 text-right font-mono tabular-nums font-semibold text-[#35B887]">

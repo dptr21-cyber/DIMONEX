@@ -15,8 +15,9 @@
  */
 
 import crypto from 'crypto';
-import { db, SYSTEM_EARN_CUSTODY_ID, SYSTEM_TREASURY_ID } from '../../db/database.js';
+import { db, SYSTEM_EARN_CUSTODY_ID, SYSTEM_FEE_ID, SYSTEM_TREASURY_ID } from '../../db/database.js';
 import {
+  EarnPayoutFundingSource,
   EarnPayoutRecord,
   EarnPosition,
   EarnVault,
@@ -72,6 +73,53 @@ export class EarnService {
 
   constructor() {
     this.ensureDefaultVaults();
+  }
+
+  /**
+   * Resolves double-entry debit legs for paying out Staking Earn yields.
+   * Priority 1: Exchange Fee Collector (`SYSTEM_FEE_ID`) in the payout asset.
+   * Priority 2: Fallback to Exchange Treasury Reserve (`SYSTEM_TREASURY_ID`) for any remaining shortfall.
+   * Preserves strict double-entry balance and prevents `SYSTEM_FEE_ID` overdraft.
+   */
+  private buildYieldFundingDebits(
+    asset: string,
+    amountUnits: bigint
+  ): {
+    entries: Array<{ accountId: string; entryType: 'DEBIT'; amount: bigint }>;
+    fundingSource: EarnPayoutFundingSource;
+    feeFundedUnits: bigint;
+    treasuryFundedUnits: bigint;
+  } {
+    const feeAcc = db.createOrGetAccount(SYSTEM_FEE_ID, asset);
+    const treasuryAcc = db.createOrGetAccount(SYSTEM_TREASURY_ID, asset);
+
+    const rawFeeAvail = BigInt(feeAcc.balanceAvailable || '0');
+    const feeAvail = rawFeeAvail > 0n ? rawFeeAvail : 0n;
+
+    const feeFundedUnits = feeAvail >= amountUnits ? amountUnits : feeAvail;
+    const treasuryFundedUnits = amountUnits - feeFundedUnits;
+
+    const entries: Array<{ accountId: string; entryType: 'DEBIT'; amount: bigint }> = [];
+    if (feeFundedUnits > 0n) {
+      entries.push({ accountId: feeAcc.id, entryType: 'DEBIT', amount: feeFundedUnits });
+    }
+    if (treasuryFundedUnits > 0n) {
+      entries.push({ accountId: treasuryAcc.id, entryType: 'DEBIT', amount: treasuryFundedUnits });
+    }
+
+    const fundingSource: EarnPayoutFundingSource =
+      treasuryFundedUnits === 0n
+        ? 'EXCHANGE_FEE_POOL'
+        : feeFundedUnits > 0n
+          ? 'HYBRID_FEE_AND_TREASURY'
+          : 'TREASURY_RESERVE';
+
+    return {
+      entries,
+      fundingSource,
+      feeFundedUnits,
+      treasuryFundedUnits,
+    };
   }
 
   /**
@@ -704,23 +752,23 @@ export class EarnService {
           }
 
           if (pos.autoCompound && vault?.autoCompoundSupported) {
-            const treasuryAcc = db.createOrGetAccount(SYSTEM_TREASURY_ID, pos.asset);
             const custodyAcc = db.createOrGetAccount(SYSTEM_EARN_CUSTODY_ID, pos.asset);
             const idemKey = `earn-settle:${pos.id}:day:${dayIdx}`;
             const alreadySettled = db.journalIdempotencyIndex.has(idemKey);
 
-            const { journal } = LedgerService.executeJournal({
-              idempotencyKey: idemKey,
-              txType: 'EARN_YIELD',
-              referenceId: pos.id,
-              description: `Earn Auto-Compound Yield Day #${dayIdx} for ${pos.id} (${pos.asset})`,
-              entries: [
-                { accountId: treasuryAcc.id, entryType: 'DEBIT', amount: dailyYield },
-                { accountId: custodyAcc.id, entryType: 'CREDIT', amount: dailyYield },
-              ],
-            });
-
             if (!alreadySettled) {
+              const funding = this.buildYieldFundingDebits(pos.asset, dailyYield);
+              const { journal } = LedgerService.executeJournal({
+                idempotencyKey: idemKey,
+                txType: 'EARN_YIELD',
+                referenceId: pos.id,
+                description: `Earn Auto-Compound Yield Day #${dayIdx} for ${pos.id} (${pos.asset}) [${funding.fundingSource}]`,
+                entries: [
+                  ...funding.entries,
+                  { accountId: custodyAcc.id, entryType: 'CREDIT', amount: dailyYield },
+                ],
+              });
+
               principalUnits += dailyYield;
               pos.principalUnits = principalUnits.toString();
               pos.totalYieldEarnedUnits = (BigInt(pos.totalYieldEarnedUnits || '0') + dailyYield).toString();
@@ -736,6 +784,9 @@ export class EarnService {
                 apyBps: effectiveApyBps,
                 settlementDayIndex: dayIdx,
                 journalId: journal.id,
+                fundingSource: funding.fundingSource,
+                feeFundedUnits: funding.feeFundedUnits.toString(),
+                treasuryFundedUnits: funding.treasuryFundedUnits.toString(),
                 createdAt: nowMs,
               });
               payoutsCreated += 1;
@@ -762,6 +813,9 @@ export class EarnService {
                 apyBps: effectiveApyBps,
                 settlementDayIndex: dayIdx,
                 journalId: payoutKey,
+                fundingSource: 'ACCRUAL_LEDGER',
+                feeFundedUnits: '0',
+                treasuryFundedUnits: '0',
                 createdAt: nowMs,
               });
               payoutsCreated += 1;
@@ -829,16 +883,16 @@ export class EarnService {
 
     const vault = db.earnVaults.get(pos.vaultId);
     const effectiveApyBps = vault && vault.durationDays === 0 ? vault.apyBps : pos.apyBps;
-    const treasuryAcc = db.createOrGetAccount(SYSTEM_TREASURY_ID, pos.asset);
     const userAcc = db.createOrGetAccount(userId, pos.asset);
+    const funding = this.buildYieldFundingDebits(pos.asset, claimableUnits);
 
     const { journal } = LedgerService.executeJournal({
       idempotencyKey: `earn-claim:${pos.id}:${pos.claimedYieldUnits}:${now}`,
       txType: 'EARN_YIELD',
       referenceId: pos.id,
-      description: `Manual Yield Claim ${PrecisionMath.formatFromUnits(claimableUnits, pos.decimals, true)} ${pos.asset} from ${pos.id}`,
+      description: `Manual Yield Claim ${PrecisionMath.formatFromUnits(claimableUnits, pos.decimals, true)} ${pos.asset} from ${pos.id} [${funding.fundingSource}]`,
       entries: [
-        { accountId: treasuryAcc.id, entryType: 'DEBIT', amount: claimableUnits },
+        ...funding.entries,
         { accountId: userAcc.id, entryType: 'CREDIT', amount: claimableUnits },
       ],
     });
@@ -859,6 +913,9 @@ export class EarnService {
       amountUnits: claimableUnits.toString(),
       apyBps: effectiveApyBps,
       journalId: journal.id,
+      fundingSource: funding.fundingSource,
+      feeFundedUnits: funding.feeFundedUnits.toString(),
+      treasuryFundedUnits: funding.treasuryFundedUnits.toString(),
       createdAt: now,
     };
     db.earnPayouts.push(payout);
@@ -867,7 +924,7 @@ export class EarnService {
       actorId: userId,
       action: 'EARN_YIELD_CLAIMED',
       resource: `earn_pos:${pos.id}`,
-      details: `Claimed ${PrecisionMath.formatFromUnits(claimableUnits, pos.decimals, true)} ${pos.asset} yield (Journal ${journal.id})`,
+      details: `Claimed ${PrecisionMath.formatFromUnits(claimableUnits, pos.decimals, true)} ${pos.asset} yield (${funding.fundingSource}: Fee Pool ${PrecisionMath.formatFromUnits(funding.feeFundedUnits, pos.decimals, true)}, Treasury ${PrecisionMath.formatFromUnits(funding.treasuryFundedUnits, pos.decimals, true)}, Journal ${journal.id})`,
       createdAt: now,
     });
     db.scheduleSave();
@@ -971,13 +1028,14 @@ export class EarnService {
       pos.accruedYieldUnits = '0';
     } else if (fullRedeem && BigInt(pos.accruedYieldUnits || '0') > 0n) {
       settledYieldUnits = BigInt(pos.accruedYieldUnits);
+      const yieldFunding = this.buildYieldFundingDebits(pos.asset, settledYieldUnits);
       const { journal: yieldJournal } = LedgerService.executeJournal({
         idempotencyKey: `earn-redeem-yield:${pos.id}:${now}`,
         txType: 'EARN_YIELD',
         referenceId: pos.id,
-        description: `Final Yield Settlement on Redemption ${PrecisionMath.formatFromUnits(settledYieldUnits, pos.decimals, true)} ${pos.asset}`,
+        description: `Final Yield Settlement on Redemption ${PrecisionMath.formatFromUnits(settledYieldUnits, pos.decimals, true)} ${pos.asset} [${yieldFunding.fundingSource}]`,
         entries: [
-          { accountId: treasuryAcc.id, entryType: 'DEBIT', amount: settledYieldUnits },
+          ...yieldFunding.entries,
           { accountId: userAcc.id, entryType: 'CREDIT', amount: settledYieldUnits },
         ],
       });
@@ -994,6 +1052,9 @@ export class EarnService {
         amountUnits: settledYieldUnits.toString(),
         apyBps: vault && vault.durationDays === 0 ? vault.apyBps : pos.apyBps,
         journalId: yieldJournal.id,
+        fundingSource: yieldFunding.fundingSource,
+        feeFundedUnits: yieldFunding.feeFundedUnits.toString(),
+        treasuryFundedUnits: yieldFunding.treasuryFundedUnits.toString(),
         createdAt: now,
       });
     }
@@ -1384,6 +1445,560 @@ export class EarnService {
       isFullySolvent,
       checkedAt: Date.now(),
       assets: rows,
+    };
+  }
+
+  private resolveCurrencyDecimals(symbol: string): number {
+    const upper = symbol.trim().toUpperCase();
+    for (const ast of db.assets.values()) {
+      if (ast.symbol.toUpperCase() === upper) return ast.decimals;
+    }
+    if (upper === 'IDR') return 2;
+    if (upper === 'USDT' || upper === 'USDC') return 6;
+    return 8;
+  }
+
+  /**
+   * Computes complete live Exchange Fee Revenue across all user & MM transactions
+   * reconciled against Staking Earn yield claims & Treasury reserves.
+   */
+  public getExchangeFeeAndEarnTreasuryStats() {
+    const now = Date.now();
+    const oneDayAgo = now - MS_PER_DAY;
+    const fxRateIdr = Math.max(1, fxConversionService.getCurrentRate().rate || 16350);
+
+    const resolveQuoteForPair = (pairId: string): { baseCurrency: string; quoteCurrency: string; quoteDecimals: number } => {
+      const pair = db.tradingPairs.get(pairId);
+      if (pair) {
+        return {
+          baseCurrency: pair.baseCurrency,
+          quoteCurrency: pair.quoteCurrency,
+          quoteDecimals: pair.quoteDecimals ?? this.resolveCurrencyDecimals(pair.quoteCurrency),
+        };
+      }
+      const parts = pairId.split('-');
+      const baseCurrency = parts[0] || pairId;
+      const quoteCurrency = parts[1] || 'IDR';
+      return {
+        baseCurrency,
+        quoteCurrency,
+        quoteDecimals: this.resolveCurrencyDecimals(quoteCurrency),
+      };
+    };
+
+    const isDirectUser = (userId: string): boolean => {
+      if (!userId || userId.startsWith('sys-')) return false;
+      const u = db.users.get(userId);
+      if (!u) return true;
+      const role = String(u.role || 'USER').toUpperCase();
+      return role === 'USER' || role === 'COMPLIANCE';
+    };
+
+    // Index ledger entries by journalId for Futures fees and Treasury fee sweeps
+    const entriesByJournal = new Map<string, typeof db.ledgerEntries>();
+    for (const entry of db.ledgerEntries) {
+      let arr = entriesByJournal.get(entry.journalId);
+      if (!arr) {
+        arr = [];
+        entriesByJournal.set(entry.journalId, arr);
+      }
+      arr.push(entry);
+    }
+
+    const currencyStats = new Map<
+      string,
+      {
+        feeEarnedUnits: bigint;
+        feeEarned24hUnits: bigint;
+        spotMakerUnits: bigint;
+        spotTakerUnits: bigint;
+        futuresUnits: bigint;
+        userDirectUnits: bigint;
+        mmBotUnits: bigint;
+        sweptUnits: bigint;
+        stakingClaimedUnits: bigint;
+        stakingClaimed24hUnits: bigint;
+        stakingFeeFundedUnits: bigint;
+        stakingTreasuryFundedUnits: bigint;
+        stakingPendingUnits: bigint;
+      }
+    >();
+
+    const ensureCurr = (curr: string) => {
+      const key = curr.trim().toUpperCase();
+      let rec = currencyStats.get(key);
+      if (!rec) {
+        rec = {
+          feeEarnedUnits: 0n,
+          feeEarned24hUnits: 0n,
+          spotMakerUnits: 0n,
+          spotTakerUnits: 0n,
+          futuresUnits: 0n,
+          userDirectUnits: 0n,
+          mmBotUnits: 0n,
+          sweptUnits: 0n,
+          stakingClaimedUnits: 0n,
+          stakingClaimed24hUnits: 0n,
+          stakingFeeFundedUnits: 0n,
+          stakingTreasuryFundedUnits: 0n,
+          stakingPendingUnits: 0n,
+        };
+        currencyStats.set(key, rec);
+      }
+      return rec;
+    };
+
+    // Always include primary reserve & vault currencies
+    for (const c of ['IDR', 'USDT', 'BTC', 'ETH', 'SOL']) ensureCurr(c);
+    for (const v of db.earnVaults.values()) ensureCurr(v.asset);
+    for (const p of db.tradingPairs.values()) {
+      ensureCurr(p.quoteCurrency);
+    }
+
+    // Pair-level aggregation
+    const pairStats = new Map<
+      string,
+      {
+        pairId: string;
+        baseCurrency: string;
+        quoteCurrency: string;
+        quoteDecimals: number;
+        tradeCount: number;
+        trades24hCount: number;
+        makerFeesUnits: bigint;
+        takerFeesUnits: bigint;
+        totalFeesUnits: bigint;
+        userFeesUnits: bigint;
+      }
+    >();
+
+    let totalTradesCount = 0;
+    let trades24hCount = 0;
+
+    // 1. Aggregate Spot trade fees (all fees credited in quoteCurrency)
+    for (const trade of db.trades) {
+      totalTradesCount += 1;
+      const is24h = trade.createdAt >= oneDayAgo;
+      if (is24h) trades24hCount += 1;
+
+      const meta = resolveQuoteForPair(trade.pairId);
+      const makerFee = BigInt(trade.makerFee || '0');
+      const takerFee = BigInt(trade.takerFee || '0');
+      const tradeTotal = makerFee + takerFee;
+
+      const makerUserDirect = isDirectUser(trade.makerUserId);
+      const takerUserDirect = isDirectUser(trade.takerUserId);
+      const userPortion = (makerUserDirect ? makerFee : 0n) + (takerUserDirect ? takerFee : 0n);
+      const mmPortion = tradeTotal - userPortion;
+
+      const cRec = ensureCurr(meta.quoteCurrency);
+      cRec.feeEarnedUnits += tradeTotal;
+      cRec.spotMakerUnits += makerFee;
+      cRec.spotTakerUnits += takerFee;
+      cRec.userDirectUnits += userPortion;
+      cRec.mmBotUnits += mmPortion;
+      if (is24h) cRec.feeEarned24hUnits += tradeTotal;
+
+      let pRec = pairStats.get(trade.pairId);
+      if (!pRec) {
+        pRec = {
+          pairId: trade.pairId,
+          baseCurrency: meta.baseCurrency,
+          quoteCurrency: meta.quoteCurrency,
+          quoteDecimals: meta.quoteDecimals,
+          tradeCount: 0,
+          trades24hCount: 0,
+          makerFeesUnits: 0n,
+          takerFeesUnits: 0n,
+          totalFeesUnits: 0n,
+          userFeesUnits: 0n,
+        };
+        pairStats.set(trade.pairId, pRec);
+      }
+      pRec.tradeCount += 1;
+      if (is24h) pRec.trades24hCount += 1;
+      pRec.makerFeesUnits += makerFee;
+      pRec.takerFeesUnits += takerFee;
+      pRec.totalFeesUnits += tradeTotal;
+      pRec.userFeesUnits += userPortion;
+    }
+
+    // 2. Aggregate Futures fees & Fee-to-Treasury sweeps directly from Ledger journals
+    for (const journal of db.journalTransactions.values()) {
+      if (journal.txType !== 'FUTURES_FEE' && journal.txType !== 'FEE_TREASURY_SWEEP') continue;
+      const entries = entriesByJournal.get(journal.id) || [];
+
+      if (journal.txType === 'FUTURES_FEE') {
+        let debitedUserId = '';
+        for (const e of entries) {
+          if (e.entryType === 'DEBIT') {
+            const debAcc = db.ledgerAccounts.get(e.accountId);
+            if (debAcc) debitedUserId = debAcc.userId;
+          }
+        }
+        const userDirect = isDirectUser(debitedUserId);
+        for (const e of entries) {
+          if (e.entryType !== 'CREDIT') continue;
+          const acc = db.ledgerAccounts.get(e.accountId);
+          if (!acc || acc.userId !== SYSTEM_FEE_ID) continue;
+          const amt = BigInt(e.amount || '0');
+          const cRec = ensureCurr(acc.currency);
+          cRec.feeEarnedUnits += amt;
+          cRec.futuresUnits += amt;
+          if (journal.createdAt >= oneDayAgo) cRec.feeEarned24hUnits += amt;
+          if (userDirect) cRec.userDirectUnits += amt;
+          else cRec.mmBotUnits += amt;
+        }
+      } else if (journal.txType === 'FEE_TREASURY_SWEEP') {
+        for (const e of entries) {
+          if (e.entryType !== 'CREDIT') continue;
+          const acc = db.ledgerAccounts.get(e.accountId);
+          if (!acc || acc.userId !== SYSTEM_TREASURY_ID) continue;
+          const amt = BigInt(e.amount || '0');
+          const cRec = ensureCurr(acc.currency);
+          cRec.sweptUnits += amt;
+        }
+      }
+    }
+
+    // 3. Aggregate Staking Earn Payouts (claimed & funded)
+    const claimedPayouts: typeof db.earnPayouts = [];
+    for (const p of db.earnPayouts) {
+      if (p.payoutType === 'DAILY_SETTLEMENT') continue;
+      claimedPayouts.push(p);
+      const amt = BigInt(p.amountUnits || '0');
+      const feeFunded = p.feeFundedUnits
+        ? BigInt(p.feeFundedUnits)
+        : p.fundingSource === 'EXCHANGE_FEE_POOL'
+          ? amt
+          : 0n;
+      const treasuryFunded = p.treasuryFundedUnits
+        ? BigInt(p.treasuryFundedUnits)
+        : amt > feeFunded
+          ? amt - feeFunded
+          : 0n;
+
+      const cRec = ensureCurr(p.asset);
+      cRec.stakingClaimedUnits += amt;
+      cRec.stakingFeeFundedUnits += feeFunded;
+      cRec.stakingTreasuryFundedUnits += treasuryFunded;
+      if (p.createdAt >= oneDayAgo) cRec.stakingClaimed24hUnits += amt;
+    }
+
+    // 4. Aggregate Pending Claimable Staking Yield Liability
+    for (const pos of db.earnPositions.values()) {
+      if (pos.status === 'REDEEMED') continue;
+      const pending = BigInt(pos.accruedYieldUnits || '0');
+      if (pending > 0n) {
+        ensureCurr(pos.asset).stakingPendingUnits += pending;
+      }
+    }
+
+    // Ensure all currencies currently held in SYSTEM_FEE_ID or SYSTEM_TREASURY_ID are represented
+    for (const acc of db.ledgerAccounts.values()) {
+      if (acc.userId === SYSTEM_FEE_ID || acc.userId === SYSTEM_TREASURY_ID) {
+        ensureCurr(acc.currency);
+      }
+    }
+
+    // Compute per-currency metrics & IDR rollups
+    let totalExchangeFeesIdr = 0;
+    let totalExchangeFeesUsd = 0;
+    let fees24hIdr = 0;
+    let fees24hUsd = 0;
+    let spotMakerFeesIdr = 0;
+    let spotTakerFeesIdr = 0;
+    let futuresFeesIdr = 0;
+    let userDirectFeesIdr = 0;
+    let mmBotFeesIdr = 0;
+    let feeCollectorLiveIdr = 0;
+    let feeCollectorLiveUsd = 0;
+    let treasuryReserveLiveIdr = 0;
+    let treasuryReserveLiveUsd = 0;
+    let totalSweptToTreasuryIdr = 0;
+    let stakingClaimedAllTimeIdr = 0;
+    let stakingClaimedAllTimeUsd = 0;
+    let stakingClaimed24hIdr = 0;
+    let stakingFeePoolFundedIdr = 0;
+    let stakingTreasuryFundedIdr = 0;
+    let stakingPendingClaimableIdr = 0;
+    let stakingPendingClaimableUsd = 0;
+
+    const byCurrency = Array.from(currencyStats.entries())
+      .map(([currency, rec]) => {
+        const decimals = this.resolveCurrencyDecimals(currency);
+        const feeAcc = db.getAccount(SYSTEM_FEE_ID, currency);
+        const treasuryAcc = db.getAccount(SYSTEM_TREASURY_ID, currency);
+
+        const feeCollectorBal = feeAcc
+          ? BigInt(feeAcc.balanceAvailable || '0') + BigInt(feeAcc.balanceLocked || '0')
+          : 0n;
+        const treasuryReserveBal = treasuryAcc
+          ? BigInt(treasuryAcc.balanceAvailable || '0') + BigInt(treasuryAcc.balanceLocked || '0')
+          : 0n;
+
+        const netFeeSurplusUnits = rec.feeEarnedUnits - rec.stakingClaimedUnits;
+
+        const earnedVal = this.unitsToUsdIdr(rec.feeEarnedUnits, decimals, currency);
+        const earned24hVal = this.unitsToUsdIdr(rec.feeEarned24hUnits, decimals, currency);
+        const makerVal = this.unitsToUsdIdr(rec.spotMakerUnits, decimals, currency);
+        const takerVal = this.unitsToUsdIdr(rec.spotTakerUnits, decimals, currency);
+        const futuresVal = this.unitsToUsdIdr(rec.futuresUnits, decimals, currency);
+        const userVal = this.unitsToUsdIdr(rec.userDirectUnits, decimals, currency);
+        const mmVal = this.unitsToUsdIdr(rec.mmBotUnits, decimals, currency);
+        const sweptVal = this.unitsToUsdIdr(rec.sweptUnits, decimals, currency);
+
+        const feeCollVal = feeCollectorBal > 0n ? this.unitsToUsdIdr(feeCollectorBal, decimals, currency) : { usd: 0, idr: 0 };
+        const treasuryVal = treasuryReserveBal > 0n ? this.unitsToUsdIdr(treasuryReserveBal, decimals, currency) : { usd: 0, idr: 0 };
+
+        const claimedVal = this.unitsToUsdIdr(rec.stakingClaimedUnits, decimals, currency);
+        const claimed24hVal = this.unitsToUsdIdr(rec.stakingClaimed24hUnits, decimals, currency);
+        const feeFundedVal = this.unitsToUsdIdr(rec.stakingFeeFundedUnits, decimals, currency);
+        const treasuryFundedVal = this.unitsToUsdIdr(rec.stakingTreasuryFundedUnits, decimals, currency);
+        const pendingVal = this.unitsToUsdIdr(rec.stakingPendingUnits, decimals, currency);
+
+        totalExchangeFeesIdr += earnedVal.idr;
+        totalExchangeFeesUsd += earnedVal.usd;
+        fees24hIdr += earned24hVal.idr;
+        fees24hUsd += earned24hVal.usd;
+        spotMakerFeesIdr += makerVal.idr;
+        spotTakerFeesIdr += takerVal.idr;
+        futuresFeesIdr += futuresVal.idr;
+        userDirectFeesIdr += userVal.idr;
+        mmBotFeesIdr += mmVal.idr;
+        feeCollectorLiveIdr += feeCollVal.idr;
+        feeCollectorLiveUsd += feeCollVal.usd;
+        treasuryReserveLiveIdr += treasuryVal.idr;
+        treasuryReserveLiveUsd += treasuryVal.usd;
+        totalSweptToTreasuryIdr += sweptVal.idr;
+
+        stakingClaimedAllTimeIdr += claimedVal.idr;
+        stakingClaimedAllTimeUsd += claimedVal.usd;
+        stakingClaimed24hIdr += claimed24hVal.idr;
+        stakingFeePoolFundedIdr += feeFundedVal.idr;
+        stakingTreasuryFundedIdr += treasuryFundedVal.idr;
+        stakingPendingClaimableIdr += pendingVal.idr;
+        stakingPendingClaimableUsd += pendingVal.usd;
+
+        return {
+          currency,
+          decimals,
+          feeEarnedAllTimeUnits: rec.feeEarnedUnits.toString(),
+          feeEarnedAllTimeDisplay: PrecisionMath.formatFromUnits(rec.feeEarnedUnits, decimals, true),
+          feeCollectorBalanceUnits: feeCollectorBal.toString(),
+          feeCollectorBalanceDisplay: PrecisionMath.formatFromUnits(feeCollectorBal, decimals, true),
+          treasuryReserveBalanceUnits: treasuryReserveBal.toString(),
+          treasuryReserveBalanceDisplay: PrecisionMath.formatFromUnits(treasuryReserveBal, decimals, true),
+          sweptToTreasuryUnits: rec.sweptUnits.toString(),
+          sweptToTreasuryDisplay: PrecisionMath.formatFromUnits(rec.sweptUnits, decimals, true),
+          stakingClaimedUnits: rec.stakingClaimedUnits.toString(),
+          stakingClaimedDisplay: PrecisionMath.formatFromUnits(rec.stakingClaimedUnits, decimals, true),
+          stakingFeeFundedUnits: rec.stakingFeeFundedUnits.toString(),
+          stakingPendingUnits: rec.stakingPendingUnits.toString(),
+          stakingPendingDisplay: PrecisionMath.formatFromUnits(rec.stakingPendingUnits, decimals, true),
+          netFeeSurplusUnits: netFeeSurplusUnits.toString(),
+          netFeeSurplusDisplay:
+            netFeeSurplusUnits < 0n
+              ? `-${PrecisionMath.formatFromUnits(-netFeeSurplusUnits, decimals, true)}`
+              : PrecisionMath.formatFromUnits(netFeeSurplusUnits, decimals, true),
+          feeEarnedIdr: earnedVal.idr,
+          stakingClaimedIdr: claimedVal.idr,
+          feeCollectorLiveIdr: feeCollVal.idr,
+          treasuryReserveLiveIdr: treasuryVal.idr,
+        };
+      })
+      .filter(
+        row =>
+          ['IDR', 'USDT', 'BTC', 'ETH', 'SOL'].includes(row.currency) ||
+          row.feeEarnedAllTimeUnits !== '0' ||
+          row.feeCollectorBalanceUnits !== '0' ||
+          row.treasuryReserveBalanceUnits !== '0' ||
+          row.stakingClaimedUnits !== '0' ||
+          row.stakingPendingUnits !== '0'
+      )
+      .sort((a, b) => b.feeEarnedIdr - a.feeEarnedIdr || b.treasuryReserveLiveIdr - a.treasuryReserveLiveIdr);
+
+    const byPairRaw = Array.from(pairStats.values()).map(p => {
+      const val = this.unitsToUsdIdr(p.totalFeesUnits, p.quoteDecimals, p.quoteCurrency);
+      return {
+        pairId: p.pairId,
+        baseCurrency: p.baseCurrency,
+        quoteCurrency: p.quoteCurrency,
+        quoteDecimals: p.quoteDecimals,
+        tradeCount: p.tradeCount,
+        trades24hCount: p.trades24hCount,
+        makerFeesUnits: p.makerFeesUnits.toString(),
+        takerFeesUnits: p.takerFeesUnits.toString(),
+        totalFeesUnits: p.totalFeesUnits.toString(),
+        totalFeesDisplay: PrecisionMath.formatFromUnits(p.totalFeesUnits, p.quoteDecimals, true),
+        userFeesUnits: p.userFeesUnits.toString(),
+        userFeesDisplay: PrecisionMath.formatFromUnits(p.userFeesUnits, p.quoteDecimals, true),
+        totalFeesIdr: val.idr,
+        totalFeesUsd: val.usd,
+        sharePct: totalExchangeFeesIdr > 0 ? Math.round((val.idr / totalExchangeFeesIdr) * 10000) / 100 : 0,
+      };
+    });
+    byPairRaw.sort((a, b) => b.totalFeesIdr - a.totalFeesIdr || b.tradeCount - a.tradeCount);
+
+    const recentStakingClaims = [...claimedPayouts]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, 30)
+      .map(p => {
+        const user = db.users.get(p.userId);
+        const vault = db.earnVaults.get(p.vaultId);
+        const amt = BigInt(p.amountUnits || '0');
+        const val = this.unitsToUsdIdr(amt, p.decimals, p.asset);
+        const feeFunded = p.feeFundedUnits
+          ? p.feeFundedUnits
+          : p.fundingSource === 'EXCHANGE_FEE_POOL'
+            ? amt.toString()
+            : '0';
+        const treasuryFunded = p.treasuryFundedUnits
+          ? p.treasuryFundedUnits
+          : (amt - BigInt(feeFunded)).toString();
+        return {
+          id: p.id,
+          userId: p.userId,
+          userEmail: user?.email || p.userId,
+          positionId: p.positionId,
+          vaultId: p.vaultId,
+          vaultName: vault?.name || p.vaultId,
+          asset: p.asset,
+          decimals: p.decimals,
+          payoutType: p.payoutType,
+          amountUnits: p.amountUnits,
+          amountDisplay: PrecisionMath.formatFromUnits(amt, p.decimals, true),
+          amountIdr: val.idr,
+          fundingSource: (p.fundingSource || 'TREASURY_RESERVE') as EarnPayoutFundingSource,
+          feeFundedUnits: feeFunded,
+          treasuryFundedUnits: treasuryFunded,
+          journalId: p.journalId,
+          createdAt: p.createdAt,
+        };
+      });
+
+    const netTreasuryFeePoolIdr = totalExchangeFeesIdr - stakingClaimedAllTimeIdr;
+    const netTreasuryFeePoolUsd = Math.round((totalExchangeFeesUsd - stakingClaimedAllTimeUsd) * 100) / 100;
+    const spotFeesIdr = spotMakerFeesIdr + spotTakerFeesIdr;
+
+    let feeCoverageRatioPct = 0;
+    if (stakingClaimedAllTimeIdr > 0) {
+      feeCoverageRatioPct = Math.round((totalExchangeFeesIdr / stakingClaimedAllTimeIdr) * 10000) / 100;
+    } else if (stakingPendingClaimableIdr > 0) {
+      feeCoverageRatioPct = Math.round((totalExchangeFeesIdr / stakingPendingClaimableIdr) * 10000) / 100;
+    } else if (totalExchangeFeesIdr > 0) {
+      feeCoverageRatioPct = 100;
+    }
+
+    return {
+      generatedAt: now,
+      fxRateIdr,
+      summary: {
+        totalExchangeFeesIdr,
+        totalExchangeFeesUsd: Math.round(totalExchangeFeesUsd * 100) / 100,
+        fees24hIdr,
+        fees24hUsd: Math.round(fees24hUsd * 100) / 100,
+        spotFeesIdr,
+        spotMakerFeesIdr,
+        spotTakerFeesIdr,
+        futuresFeesIdr,
+        userDirectFeesIdr,
+        mmBotFeesIdr,
+        totalTradesCount,
+        trades24hCount,
+        feeCollectorLiveIdr,
+        feeCollectorLiveUsd: Math.round(feeCollectorLiveUsd * 100) / 100,
+        treasuryReserveLiveIdr,
+        treasuryReserveLiveUsd: Math.round(treasuryReserveLiveUsd * 100) / 100,
+        totalSweptToTreasuryIdr,
+        stakingClaimedAllTimeIdr,
+        stakingClaimedAllTimeUsd: Math.round(stakingClaimedAllTimeUsd * 100) / 100,
+        stakingClaimed24hIdr,
+        stakingFeePoolFundedIdr,
+        stakingTreasuryFundedIdr,
+        stakingPendingClaimableIdr,
+        stakingPendingClaimableUsd: Math.round(stakingPendingClaimableUsd * 100) / 100,
+        netTreasuryFeePoolIdr,
+        netTreasuryFeePoolUsd,
+        feeCoverageRatioPct,
+      },
+      byCurrency,
+      byPair: byPairRaw,
+      recentStakingClaims,
+    };
+  }
+
+  /**
+   * Atomically sweeps available balances from SYSTEM_FEE_ID into SYSTEM_TREASURY_ID
+   * via Double-Entry LedgerService (txType: 'FEE_TREASURY_SWEEP').
+   */
+  public sweepCollectedFeesToTreasury(adminId: string): {
+    sweptCurrencies: Array<{ currency: string; decimals: number; amountUnits: string; amountDisplay: string; journalId: string; idrValue: number }>;
+    totalSweptIdr: number;
+    message: string;
+  } {
+    const now = Date.now();
+    const sweptCurrencies: Array<{
+      currency: string;
+      decimals: number;
+      amountUnits: string;
+      amountDisplay: string;
+      journalId: string;
+      idrValue: number;
+    }> = [];
+    let totalSweptIdr = 0;
+
+    for (const acc of db.ledgerAccounts.values()) {
+      if (acc.userId !== SYSTEM_FEE_ID) continue;
+      const avail = BigInt(acc.balanceAvailable || '0');
+      if (avail <= 0n) continue;
+
+      const decimals = this.resolveCurrencyDecimals(acc.currency);
+      const treasuryAcc = db.createOrGetAccount(SYSTEM_TREASURY_ID, acc.currency);
+      const display = PrecisionMath.formatFromUnits(avail, decimals, true);
+
+      const { journal } = LedgerService.executeJournal({
+        idempotencyKey: `fee-sweep:${acc.currency}:${avail.toString()}:${now}`,
+        txType: 'FEE_TREASURY_SWEEP',
+        referenceId: `sweep-${acc.currency}`,
+        description: `Sweep Exchange Fee Collector ${display} ${acc.currency} -> Treasury Reserve`,
+        entries: [
+          { accountId: acc.id, entryType: 'DEBIT', amount: avail },
+          { accountId: treasuryAcc.id, entryType: 'CREDIT', amount: avail },
+        ],
+      });
+
+      const val = this.unitsToUsdIdr(avail, decimals, acc.currency);
+      totalSweptIdr += val.idr;
+      sweptCurrencies.push({
+        currency: acc.currency,
+        decimals,
+        amountUnits: avail.toString(),
+        amountDisplay: display,
+        journalId: journal.id,
+        idrValue: val.idr,
+      });
+    }
+
+    if (sweptCurrencies.length === 0) {
+      throw new Error('Tidak ada saldo fee pada akun Fee Collector (SYS_FEES) yang tersedia untuk disweep ke Treasury.');
+    }
+
+    const summaryText = sweptCurrencies.map(s => `${s.amountDisplay} ${s.currency}`).join(', ');
+    db.auditLogs.push({
+      id: crypto.randomUUID(),
+      actorId: adminId,
+      action: 'EXCHANGE_FEE_TREASURY_SWEEP',
+      resource: 'ledger:fee-treasury-sweep',
+      details: `Admin swept accumulated Exchange Fees to Treasury Reserve: ${summaryText} (Total Rp ${totalSweptIdr.toLocaleString('id-ID')})`,
+      createdAt: now,
+    });
+    db.saveToDisk();
+
+    return {
+      sweptCurrencies,
+      totalSweptIdr,
+      message: `Berhasil sweep ${summaryText} dari Exchange Fee Collector ke Treasury Reserve.`,
     };
   }
 
