@@ -51,6 +51,7 @@ import {
 } from 'lucide-react';
 import { UserProfile, TradingPairItem, BotInstance, OrderItem, TradeItem, Environment, BotStatus, BotType, ExternalWsWhitelistEntry, BacktestRequest, PriceThresholdTrigger, PriceThresholdEvent } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
+import { safeFetchJson, runConcurrentTasks } from '../../lib/safeFetch.js';
 import { playThresholdSound } from '../../lib/thresholdAudio.js';
 import { Button } from '../ui/Button.js';
 import { Modal } from '../ui/Modal.js';
@@ -492,84 +493,84 @@ export const MMConsoleView: React.FC<Props> = ({
 
   const loadData = useCallback(async () => {
     if (!user) return;
-    try {
-      const [ovRes, instRes, ordRes, trdRes, rskRes] = await Promise.all([
-        fetch('/api/mm/overview', { headers: getAuthHeaders() }),
-        fetch(`/api/mm/instances?environment=${currentEnv}`, { headers: getAuthHeaders() }),
-        fetch('/api/mm/orders', { headers: getAuthHeaders() }),
-        fetch('/api/mm/trades', { headers: getAuthHeaders() }),
-        fetch('/api/mm/risk-controls', { headers: getAuthHeaders() })
-      ]);
+    const headers = getAuthHeaders();
+    const fetchOpts: RequestInit = { headers, cache: 'no-store' };
+    const retryOpts = { retries: 1, retryDelayMs: 250 };
+    const [ovRes, instRes, ordRes, trdRes, rskRes] = await runConcurrentTasks(
+      [
+        () => safeFetchJson('/api/mm/overview', fetchOpts, retryOpts),
+        () => safeFetchJson(`/api/mm/instances?environment=${currentEnv}`, fetchOpts, retryOpts),
+        () => safeFetchJson('/api/mm/orders', fetchOpts, retryOpts),
+        () => safeFetchJson('/api/mm/trades', fetchOpts, retryOpts),
+        () => safeFetchJson('/api/mm/risk-controls', fetchOpts, retryOpts),
+      ],
+      3
+    );
 
-      if (ovRes.ok && ovRes.headers.get('content-type')?.includes('application/json')) setOverview(await ovRes.json());
-      if (instRes.ok && instRes.headers.get('content-type')?.includes('application/json')) {
-        const list = await instRes.json();
-        if (Array.isArray(list)) {
-          // Authoritative sync: server list is the single source of truth
-          setInstances(list);
-          try {
-            if (list.length > 0) {
-              localStorage.setItem(`dimonex_mm_instances_${currentEnv}`, JSON.stringify(list));
-            } else {
-              localStorage.removeItem(`dimonex_mm_instances_${currentEnv}`);
-            }
-          } catch {}
-
-          if (list.length > 0) {
-            // If currently selected bot is no longer in the list, switch to first available bot
-            if (!selectedBotId || !list.some(b => b.id === selectedBotId)) {
-              setSelectedBotId(list[0].id);
-            }
-          } else {
-            setSelectedBotId(null);
-          }
+    if (ovRes.ok && ovRes.data) setOverview(ovRes.data);
+    if (instRes.ok && Array.isArray(instRes.data)) {
+      const list = instRes.data;
+      // Authoritative sync: server list is the single source of truth
+      setInstances(list);
+      try {
+        if (list.length > 0) {
+          localStorage.setItem(`dimonex_mm_instances_${currentEnv}`, JSON.stringify(list));
+        } else {
+          localStorage.removeItem(`dimonex_mm_instances_${currentEnv}`);
         }
+      } catch {}
+
+      if (list.length > 0) {
+        // If currently selected bot is no longer in the list, switch to first available bot
+        if (!selectedBotId || !list.some(b => b.id === selectedBotId)) {
+          setSelectedBotId(list[0].id);
+        }
+      } else {
+        setSelectedBotId(null);
       }
-      if (ordRes.ok && ordRes.headers.get('content-type')?.includes('application/json')) setBotOrders(await ordRes.json());
-      if (trdRes.ok && trdRes.headers.get('content-type')?.includes('application/json')) setBotTrades(await trdRes.json());
-      if (rskRes.ok && rskRes.headers.get('content-type')?.includes('application/json')) setRiskControls(await rskRes.json());
-    } catch (e) {
-      console.error('Error fetching MM Console data:', e);
     }
+    if (ordRes.ok && ordRes.data) setBotOrders(ordRes.data);
+    if (trdRes.ok && trdRes.data) setBotTrades(trdRes.data);
+    if (rskRes.ok && rskRes.data) setRiskControls(rskRes.data);
   }, [user, currentEnv, selectedBotId]);
 
   const loadThresholds = useCallback(async () => {
     if (!user) return;
-    try {
-      const res = await fetch(`/api/mm/thresholds?environment=${currentEnv}`, {
-        headers: getAuthHeaders()
-      });
-      if (!res.ok) return;
-      const data = await res.json();
-      const triggersList: PriceThresholdTrigger[] = Array.isArray(data.triggers) ? data.triggers : [];
-      const eventsList: PriceThresholdEvent[] = Array.isArray(data.events) ? data.events : [];
-      setThresholdTriggers(triggersList);
-      setThresholdEvents(eventsList);
+    const res = await safeFetchJson<{ triggers?: PriceThresholdTrigger[]; events?: PriceThresholdEvent[] }>(
+      `/api/mm/thresholds?environment=${currentEnv}`,
+      { headers: getAuthHeaders(), cache: 'no-store' }
+    );
+    if (!res.ok || !res.data) return;
+    const data = res.data;
+    const triggersList: PriceThresholdTrigger[] = Array.isArray(data.triggers) ? data.triggers : [];
+    const eventsList: PriceThresholdEvent[] = Array.isArray(data.events) ? data.events : [];
+    setThresholdTriggers(triggersList);
+    setThresholdEvents(eventsList);
 
-      if (!thresholdInitializedRef.current) {
-        eventsList.forEach(ev => seenThresholdEventIdsRef.current.add(ev.id));
-        thresholdInitializedRef.current = true;
-      } else {
-        const freshEvents = eventsList.filter(ev => !seenThresholdEventIdsRef.current.has(ev.id));
-        if (freshEvents.length > 0) {
-          freshEvents.forEach(ev => seenThresholdEventIdsRef.current.add(ev.id));
-          const latest = freshEvents[0];
-          if (latest.soundEnabled && !thresholdSoundMuted) {
-            playThresholdSound(latest.soundTone);
-          }
-          showToast(
-            'warning',
-            `[${latest.pairId}] ${latest.triggerName}: ${latest.adjustmentSummary}`
-          );
+    if (!thresholdInitializedRef.current) {
+      eventsList.forEach(ev => seenThresholdEventIdsRef.current.add(ev.id));
+      thresholdInitializedRef.current = true;
+    } else {
+      const freshEvents = eventsList.filter(ev => !seenThresholdEventIdsRef.current.has(ev.id));
+      if (freshEvents.length > 0) {
+        freshEvents.forEach(ev => seenThresholdEventIdsRef.current.add(ev.id));
+        const latest = freshEvents[0];
+        if (latest.soundEnabled && !thresholdSoundMuted) {
+          playThresholdSound(latest.soundTone);
         }
+        showToast(
+          'warning',
+          `[${latest.pairId}] ${latest.triggerName}: ${latest.adjustmentSummary}`
+        );
       }
-    } catch {}
+    }
   }, [user, currentEnv, thresholdSoundMuted, showToast]);
 
   useEffect(() => {
     loadData();
     loadThresholds();
     const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       loadData();
       loadThresholds();
     }, 2500);
@@ -580,13 +581,17 @@ export const MMConsoleView: React.FC<Props> = ({
   useEffect(() => {
     if (!selectedBotId) return;
     const fetchLogs = async () => {
-      try {
-        const res = await fetch(`/api/mm/instance/${selectedBotId}/logs`, { headers: getAuthHeaders() });
-        if (res.ok) setBotLogs(await res.json());
-      } catch (e) {}
+      const res = await safeFetchJson(`/api/mm/instance/${selectedBotId}/logs`, {
+        headers: getAuthHeaders(),
+        cache: 'no-store',
+      });
+      if (res.ok && res.data) setBotLogs(res.data);
     };
     fetchLogs();
-    const timer = setInterval(fetchLogs, 2000);
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      fetchLogs();
+    }, 2000);
     return () => clearInterval(timer);
   }, [selectedBotId]);
 
@@ -594,13 +599,17 @@ export const MMConsoleView: React.FC<Props> = ({
   useEffect(() => {
     if (!user) return;
     const fetchAllLogs = async () => {
-      try {
-        const res = await fetch('/api/mm/activity-all', { headers: getAuthHeaders() });
-        if (res.ok) setAllActivityLogs(await res.json());
-      } catch (e) {}
+      const res = await safeFetchJson('/api/mm/activity-all', {
+        headers: getAuthHeaders(),
+        cache: 'no-store',
+      });
+      if (res.ok && res.data) setAllActivityLogs(res.data);
     };
     fetchAllLogs();
-    const timer = setInterval(fetchAllLogs, 2500);
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      fetchAllLogs();
+    }, 2500);
     return () => clearInterval(timer);
   }, [user]);
 
@@ -608,33 +617,38 @@ export const MMConsoleView: React.FC<Props> = ({
   useEffect(() => {
     if (!user) return;
     const fetchFeedsAndFx = async () => {
-      try {
-        const [feedsRes, fxRes, wlRes] = await Promise.all([
-          fetch('/api/mm/external-feeds', { headers: getAuthHeaders() }),
-          fetch('/api/mm/fx-rate', { headers: getAuthHeaders() }),
-          fetch('/api/mm/external-feeds/whitelist', { headers: getAuthHeaders() })
-        ]);
-        if (feedsRes.ok) setExternalFeeds(await feedsRes.json());
-        if (fxRes.ok) {
-          const fx = await fxRes.json();
-          setFxData(fx);
-          if (fx.currentRate?.rate && (!manualFxRate || manualFxRate === '16350')) {
-            setManualFxRate(String(fx.currentRate.rate));
-          }
+      const fetchOpts: RequestInit = { headers: getAuthHeaders(), cache: 'no-store' };
+      const [feedsRes, fxRes, wlRes] = await runConcurrentTasks(
+        [
+          () => safeFetchJson('/api/mm/external-feeds', fetchOpts),
+          () => safeFetchJson('/api/mm/fx-rate', fetchOpts),
+          () => safeFetchJson('/api/mm/external-feeds/whitelist', fetchOpts),
+        ],
+        3
+      );
+      if (feedsRes.ok && feedsRes.data) setExternalFeeds(feedsRes.data);
+      if (fxRes.ok && fxRes.data) {
+        const fx = fxRes.data;
+        setFxData(fx);
+        if (fx.currentRate?.rate && (!manualFxRate || manualFxRate === '16350')) {
+          setManualFxRate(String(fx.currentRate.rate));
         }
-        if (wlRes.ok) {
-          const wl = await wlRes.json();
-          const items: ExternalWsWhitelistEntry[] = wl.items || [];
-          setWsWhitelist(items);
-          setWsFeedConnStatus({ binance: wl.binanceStatus, bybit: wl.bybitStatus });
-          if (items.length > 0 && !items.some(i => i.symbol === mdLeaderSymbol)) {
-            setMdLeaderSymbol(items[0].symbol);
-          }
+      }
+      if (wlRes.ok && wlRes.data) {
+        const wl = wlRes.data;
+        const items: ExternalWsWhitelistEntry[] = wl.items || [];
+        setWsWhitelist(items);
+        setWsFeedConnStatus({ binance: wl.binanceStatus, bybit: wl.bybitStatus });
+        if (items.length > 0 && !items.some(i => i.symbol === mdLeaderSymbol)) {
+          setMdLeaderSymbol(items[0].symbol);
         }
-      } catch (e) {}
+      }
     };
     fetchFeedsAndFx();
-    const timer = setInterval(fetchFeedsAndFx, 3000);
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      fetchFeedsAndFx();
+    }, 3000);
     return () => clearInterval(timer);
   }, [user]);
 

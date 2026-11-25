@@ -18,7 +18,7 @@
  * 10. Risk, AML & Audit Logs (Real-time AML Alerts, Searchable Append-Only Audit Trail)
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   LayoutDashboard,
   Coins,
@@ -75,6 +75,7 @@ import {
   AdminTreasuryFeeOverview,
 } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
+import { safeFetchJson, runConcurrentTasks } from '../../lib/safeFetch.js';
 import { formatCountdownCompact } from '../trading/MarketCountdownOverlay.js';
 import { Button } from '../ui/Button.js';
 import { Modal } from '../ui/Modal.js';
@@ -119,7 +120,9 @@ type AdminTab =
 export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs, onOpenAuthModal }) => {
   const [activeTab, setActiveTab] = useState<AdminTab>('OVERVIEW');
   const [isLoading, setIsLoading] = useState(false);
+  const [loadWarning, setLoadWarning] = useState<string | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const activeLoadAbortRef = useRef<AbortController | null>(null);
   const [confirmConfig, setConfirmConfig] = useState<{
     isOpen: boolean;
     title: string;
@@ -459,11 +462,41 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
 
   const loadAllData = useCallback(async () => {
     if (!isAdmin) return;
-    setIsLoading(true);
     const token = localStorage.getItem('dimonex_auth_token');
+    if (!token) return;
+
+    activeLoadAbortRef.current?.abort();
+    const controller = new AbortController();
+    activeLoadAbortRef.current = controller;
+
+    setIsLoading(true);
     const headers = { Authorization: `Bearer ${token}` };
+    const fetchOpts: RequestInit = { headers, cache: 'no-store', signal: controller.signal };
+    const retryOpts = { retries: 1, retryDelayMs: 250 };
 
     try {
+      const results = await runConcurrentTasks(
+        [
+          () => safeFetchJson('/api/admin/stats', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/admin/users', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/admin/withdrawals/pending', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/risk/suspicious-activity', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/admin/audit-logs', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/admin/bots/all', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/admin/earn/pools', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/admin/earn/positions?limit=50', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/admin/earn/solvency', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/admin/treasury-fees', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/admin/copy-trading/masters', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/admin/vip-tiers', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/mm/fx-status', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/admin/external-ws/whitelist', fetchOpts, retryOpts),
+        ],
+        4
+      );
+
+      if (controller.signal.aborted) return;
+
       const [
         statsRes,
         usersRes,
@@ -479,48 +512,39 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         vipRes,
         fxRes,
         wlRes
-      ] = await Promise.all([
-        fetch('/api/admin/stats', { headers }),
-        fetch('/api/admin/users', { headers }),
-        fetch('/api/admin/withdrawals/pending', { headers }),
-        fetch('/api/risk/suspicious-activity', { headers }),
-        fetch('/api/admin/audit-logs', { headers }),
-        fetch('/api/admin/bots/all', { headers }),
-        fetch('/api/admin/earn/pools', { headers }),
-        fetch('/api/admin/earn/positions?limit=50', { headers }),
-        fetch('/api/admin/earn/solvency', { headers }),
-        fetch('/api/admin/treasury-fees', { headers }),
-        fetch('/api/admin/copy-trading/masters', { headers }),
-        fetch('/api/admin/vip-tiers', { headers }),
-        fetch('/api/mm/fx-status', { headers }),
-        fetch('/api/admin/external-ws/whitelist', { headers })
-      ]);
+      ] = results;
 
-      if (statsRes.ok) setStats(await statsRes.json());
-      if (usersRes.ok) setUsersList(await usersRes.json());
-      if (wdRes.ok) setPendingWd(await wdRes.json());
-      if (riskRes.ok) setRiskAlerts(await riskRes.json());
-      if (auditRes.ok) setAuditLogs(await auditRes.json());
-      if (botsRes.ok) setBotsList(await botsRes.json());
-      if (earnRes.ok) setEarnPools(await earnRes.json());
-      if (earnPosRes.ok) {
-        const epData = await earnPosRes.json();
-        setEarnPositions(epData.positions || []);
+      if (statsRes.ok && statsRes.data) setStats(statsRes.data);
+      if (usersRes.ok && usersRes.data) setUsersList(usersRes.data);
+      if (wdRes.ok && wdRes.data) setPendingWd(wdRes.data);
+      if (riskRes.ok && riskRes.data) setRiskAlerts(riskRes.data);
+      if (auditRes.ok && auditRes.data) setAuditLogs(auditRes.data);
+      if (botsRes.ok && botsRes.data) setBotsList(botsRes.data);
+      if (earnRes.ok && earnRes.data) setEarnPools(earnRes.data);
+      if (earnPosRes.ok && earnPosRes.data) {
+        setEarnPositions(earnPosRes.data.positions || []);
       }
-      if (earnSolvRes.ok) setEarnSolvency(await earnSolvRes.json());
-      if (treasuryFeesRes.ok) setTreasuryFeesReport(await treasuryFeesRes.json());
-      if (copyRes.ok) setCopyMasters(await copyRes.json());
-      if (vipRes.ok) setVipTiers(await vipRes.json());
-      if (fxRes.ok) setFxStatus(await fxRes.json());
-      if (wlRes.ok) {
-        const wlData = await wlRes.json();
-        setWsWhitelist(wlData.items || []);
-        setWsFeedStatus(wlData.feedStatus || null);
+      if (earnSolvRes.ok && earnSolvRes.data) setEarnSolvency(earnSolvRes.data);
+      if (treasuryFeesRes.ok && treasuryFeesRes.data) setTreasuryFeesReport(treasuryFeesRes.data);
+      if (copyRes.ok && copyRes.data) setCopyMasters(copyRes.data);
+      if (vipRes.ok && vipRes.data) setVipTiers(vipRes.data);
+      if (fxRes.ok && fxRes.data) setFxStatus(fxRes.data);
+      if (wlRes.ok && wlRes.data) {
+        setWsWhitelist(wlRes.data.items || []);
+        setWsFeedStatus(wlRes.data.feedStatus || null);
       }
-    } catch (err: any) {
-      console.error('Failed to load admin data:', err);
+
+      const failedCount = results.filter(r => !r.ok && !r.aborted).length;
+      if (failedCount >= 3) {
+        setLoadWarning(`Sebagian data konsol gagal disinkronkan sementara (${failedCount}/${results.length} endpoint). Klik Segarkan untuk mencoba ulang.`);
+      } else {
+        setLoadWarning(null);
+      }
     } finally {
-      setIsLoading(false);
+      if (activeLoadAbortRef.current === controller) {
+        activeLoadAbortRef.current = null;
+        setIsLoading(false);
+      }
     }
   }, [isAdmin]);
 
@@ -560,20 +584,20 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
 
   const loadWsCatalog = useCallback(async (q = wsCatalogSearch, prov = wsCatalogProvider, force = false) => {
     if (!isAdmin) return;
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!token) return;
     setWsCatalogLoading(true);
     try {
-      const token = localStorage.getItem('dimonex_auth_token');
       const params = new URLSearchParams({ q, provider: prov, refresh: force ? '1' : '0' });
-      const res = await fetch(`/api/admin/external-ws/catalog?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setWsCatalog(data.items || []);
-        setWsCatalogSource(data.source || 'LIVE');
+      const res = await safeFetchJson<{ items?: any[]; source?: string }>(
+        `/api/admin/external-ws/catalog?${params.toString()}`,
+        { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' },
+        { retries: 1, retryDelayMs: 250 }
+      );
+      if (res.ok && res.data) {
+        setWsCatalog(res.data.items || []);
+        setWsCatalogSource(res.data.source || 'LIVE');
       }
-    } catch (e) {
-      console.error('Failed to load external WS catalog', e);
     } finally {
       setWsCatalogLoading(false);
     }
@@ -588,8 +612,14 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
   useEffect(() => {
     if (isAdmin) {
       loadAllData();
-      const interval = setInterval(loadAllData, 15000);
-      return () => clearInterval(interval);
+      const interval = setInterval(() => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+        loadAllData();
+      }, 15000);
+      return () => {
+        clearInterval(interval);
+        activeLoadAbortRef.current?.abort();
+      };
     }
   }, [isAdmin, loadAllData]);
 
@@ -1337,6 +1367,23 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
           )}
           <span className="text-[#E4EBEF]">{feedbackMsg.text}</span>
           <button type="button" onClick={() => setFeedbackMsg(null)} className="ml-2 text-[#A1AFB8] hover:text-[#E4EBEF] cursor-pointer">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {loadWarning && (
+        <div className="px-4 py-2.5 rounded-[10px] bg-[#17212B] border border-[#D6A85C]/40 flex items-center justify-between gap-3 text-xs text-[#E4EBEF]">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-[#D6A85C] shrink-0" />
+            <span>{loadWarning}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setLoadWarning(null)}
+            className="text-[#A1AFB8] hover:text-[#E4EBEF] cursor-pointer shrink-0"
+            aria-label="Tutup peringatan"
+          >
             <X className="w-4 h-4" />
           </button>
         </div>

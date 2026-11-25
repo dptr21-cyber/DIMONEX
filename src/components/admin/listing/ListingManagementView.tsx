@@ -50,6 +50,7 @@ import { ConfirmationDialog } from '../../ui/ConfirmationDialog.js';
 import { StatusBadge } from '../../ui/StatusBadge.js';
 import { useToast } from '../../ui/Toast.js';
 import { formatQuotePrice, parseDecimalToUnits, formatUnitsToDecimal } from '../../../lib/formatters.js';
+import { safeFetchJson, runConcurrentTasks } from '../../../lib/safeFetch.js';
 import { formatCountdownCompact } from '../../trading/MarketCountdownOverlay.js';
 
 function toLocalDateTimeInput(ts: number): string {
@@ -184,36 +185,39 @@ export const ListingManagementView: React.FC<Props> = ({ currentUser, onRefreshM
     setIsLoading(true);
     try {
       const headers = getAuthHeaders();
-      const [listRes, assetRes, auditRes, accRes, pairsRes] = await Promise.all([
-        fetch('/api/admin/listings', { headers }),
-        fetch('/api/admin/listings/assets/list', { headers }),
-        fetch('/api/admin/listings/audit/verify', { headers }),
-        fetch('/api/admin/listings/accounts/eligible', { headers }),
-        fetch('/api/trading/pairs')
-      ]);
+      const fetchOpts: RequestInit = { headers, cache: 'no-store' };
+      const retryOpts = { retries: 1, retryDelayMs: 250 };
+      const [listRes, assetRes, auditRes, accRes, pairsRes] = await runConcurrentTasks(
+        [
+          () => safeFetchJson('/api/admin/listings', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/admin/listings/assets/list', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/admin/listings/audit/verify', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/admin/listings/accounts/eligible', fetchOpts, retryOpts),
+          () => safeFetchJson('/api/trading/pairs', { cache: 'no-store' }, retryOpts),
+        ],
+        3
+      );
 
-      if (listRes.ok) {
-        const json = await listRes.json();
-        setListings(json.data || []);
+      if (listRes.ok && listRes.data) {
+        setListings(listRes.data.data || []);
       }
-      if (assetRes.ok) {
-        const json = await assetRes.json();
-        setAssets(json.assets || []);
+      if (assetRes.ok && assetRes.data) {
+        setAssets(assetRes.data.assets || []);
       }
-      if (auditRes.ok) {
-        const json = await auditRes.json();
-        setAuditVerification(json);
+      if (auditRes.ok && auditRes.data) {
+        setAuditVerification(auditRes.data);
       }
-      if (accRes.ok) {
-        const accJson = await accRes.json();
-        setEligibleAccounts(accJson.accounts || []);
+      if (accRes.ok && accRes.data) {
+        setEligibleAccounts(accRes.data.accounts || []);
       }
-      if (pairsRes.ok) {
-        const pJson = await pairsRes.json();
+      if (pairsRes.ok && pairsRes.data) {
+        const pJson = pairsRes.data;
         setTokenPairs(pJson.pairs || pJson.data || pJson || []);
       }
-    } catch (e: any) {
-      showToast('error', 'Gagal Memuat Data', 'Gagal memuat data listing: ' + e.message);
+      const failedCount = [listRes, assetRes, auditRes, accRes, pairsRes].filter(r => !r.ok && !r.aborted).length;
+      if (failedCount === 5) {
+        showToast('error', 'Gagal Memuat Data', 'Koneksi ke endpoint listing gagal sementara. Silakan muat ulang.');
+      }
     } finally {
       setIsLoading(false);
     }

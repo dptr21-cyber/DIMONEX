@@ -8,7 +8,8 @@
  * early lockup waivers, global yield payout ledger, and 1:1 custody solvency reconciliation.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { safeFetchJson, runConcurrentTasks } from '../../../lib/safeFetch.js';
 import {
   CheckCircle2,
   Coins,
@@ -95,6 +96,7 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const loadAbortRef = useRef<AbortController | null>(null);
 
   // Core data from backend
   const [vaults, setVaults] = useState<EarnVaultItem[]>([]);
@@ -170,53 +172,63 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
       return;
     }
 
+    loadAbortRef.current?.abort();
+    const controller = new AbortController();
+    loadAbortRef.current = controller;
+
     const headers = { Authorization: `Bearer ${token}` };
+    const fetchOpts: RequestInit = { headers, cache: 'no-store', signal: controller.signal };
+    const retryOpts = { retries: 1, retryDelayMs: 250 };
+
     try {
-      const [poolsRes, posRes, payRes, solvRes, assetsRes, feesRes] = await Promise.all([
-        fetch('/api/admin/earn/pools', { headers }),
-        fetch('/api/admin/earn/positions?limit=150', { headers }),
-        fetch('/api/admin/earn/payouts?limit=150', { headers }),
-        fetch('/api/admin/earn/solvency', { headers }),
-        fetch('/api/admin/earn/assets', { headers }),
-        fetch('/api/admin/treasury-fees', { headers }),
-      ]);
+      const results = await runConcurrentTasks(
+        [
+          () => safeFetchJson<EarnVaultItem[]>('/api/admin/earn/pools', fetchOpts, retryOpts),
+          () => safeFetchJson<{ positions?: Array<EarnPositionItem & { userEmail?: string }> }>('/api/admin/earn/positions?limit=150', fetchOpts, retryOpts),
+          () => safeFetchJson<{ payouts?: AdminEarnPayout[] }>('/api/admin/earn/payouts?limit=150', fetchOpts, retryOpts),
+          () => safeFetchJson<EarnCustodySolvencyReport>('/api/admin/earn/solvency', fetchOpts, retryOpts),
+          () => safeFetchJson<{ assets?: AdminEarnAsset[] }>('/api/admin/earn/assets', fetchOpts, retryOpts),
+          () => safeFetchJson<AdminTreasuryFeeOverview>('/api/admin/treasury-fees', fetchOpts, retryOpts),
+        ],
+        3
+      );
 
-      if (!poolsRes.ok) {
-        const err = await poolsRes.json().catch(() => ({}));
-        throw new Error(err.error || 'Gagal memuat daftar staking vault');
+      if (controller.signal.aborted) return;
+
+      const [poolsRes, posRes, payRes, solvRes, assetsRes, feesRes] = results;
+
+      if (poolsRes.ok && poolsRes.data) {
+        setVaults(Array.isArray(poolsRes.data) ? poolsRes.data : []);
+      } else if (!poolsRes.aborted && !silent) {
+        setLoadError(poolsRes.error || 'Gagal memuat daftar staking vault');
       }
 
-      const poolsData = await poolsRes.json();
-      setVaults(Array.isArray(poolsData) ? poolsData : []);
-
-      if (posRes.ok) {
-        const posData = await posRes.json();
-        setPositions(posData.positions || []);
+      if (posRes.ok && posRes.data) {
+        setPositions(posRes.data.positions || []);
       }
-      if (payRes.ok) {
-        const payData = await payRes.json();
-        setPayouts(payData.payouts || []);
+      if (payRes.ok && payRes.data) {
+        setPayouts(payRes.data.payouts || []);
       }
-      if (solvRes.ok) {
-        setSolvency(await solvRes.json());
+      if (solvRes.ok && solvRes.data) {
+        setSolvency(solvRes.data);
       }
-      if (feesRes.ok) {
-        setTreasuryFees(await feesRes.json());
+      if (feesRes.ok && feesRes.data) {
+        setTreasuryFees(feesRes.data);
       }
-      if (assetsRes.ok) {
-        const assetsData = await assetsRes.json();
-        const list: AdminEarnAsset[] = assetsData.assets || [];
+      if (assetsRes.ok && assetsRes.data) {
+        const list: AdminEarnAsset[] = assetsRes.data.assets || [];
         setEarnAssets(list);
-        if (list.length > 0 && !list.some(a => a.symbol === createForm.asset)) {
-          setCreateForm(f => ({ ...f, asset: list[0].symbol }));
+        if (list.length > 0) {
+          setCreateForm(f => (list.some(a => a.symbol === f.asset) ? f : { ...f, asset: list[0].symbol }));
         }
       }
-    } catch (err: any) {
-      setLoadError(err?.message || 'Gagal sinkronisasi konsol admin staking');
     } finally {
-      setIsLoading(false);
+      if (loadAbortRef.current === controller) {
+        loadAbortRef.current = null;
+        setIsLoading(false);
+      }
     }
-  }, [createForm.asset]);
+  }, []);
 
   const handleSweepFeesToTreasury = async () => {
     setActionBusy(true);
@@ -241,8 +253,14 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
 
   useEffect(() => {
     loadConsoleData(false);
-    const interval = setInterval(() => loadConsoleData(true), 15_000);
-    return () => clearInterval(interval);
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      loadConsoleData(true);
+    }, 15_000);
+    return () => {
+      clearInterval(interval);
+      loadAbortRef.current?.abort();
+    };
   }, [loadConsoleData]);
 
   // Derived KPI metrics strictly from live backend snapshots
