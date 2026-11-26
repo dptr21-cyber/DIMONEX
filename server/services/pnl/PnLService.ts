@@ -54,6 +54,21 @@ function roundUsdtPrecision(val: number): number {
   return Number(val.toFixed(8));
 }
 
+function safeBigInt(val: string | number | bigint | undefined | null): bigint {
+  if (typeof val === 'bigint') return val;
+  if (typeof val === 'number') return Number.isFinite(val) ? BigInt(Math.trunc(val)) : 0n;
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (!trimmed) return 0n;
+    try {
+      return BigInt(trimmed);
+    } catch {
+      return 0n;
+    }
+  }
+  return 0n;
+}
+
 export function getCurrencyDecimalsServer(currency: string): number {
   const clean = currency.toUpperCase();
   if (clean === 'IDR') return 2;
@@ -146,7 +161,9 @@ export class PnLService {
       if (user.id.startsWith('sys-')) continue;
       const hasActivity =
         db.trades.some(t => t.makerUserId === user.id || t.takerUserId === user.id) ||
-        Array.from(db.futuresPositions.values()).some(p => p.userId === user.id && p.status === 'CLOSED') ||
+        Array.from(db.futuresPositions.values()).some(
+          p => p.userId === user.id && (p.status === 'CLOSED' || p.status === 'LIQUIDATED')
+        ) ||
         db.copyMirroredOrders.some(m => m.followerUserId === user.id && m.status === 'FILLED');
 
       if (hasActivity) {
@@ -164,9 +181,9 @@ export class PnLService {
    */
   public getLiveUsdtIdrRate(): number {
     const usdtPair = db.tradingPairs.get('USDT-IDR');
-    if (usdtPair && !usdtPair.isDelisted && BigInt(usdtPair.lastPrice || '0') > 0n) {
+    if (usdtPair && !usdtPair.isDelisted && safeBigInt(usdtPair.lastPrice) > 0n) {
       const qDec = typeof usdtPair.quoteDecimals === 'number' ? usdtPair.quoteDecimals : 2;
-      const rate = Number(BigInt(usdtPair.lastPrice)) / 10 ** qDec;
+      const rate = Number(safeBigInt(usdtPair.lastPrice)) / 10 ** qDec;
       if (Number.isFinite(rate) && rate > 0) return rate;
     }
     const fx = fxConversionService.getLatestRate?.();
@@ -201,17 +218,17 @@ export class PnLService {
     const idrPair = db.tradingPairs.get(`${clean}-IDR`);
     const usdtPair = db.tradingPairs.get(`${clean}-USDT`);
 
-    const hasValidIdrPair = Boolean(idrPair && !idrPair.isDelisted && BigInt(idrPair.lastPrice || '0') > 0n);
-    const hasValidUsdtPair = Boolean(usdtPair && !usdtPair.isDelisted && BigInt(usdtPair.lastPrice || '0') > 0n);
+    const hasValidIdrPair = Boolean(idrPair && !idrPair.isDelisted && safeBigInt(idrPair.lastPrice) > 0n);
+    const hasValidUsdtPair = Boolean(usdtPair && !usdtPair.isDelisted && safeBigInt(usdtPair.lastPrice) > 0n);
 
     if (hasValidIdrPair && idrPair) {
       const qDec = typeof idrPair.quoteDecimals === 'number' ? idrPair.quoteDecimals : 2;
-      const priceIdr = Number(BigInt(idrPair.lastPrice)) / 10 ** qDec;
+      const priceIdr = Number(safeBigInt(idrPair.lastPrice)) / 10 ** qDec;
 
       let priceUsdt = priceIdr / (usdtRate || 16450);
       if (hasValidUsdtPair && usdtPair) {
         const uDec = typeof usdtPair.quoteDecimals === 'number' ? usdtPair.quoteDecimals : 6;
-        const directUsdt = Number(BigInt(usdtPair.lastPrice)) / 10 ** uDec;
+        const directUsdt = Number(safeBigInt(usdtPair.lastPrice)) / 10 ** uDec;
         if (directUsdt > 0) {
           priceUsdt = directUsdt;
         }
@@ -221,7 +238,7 @@ export class PnLService {
 
     if (hasValidUsdtPair && usdtPair) {
       const uDec = typeof usdtPair.quoteDecimals === 'number' ? usdtPair.quoteDecimals : 6;
-      const priceUsdt = Number(BigInt(usdtPair.lastPrice)) / 10 ** uDec;
+      const priceUsdt = Number(safeBigInt(usdtPair.lastPrice)) / 10 ** uDec;
       return {
         priceIdr: priceUsdt * usdtRate,
         priceUsdt,
@@ -258,8 +275,13 @@ export class PnLService {
       .sort((a, b) => a.createdAt - b.createdAt);
 
     const closedFutures = Array.from(db.futuresPositions.values())
-      .filter(p => p.userId === userId && p.status === 'CLOSED' && p.closedAt)
-      .sort((a, b) => (a.closedAt || 0) - (b.closedAt || 0));
+      .filter(
+        p =>
+          p.userId === userId &&
+          (p.status === 'CLOSED' || p.status === 'LIQUIDATED') &&
+          (p.closedAt || p.updatedAt || p.openedAt)
+      )
+      .sort((a, b) => (a.closedAt || a.updatedAt || a.openedAt || 0) - (b.closedAt || b.updatedAt || b.openedAt || 0));
 
     const userCopyTrades = db.copyMirroredOrders
       .filter(m => m.followerUserId === userId && m.status === 'FILLED')
@@ -329,10 +351,10 @@ export class PnLService {
       const baseDec = pair?.baseDecimals ?? getCurrencyDecimalsServer(baseCurr);
       const quoteDec = pair?.quoteDecimals ?? (quoteCurr === 'IDR' ? 2 : 6);
 
-      const priceUnits = BigInt(t.price);
-      const qtyUnits = BigInt(t.quantity);
-      const quoteVolUnits = BigInt(t.quoteVolume);
-      const feeUnits = isTaker ? BigInt(t.takerFee || '0') : BigInt(t.makerFee || '0');
+      const priceUnits = safeBigInt(t.price);
+      const qtyUnits = safeBigInt(t.quantity);
+      const quoteVolUnits = safeBigInt(t.quoteVolume);
+      const feeUnits = isTaker ? safeBigInt(t.takerFee) : safeBigInt(t.makerFee);
 
       const qtyNum = Number(qtyUnits) / 10 ** baseDec;
       const quoteVolNum = Number(quoteVolUnits) / 10 ** quoteDec;
@@ -445,16 +467,24 @@ export class PnLService {
       bucket.trades.push(snapTrade);
     }
 
-    // 3. Process Closed Futures Positions
+    // 3. Process Closed / Liquidated Futures Positions
     for (const fp of closedFutures) {
-      const ts = fp.closedAt || fp.createdAt;
+      const ts = fp.closedAt || fp.updatedAt || fp.openedAt || now;
       const dateKey = getJakartaDateKey(ts);
       const bucket = ensureLiveBucket(dateKey, ts);
 
-      const realizedUsdt = Number(BigInt(fp.realizedPnlUnits || '0')) / 1e6;
-      const feeUsdt = Number(BigInt(fp.feePaidUnits || '0')) / 1e6;
-      const realizedIdr = realizedUsdt * usdtRate;
-      const feeIdr = feeUsdt * usdtRate;
+      const qCurr = (fp.quoteCurrency || 'USDT').toUpperCase();
+      const qDec = typeof fp.quoteDecimals === 'number' ? fp.quoteDecimals : qCurr === 'IDR' ? 2 : 6;
+      const bDec = typeof fp.baseDecimals === 'number' ? fp.baseDecimals : getCurrencyDecimalsServer(fp.baseCurrency || 'BTC');
+
+      const realizedQuoteNum = Number(safeBigInt(fp.realizedPnlUnits)) / 10 ** qDec;
+      const feeQuoteNum =
+        Number(safeBigInt(fp.openFeeUnits) + safeBigInt(fp.closeFeeUnits)) / 10 ** qDec;
+
+      const realizedIdr = qCurr === 'IDR' ? realizedQuoteNum : realizedQuoteNum * usdtRate;
+      const realizedUsdt = qCurr === 'USDT' ? realizedQuoteNum : realizedQuoteNum / usdtRate;
+      const feeIdr = qCurr === 'IDR' ? feeQuoteNum : feeQuoteNum * usdtRate;
+      const feeUsdt = qCurr === 'USDT' ? feeQuoteNum : feeQuoteNum / usdtRate;
 
       bucket.pnlIdr += realizedIdr;
       bucket.pnlUsdt += realizedUsdt;
@@ -464,15 +494,25 @@ export class PnLService {
       if (realizedIdr > 0) bucket.winCount += 1;
       else if (realizedIdr < 0) bucket.lossCount += 1;
 
+      const closePriceRaw = fp.markPriceUnits || fp.entryPriceUnits || '0';
+      const sizeRaw = fp.sizeUnits || '0';
+      const formattedClosePrice =
+        qCurr === 'IDR'
+          ? PrecisionMath.formatIDRDisplay(safeBigInt(closePriceRaw))
+          : `${PrecisionMath.formatFromUnits(safeBigInt(closePriceRaw), qDec, true)} USDT`;
+
       bucket.trades.push({
         id: `fut-${fp.id}`,
         pairId: fp.pairId,
         side: fp.side === 'LONG' ? 'BUY' : 'SELL',
-        price: `${PrecisionMath.formatFromUnits(BigInt(fp.closePriceUnits || fp.entryPriceUnits), 6, true)} USDT`,
-        rawPrice: fp.closePriceUnits || fp.entryPriceUnits,
-        quantity: PrecisionMath.formatFromUnits(BigInt(fp.quantityUnits), 8, true),
-        rawQuantity: fp.quantityUnits,
-        quoteVolume: `${realizedUsdt >= 0 ? '+' : ''}${realizedUsdt.toFixed(2)} USDT`,
+        price: formattedClosePrice,
+        rawPrice: closePriceRaw,
+        quantity: `${PrecisionMath.formatFromUnits(safeBigInt(sizeRaw), bDec, true)} ${fp.baseCurrency || ''}`,
+        rawQuantity: sizeRaw,
+        quoteVolume:
+          qCurr === 'IDR'
+            ? PrecisionMath.formatIDRDisplay(safeBigInt(fp.realizedPnlUnits))
+            : `${realizedUsdt >= 0 ? '+' : ''}${realizedUsdt.toFixed(2)} USDT`,
         rawQuoteVolume: fp.realizedPnlUnits || '0',
         pnlIdr: Math.round(realizedIdr),
         pnlUsdt: Number(realizedUsdt.toFixed(4)),
@@ -492,9 +532,9 @@ export class PnLService {
       const baseDec = pair?.baseDecimals ?? getCurrencyDecimalsServer(baseCurr);
       const quoteDec = pair?.quoteDecimals ?? (quoteCurr === 'IDR' ? 2 : 6);
 
-      const pnlUnitsNum = Number(BigInt(cm.realizedPnlUnits || '0')) / 10 ** quoteDec;
-      const quoteVolNum = Number(BigInt(cm.quoteVolumeUnits || '0')) / 10 ** quoteDec;
-      const feeNum = Number(BigInt(cm.feeUnits || '0')) / 10 ** quoteDec;
+      const pnlUnitsNum = Number(safeBigInt(cm.realizedPnlUnits)) / 10 ** quoteDec;
+      const quoteVolNum = Number(safeBigInt(cm.quoteVolumeUnits)) / 10 ** quoteDec;
+      const feeNum = Number(safeBigInt(cm.feeUnits)) / 10 ** quoteDec;
 
       const pnlIdr = quoteCurr === 'IDR' ? pnlUnitsNum : pnlUnitsNum * usdtRate;
       const pnlUsdt = quoteCurr === 'USDT' ? pnlUnitsNum : pnlUnitsNum / usdtRate;
@@ -517,22 +557,26 @@ export class PnLService {
         else if (pnlIdr < 0) bucket.lossCount += 1;
       }
 
+      const execPriceBig = safeBigInt(cm.executionPriceUnits);
+      const execQtyBig = safeBigInt(cm.executedQtyUnits);
+      const quoteVolBig = safeBigInt(cm.quoteVolumeUnits);
+
       bucket.trades.push({
         id: `copy-${cm.id}`,
         pairId: cm.pairId,
         side: cm.side,
         price:
           quoteCurr === 'IDR'
-            ? PrecisionMath.formatIDRDisplay(BigInt(cm.executionPriceUnits))
-            : `${PrecisionMath.formatFromUnits(BigInt(cm.executionPriceUnits), quoteDec, true)} USDT`,
-        rawPrice: cm.executionPriceUnits,
-        quantity: `${PrecisionMath.formatFromUnits(BigInt(cm.executedQtyUnits), baseDec, true)} ${baseCurr}`,
-        rawQuantity: cm.executedQtyUnits,
+            ? PrecisionMath.formatIDRDisplay(execPriceBig)
+            : `${PrecisionMath.formatFromUnits(execPriceBig, quoteDec, true)} USDT`,
+        rawPrice: cm.executionPriceUnits || '0',
+        quantity: `${PrecisionMath.formatFromUnits(execQtyBig, baseDec, true)} ${baseCurr}`,
+        rawQuantity: cm.executedQtyUnits || '0',
         quoteVolume:
           quoteCurr === 'IDR'
-            ? PrecisionMath.formatIDRDisplay(BigInt(cm.quoteVolumeUnits))
-            : `${PrecisionMath.formatFromUnits(BigInt(cm.quoteVolumeUnits), quoteDec, true)} USDT`,
-        rawQuoteVolume: cm.quoteVolumeUnits,
+            ? PrecisionMath.formatIDRDisplay(quoteVolBig)
+            : `${PrecisionMath.formatFromUnits(quoteVolBig, quoteDec, true)} USDT`,
+        rawQuoteVolume: cm.quoteVolumeUnits || '0',
         pnlIdr: Math.round(pnlIdr),
         pnlUsdt: Number(pnlUsdt.toFixed(4)),
         feeIdr: Math.round(feeIdr),
@@ -552,7 +596,7 @@ export class PnLService {
 
     for (const acc of userAccounts) {
       const cleanCurr = acc.currency.toUpperCase();
-      const totalUnits = BigInt(acc.balanceAvailable) + BigInt(acc.balanceLocked);
+      const totalUnits = safeBigInt(acc.balanceAvailable) + safeBigInt(acc.balanceLocked);
       const dec = getCurrencyDecimalsServer(cleanCurr);
       const holding = Number(totalUnits) / 10 ** dec;
 
@@ -615,13 +659,13 @@ export class PnLService {
     for (const rel of db.copyRelationships.values()) {
       if (rel.followerUserId === userId && rel.status !== 'STOPPED') {
         if (rel.allocationCurrency === 'IDR') {
-          copyAllocatedValIdr += Number(BigInt(rel.availableSleeveUnits || '0')) / 100;
+          copyAllocatedValIdr += Number(safeBigInt(rel.availableSleeveUnits)) / 100;
         } else {
-          copyAllocatedValIdr += (Number(BigInt(rel.availableSleeveUnits || '0')) / 1_000_000) * usdtRate;
+          copyAllocatedValIdr += (Number(safeBigInt(rel.availableSleeveUnits)) / 1_000_000) * usdtRate;
         }
         for (const [sym, unitsStr] of Object.entries(rel.heldBaseBySymbol || {})) {
           const dec = getCurrencyDecimalsServer(sym);
-          const qty = Number(BigInt(unitsStr || '0')) / 10 ** dec;
+          const qty = Number(safeBigInt(unitsStr)) / 10 ** dec;
           const p = this.resolveRealAssetPrice(sym, usdtRate);
           copyAllocatedValIdr += qty * p.priceIdr;
         }
