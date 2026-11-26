@@ -209,7 +209,6 @@ class DatabaseStore {
       this.seedInitialData();
       this.ensureInitialListingData();
       this.ensureExternalWsWhitelist();
-      this.ensureHistoricalTrades();
       this.recalculatePair24hStats();
       this.saveToDisk();
     } else {
@@ -218,7 +217,6 @@ class DatabaseStore {
       this.ensureInitialListingData();
       this.ensureExternalWsWhitelist();
       this.cleanExpiredSessions();
-      this.ensureHistoricalTrades();
       this.recalculatePair24hStats();
       this.scheduleSave();
     }

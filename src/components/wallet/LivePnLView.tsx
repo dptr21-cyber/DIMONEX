@@ -73,13 +73,27 @@ export interface CumulativePoint {
   returnPct: number;
 }
 
+export interface ExecutionFillPreview {
+  tradeId: string;
+  pairId: string;
+  qty: number;
+  priceIdr: number;
+  priceUsdt: number;
+  timestamp: number;
+}
+
 export interface AssetPnLItem {
   symbol: string;
   holding: number;
+  trackedQty?: number;
+  openLotsCount?: number;
   avgBuyPriceIdr: number;
   currentPriceIdr: number;
   avgBuyPriceUsdt: number;
   currentPriceUsdt: number;
+  lastBuyPriceIdr?: number;
+  lastBuyPriceUsdt?: number;
+  lastBuyTimestamp?: number | null;
   unrealizedPnlIdr: number;
   unrealizedPnlUsdt: number;
   returnPct: number;
@@ -87,6 +101,7 @@ export interface AssetPnLItem {
   totalSold: number;
   hasCostBasis?: boolean;
   priceSource?: 'PAIR_IDR' | 'PAIR_USDT' | 'EXTERNAL_WS' | 'NONE';
+  recentFills?: ExecutionFillPreview[];
 }
 
 export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = false }) => {
@@ -490,13 +505,17 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
                 </tr>
               ) : (
                 assetBreakdown.map(item => {
-                  const hasBasis = item.hasCostBasis !== false && (currency === 'IDR' ? item.avgBuyPriceIdr > 0 : item.avgBuyPriceUsdt > 0);
+                  const hasBasis =
+                    item.hasCostBasis !== false &&
+                    (currency === 'IDR' ? item.avgBuyPriceIdr > 0 : item.avgBuyPriceUsdt > 0);
                   const isUp = item.unrealizedPnlIdr >= 0;
                   const avgPrice = hasBasis
                     ? formatMarketPrice(item.avgBuyPriceIdr, item.avgBuyPriceUsdt)
                     : 'Deposit / Non-Trade';
                   const curPrice = formatMarketPrice(item.currentPriceIdr, item.currentPriceUsdt);
                   const pnlDisplay = hasBasis ? formatValue(item.unrealizedPnlIdr, item.unrealizedPnlUsdt) : '—';
+                  const lotCount = item.openLotsCount ?? 0;
+                  const latestFill = item.recentFills?.[0];
 
                   return (
                     <tr key={item.symbol} className="hover:bg-[#17212B] transition-colors">
@@ -507,7 +526,7 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
                             <span className="font-semibold text-[#E4EBEF] block">{item.symbol}</span>
                             <span className="text-[10px] text-[#71818B] font-mono">
                               {hasBasis
-                                ? `Total Beli: ${item.totalBought} ${item.symbol}`
+                                ? `${lotCount > 0 ? `${lotCount} lot FIFO · ` : ''}Beli: ${item.totalBought} ${item.symbol}`
                                 : 'Saldo awal / deposit'}
                             </span>
                           </div>
@@ -517,9 +536,25 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
                         {hideBalance ? '••••' : `${item.holding} ${item.symbol}`}
                       </td>
                       <td className={`py-3 px-4 text-right ${hasBasis ? 'text-[#A1AFB8]' : 'text-[#71818B] font-sans text-[11px]'}`}>
-                        {avgPrice}
+                        <div>{avgPrice}</div>
+                        {hasBasis && latestFill && (
+                          <div className="text-[10px] text-[#71818B] font-mono">
+                            Fill terakhir: {formatMarketPrice(latestFill.priceIdr, latestFill.priceUsdt)}
+                          </div>
+                        )}
                       </td>
-                      <td className="py-3 px-4 text-right font-semibold text-[#E4EBEF]">{curPrice}</td>
+                      <td className="py-3 px-4 text-right font-semibold text-[#E4EBEF]">
+                        <div>{curPrice}</div>
+                        {item.priceSource && item.priceSource !== 'NONE' && (
+                          <div className="text-[10px] text-[#71818B] font-mono font-normal">
+                            {item.priceSource === 'PAIR_IDR'
+                              ? 'Market Spot IDR'
+                              : item.priceSource === 'PAIR_USDT'
+                              ? 'Market Spot USDT'
+                              : 'Feed WS Eksternal'}
+                          </div>
+                        )}
+                      </td>
                       <td className={`py-3 px-4 text-right font-semibold ${!hasBasis ? 'text-[#71818B]' : isUp ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
                         {pnlDisplay}
                       </td>

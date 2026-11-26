@@ -6,19 +6,19 @@
  * 100% Real-Data Live PnL Engine & Persistent Daily PnL Calendar Service.
  *
  * Guarantees:
- * - Zero fake trades, zero hardcoded benchmark prices, zero synthetic cost-basis multipliers.
- * - Chronological weighted-average inventory cost basis per asset from real Spot trades.
+ * - Zero fake trades (`hist-seed-*` / `usr-seed-*` excluded), zero synthetic cost-basis multipliers.
+ * - Reconstructs immutable chronological Spot execution history by unifying live `db.trades`,
+ *   immutable `TRADE_SETTLEMENT` journal references, and permanently persisted `db.dailyPnlSnapshots`
+ *   so historical execution prices survive `db.trades` 2,000-entry pruning.
+ * - Strict FIFO lot-level inventory tracking using exact historical execution prices (`priceUnits`)
+ *   without inflating `avgBuyPrice` with trading fees.
  * - Live mark-to-market valuations resolved from real Exchange TradingPairs (-IDR / -USDT)
  *   and live External WS PriceAggregatorService feeds using exact decimal precision.
- * - Daily calendar snapshots (db.dailyPnlSnapshots) are persisted permanently by Asia/Jakarta date
- *   so historical days survive db.trades ring-buffer pruning.
  */
 
 import { db } from '../../db/database.js';
 import {
   Trade,
-  FuturesPosition,
-  CopyMirroredOrder,
   DailyPnlSnapshot,
   DailyPnlTradeSnapshot,
 } from '../../db/types.js';
@@ -83,13 +83,58 @@ export function getCurrencyDecimalsServer(currency: string): number {
   return 8;
 }
 
+interface UnifiedSpotExecution {
+  id: string;
+  pairId: string;
+  baseCurr: string;
+  quoteCurr: string;
+  baseDec: number;
+  quoteDec: number;
+  side: 'BUY' | 'SELL';
+  priceUnits: bigint;
+  qtyUnits: bigint;
+  quoteVolUnits: bigint;
+  execPricePair: number;
+  qtyNum: number;
+  quoteVolNum: number;
+  feeIdr: number;
+  feeUsdt: number;
+  createdAt: number;
+  ledgerVerified: boolean;
+}
+
+interface ExecutionLot {
+  tradeId: string;
+  pairId: string;
+  qty: number;
+  execPriceIdr: number;
+  execPriceUsdt: number;
+  feeIdr: number;
+  feeUsdt: number;
+  timestamp: number;
+}
+
+export interface ExecutionFillPreview {
+  tradeId: string;
+  pairId: string;
+  qty: number;
+  priceIdr: number;
+  priceUsdt: number;
+  timestamp: number;
+}
+
 export interface LiveAssetBreakdownItem {
   symbol: string;
   holding: number;
+  trackedQty: number;
+  openLotsCount: number;
   avgBuyPriceIdr: number;
   currentPriceIdr: number;
   avgBuyPriceUsdt: number;
   currentPriceUsdt: number;
+  lastBuyPriceIdr: number;
+  lastBuyPriceUsdt: number;
+  lastBuyTimestamp: number | null;
   unrealizedPnlIdr: number;
   unrealizedPnlUsdt: number;
   returnPct: number;
@@ -97,6 +142,7 @@ export interface LiveAssetBreakdownItem {
   totalSold: number;
   hasCostBasis: boolean;
   priceSource: 'PAIR_IDR' | 'PAIR_USDT' | 'EXTERNAL_WS' | 'NONE';
+  recentFills: ExecutionFillPreview[];
 }
 
 export class PnLService {
@@ -106,19 +152,19 @@ export class PnLService {
   public startScheduler(): void {
     if (this.schedulerInterval) return;
 
-    // Seed initial daily snapshots for existing active traders on boot
     try {
       this.snapshotAllActiveUsers();
     } catch (err: any) {
       console.warn('[PnLService] Initial snapshot pass skipped:', err?.message || err);
     }
 
-    // Periodically persist daily snapshots & finalize closed Jakarta calendar days
     this.schedulerInterval = setInterval(() => {
       try {
         const currentDateKey = getJakartaDateKey(Date.now());
         if (currentDateKey !== this.lastKnownJakartaDate) {
-          console.log(`[PnLService] Pergantian hari WIB terdeteksi (${this.lastKnownJakartaDate} -> ${currentDateKey}). Menyimpan & memfinalisasi kalender harian...`);
+          console.log(
+            `[PnLService] Pergantian hari WIB terdeteksi (${this.lastKnownJakartaDate} -> ${currentDateKey}). Menyimpan & memfinalisasi kalender harian...`
+          );
           this.lastKnownJakartaDate = currentDateKey;
         }
         this.snapshotAllActiveUsers();
@@ -135,9 +181,6 @@ export class PnLService {
     }
   }
 
-  /**
-   * Called immediately after a real spot trade executes so today's calendar snapshot stays persisted.
-   */
   public recordTradeActivity(trade: Trade): void {
     const involvedIds = new Set<string>();
     if (trade.makerUserId && !trade.makerUserId.startsWith('sys-')) {
@@ -160,7 +203,12 @@ export class PnLService {
     for (const user of db.users.values()) {
       if (user.id.startsWith('sys-')) continue;
       const hasActivity =
-        db.trades.some(t => t.makerUserId === user.id || t.takerUserId === user.id) ||
+        db.trades.some(
+          t =>
+            !t.id.startsWith('hist-seed-') &&
+            !t.id.startsWith('usr-seed-') &&
+            (t.makerUserId === user.id || t.takerUserId === user.id)
+        ) ||
         Array.from(db.futuresPositions.values()).some(
           p => p.userId === user.id && (p.status === 'CLOSED' || p.status === 'LIQUIDATED')
         ) ||
@@ -176,9 +224,6 @@ export class PnLService {
     }
   }
 
-  /**
-   * Resolve live USDT/IDR FX rate strictly from real market/FX sources.
-   */
   public getLiveUsdtIdrRate(): number {
     const usdtPair = db.tradingPairs.get('USDT-IDR');
     if (usdtPair && !usdtPair.isDelisted && safeBigInt(usdtPair.lastPrice) > 0n) {
@@ -193,12 +238,6 @@ export class PnLService {
     return 16450;
   }
 
-  /**
-   * Resolve exact real market price for any asset symbol using:
-   * 1. Exchange ${SYM}-IDR pair lastPrice (with exact quoteDecimals)
-   * 2. Exchange ${SYM}-USDT pair lastPrice * usdtRate
-   * 3. Live External WebSocket Aggregator snapshot (${SYM}USDT)
-   */
   public resolveRealAssetPrice(
     symbol: string,
     usdtRate: number
@@ -218,8 +257,12 @@ export class PnLService {
     const idrPair = db.tradingPairs.get(`${clean}-IDR`);
     const usdtPair = db.tradingPairs.get(`${clean}-USDT`);
 
-    const hasValidIdrPair = Boolean(idrPair && !idrPair.isDelisted && safeBigInt(idrPair.lastPrice) > 0n);
-    const hasValidUsdtPair = Boolean(usdtPair && !usdtPair.isDelisted && safeBigInt(usdtPair.lastPrice) > 0n);
+    const hasValidIdrPair = Boolean(
+      idrPair && !idrPair.isDelisted && safeBigInt(idrPair.lastPrice) > 0n
+    );
+    const hasValidUsdtPair = Boolean(
+      usdtPair && !usdtPair.isDelisted && safeBigInt(usdtPair.lastPrice) > 0n
+    );
 
     if (hasValidIdrPair && idrPair) {
       const qDec = typeof idrPair.quoteDecimals === 'number' ? idrPair.quoteDecimals : 2;
@@ -258,6 +301,136 @@ export class PnLService {
     return { priceIdr: 0, priceUsdt: 0, source: 'NONE' };
   }
 
+  /**
+   * Build an immutable chronological Spot execution timeline for a user by unifying:
+   * 1. Live `db.trades` + cross-check with `db.journalTransactions` (`TRADE_SETTLEMENT`)
+   * 2. Permanently persisted `db.dailyPnlSnapshots` `SPOT` trade entries (surviving db.trades pruning)
+   */
+  private buildImmutableSpotExecutions(
+    userId: string,
+    usdtRate: number
+  ): UnifiedSpotExecution[] {
+    const byTradeId = new Map<string, UnifiedSpotExecution>();
+
+    // Index immutable TRADE_SETTLEMENT journal keys (if still in recent window)
+    const settlementJournalIds = new Set<string>();
+    for (const j of db.journalTransactions.values()) {
+      if (j.txType === 'TRADE_SETTLEMENT' && j.referenceId) {
+        settlementJournalIds.add(j.referenceId);
+      }
+    }
+
+    // 1. Live Spot trades from db.trades (exact BigInt units from OrderBook settlement)
+    for (const t of db.trades) {
+      if (t.id.startsWith('hist-seed-') || t.id.startsWith('usr-seed-')) continue;
+      if (t.makerUserId !== userId && t.takerUserId !== userId) continue;
+
+      const isUserBuyer =
+        (t.takerUserId === userId && t.takerSide === 'BUY') ||
+        (t.makerUserId === userId && t.takerSide === 'SELL');
+      const isTaker = t.takerUserId === userId;
+
+      const pair = db.tradingPairs.get(t.pairId);
+      const quoteCurr = (
+        pair?.quoteCurrency || (t.pairId.endsWith('-USDT') ? 'USDT' : 'IDR')
+      ).toUpperCase();
+      const baseCurr = (pair?.baseCurrency || t.pairId.split('-')[0]).toUpperCase();
+      const baseDec = pair?.baseDecimals ?? getCurrencyDecimalsServer(baseCurr);
+      const quoteDec = pair?.quoteDecimals ?? (quoteCurr === 'IDR' ? 2 : 6);
+
+      const priceUnits = safeBigInt(t.price);
+      const qtyUnits = safeBigInt(t.quantity);
+      const quoteVolUnits = safeBigInt(t.quoteVolume);
+      const feeUnits = isTaker ? safeBigInt(t.takerFee) : safeBigInt(t.makerFee);
+
+      if (qtyUnits <= 0n || priceUnits <= 0n) continue;
+
+      const execPricePair = Number(priceUnits) / 10 ** quoteDec;
+      const qtyNum = Number(qtyUnits) / 10 ** baseDec;
+      const quoteVolNum =
+        quoteVolUnits > 0n ? Number(quoteVolUnits) / 10 ** quoteDec : qtyNum * execPricePair;
+      const feeNum = Number(feeUnits) / 10 ** quoteDec;
+
+      const feeIdr = quoteCurr === 'IDR' ? feeNum : feeNum * usdtRate;
+      const feeUsdt = quoteCurr === 'USDT' ? feeNum : feeNum / (usdtRate || 16450);
+
+      byTradeId.set(t.id, {
+        id: t.id,
+        pairId: t.pairId,
+        baseCurr,
+        quoteCurr,
+        baseDec,
+        quoteDec,
+        side: isUserBuyer ? 'BUY' : 'SELL',
+        priceUnits,
+        qtyUnits,
+        quoteVolUnits,
+        execPricePair,
+        qtyNum,
+        quoteVolNum,
+        feeIdr,
+        feeUsdt,
+        createdAt: t.createdAt,
+        ledgerVerified: settlementJournalIds.has(t.id),
+      });
+    }
+
+    // 2. Recover older pruned Spot fills from persistent `db.dailyPnlSnapshots`
+    for (const snap of db.dailyPnlSnapshots.values()) {
+      if (snap.userId !== userId || !Array.isArray(snap.trades)) continue;
+      for (const tx of snap.trades) {
+        if (!tx || !tx.id) continue;
+        if (tx.id.startsWith('hist-seed-') || tx.id.startsWith('usr-seed-')) continue;
+        if (tx.source && tx.source !== 'SPOT') continue;
+        if (tx.id.startsWith('fut-') || tx.id.startsWith('copy-')) continue;
+        if (byTradeId.has(tx.id)) continue;
+
+        const pair = db.tradingPairs.get(tx.pairId);
+        const quoteCurr = (
+          pair?.quoteCurrency || (tx.pairId.endsWith('-USDT') ? 'USDT' : 'IDR')
+        ).toUpperCase();
+        const baseCurr = (pair?.baseCurrency || tx.pairId.split('-')[0]).toUpperCase();
+        const baseDec = pair?.baseDecimals ?? getCurrencyDecimalsServer(baseCurr);
+        const quoteDec = pair?.quoteDecimals ?? (quoteCurr === 'IDR' ? 2 : 6);
+
+        const priceUnits = safeBigInt(tx.rawPrice);
+        const qtyUnits = safeBigInt(tx.rawQuantity);
+        const quoteVolUnits = safeBigInt(tx.rawQuoteVolume);
+        if (priceUnits <= 0n || qtyUnits <= 0n) continue;
+
+        const execPricePair = Number(priceUnits) / 10 ** quoteDec;
+        const qtyNum = Number(qtyUnits) / 10 ** baseDec;
+        const quoteVolNum =
+          quoteVolUnits > 0n ? Number(quoteVolUnits) / 10 ** quoteDec : qtyNum * execPricePair;
+
+        byTradeId.set(tx.id, {
+          id: tx.id,
+          pairId: tx.pairId,
+          baseCurr,
+          quoteCurr,
+          baseDec,
+          quoteDec,
+          side: tx.side === 'SELL' ? 'SELL' : 'BUY',
+          priceUnits,
+          qtyUnits,
+          quoteVolUnits,
+          execPricePair,
+          qtyNum,
+          quoteVolNum,
+          feeIdr: Number(tx.feeIdr || 0),
+          feeUsdt: Number(tx.feeUsdt || 0),
+          createdAt: tx.timestamp || snap.timestamp,
+          ledgerVerified: true,
+        });
+      }
+    }
+
+    return Array.from(byTradeId.values()).sort((a, b) => {
+      if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+      return a.id.localeCompare(b.id);
+    });
+  }
+
   public getUserPnLAnalytics(
     userId: string,
     requestedMonth?: string,
@@ -268,11 +441,8 @@ export class PnLService {
     const monthKey = requestedMonth || todayKey.slice(0, 7);
     const usdtRate = this.getLiveUsdtIdrRate();
 
-    // 1. Fetch real Spot trades, Closed Futures positions, and Mirrored Copy orders
-    const userTrades = db.trades
-      .filter(t => t.makerUserId === userId || t.takerUserId === userId)
-      .slice()
-      .sort((a, b) => a.createdAt - b.createdAt);
+    // 1. Reconstruct complete immutable Spot execution log + Closed Futures + Mirrored Copy orders
+    const unifiedSpotExecutions = this.buildImmutableSpotExecutions(userId, usdtRate);
 
     const closedFutures = Array.from(db.futuresPositions.values())
       .filter(
@@ -281,28 +451,30 @@ export class PnLService {
           (p.status === 'CLOSED' || p.status === 'LIQUIDATED') &&
           (p.closedAt || p.updatedAt || p.openedAt)
       )
-      .sort((a, b) => (a.closedAt || a.updatedAt || a.openedAt || 0) - (b.closedAt || b.updatedAt || b.openedAt || 0));
+      .sort(
+        (a, b) =>
+          (a.closedAt || a.updatedAt || a.openedAt || 0) -
+          (b.closedAt || b.updatedAt || b.openedAt || 0)
+      );
 
     const userCopyTrades = db.copyMirroredOrders
       .filter(m => m.followerUserId === userId && m.status === 'FILLED')
       .slice()
       .sort((a, b) => a.createdAt - b.createdAt);
 
-    // Track exact real FIFO/weighted-average cost basis per base currency
-    const positions = new Map<
+    // FIFO Lot inventory per base currency using EXACT historical fill prices
+    const inventoryMap = new Map<
       string,
       {
-        qty: number;
-        costIdr: number;
-        costUsdt: number;
+        lots: ExecutionLot[];
         totalBoughtQty: number;
         totalSoldQty: number;
-        weightedBuyPriceIdr: number;
-        weightedBuyPriceUsdt: number;
+        lastBuyPriceIdr: number;
+        lastBuyPriceUsdt: number;
+        lastBuyTimestamp: number | null;
       }
     >();
 
-    // Track computed daily buckets from live in-memory events
     const liveDailyMap = new Map<string, DailyPnlSnapshot>();
 
     const ensureLiveBucket = (dateKey: string, ts: number): DailyPnlSnapshot => {
@@ -338,130 +510,131 @@ export class PnLService {
       return bucket;
     };
 
-    // 2. Process real Spot trades chronologically
-    for (const t of userTrades) {
-      const isUserBuyer =
-        (t.takerUserId === userId && t.takerSide === 'BUY') ||
-        (t.makerUserId === userId && t.takerSide === 'SELL');
-      const isTaker = t.takerUserId === userId;
+    // 2. Replay immutable Spot execution entries in strict FIFO chronological order
+    for (const ex of unifiedSpotExecutions) {
+      const execPriceIdr =
+        ex.quoteCurr === 'IDR' ? ex.execPricePair : ex.execPricePair * usdtRate;
+      const execPriceUsdt =
+        ex.quoteCurr === 'USDT' ? ex.execPricePair : ex.execPricePair / (usdtRate || 16450);
 
-      const pair = db.tradingPairs.get(t.pairId);
-      const quoteCurr = pair?.quoteCurrency || (t.pairId.endsWith('-USDT') ? 'USDT' : 'IDR');
-      const baseCurr = (pair?.baseCurrency || t.pairId.split('-')[0]).toUpperCase();
-      const baseDec = pair?.baseDecimals ?? getCurrencyDecimalsServer(baseCurr);
-      const quoteDec = pair?.quoteDecimals ?? (quoteCurr === 'IDR' ? 2 : 6);
-
-      const priceUnits = safeBigInt(t.price);
-      const qtyUnits = safeBigInt(t.quantity);
-      const quoteVolUnits = safeBigInt(t.quoteVolume);
-      const feeUnits = isTaker ? safeBigInt(t.takerFee) : safeBigInt(t.makerFee);
-
-      const qtyNum = Number(qtyUnits) / 10 ** baseDec;
-      const quoteVolNum = Number(quoteVolUnits) / 10 ** quoteDec;
-      const feeNum = Number(feeUnits) / 10 ** quoteDec;
-
-      const valIdr = quoteCurr === 'IDR' ? quoteVolNum : quoteVolNum * usdtRate;
-      const valUsdt = quoteCurr === 'USDT' ? quoteVolNum : quoteVolNum / usdtRate;
-      const feeIdr = quoteCurr === 'IDR' ? feeNum : feeNum * usdtRate;
-      const feeUsdt = quoteCurr === 'USDT' ? feeNum : feeNum / usdtRate;
+      const valIdr = ex.quoteCurr === 'IDR' ? ex.quoteVolNum : ex.quoteVolNum * usdtRate;
+      const valUsdt =
+        ex.quoteCurr === 'USDT' ? ex.quoteVolNum : ex.quoteVolNum / (usdtRate || 16450);
 
       let tradePnlIdr = 0;
       let tradePnlUsdt = 0;
 
-      const pos = positions.get(baseCurr) || {
-        qty: 0,
-        costIdr: 0,
-        costUsdt: 0,
-        totalBoughtQty: 0,
-        totalSoldQty: 0,
-        weightedBuyPriceIdr: 0,
-        weightedBuyPriceUsdt: 0,
-      };
+      let inv = inventoryMap.get(ex.baseCurr);
+      if (!inv) {
+        inv = {
+          lots: [],
+          totalBoughtQty: 0,
+          totalSoldQty: 0,
+          lastBuyPriceIdr: 0,
+          lastBuyPriceUsdt: 0,
+          lastBuyTimestamp: null,
+        };
+        inventoryMap.set(ex.baseCurr, inv);
+      }
 
-      if (isUserBuyer) {
-        pos.qty += qtyNum;
-        pos.totalBoughtQty += qtyNum;
-        pos.costIdr += valIdr + feeIdr;
-        pos.costUsdt += valUsdt + feeUsdt;
-        if (pos.qty > 0) {
-          pos.weightedBuyPriceIdr = pos.costIdr / pos.qty;
-          pos.weightedBuyPriceUsdt = pos.costUsdt / pos.qty;
-        }
-        positions.set(baseCurr, pos);
+      if (ex.side === 'BUY') {
+        inv.lots.push({
+          tradeId: ex.id,
+          pairId: ex.pairId,
+          qty: ex.qtyNum,
+          execPriceIdr,
+          execPriceUsdt,
+          feeIdr: ex.feeIdr,
+          feeUsdt: ex.feeUsdt,
+          timestamp: ex.createdAt,
+        });
+        inv.totalBoughtQty += ex.qtyNum;
+        inv.lastBuyPriceIdr = execPriceIdr;
+        inv.lastBuyPriceUsdt = execPriceUsdt;
+        inv.lastBuyTimestamp = ex.createdAt;
       } else {
-        pos.totalSoldQty += qtyNum;
-        if (pos.qty > 0) {
-          const matchedRatio = Math.min(1, qtyNum / pos.qty);
-          const matchedFraction = qtyNum > pos.qty ? pos.qty / qtyNum : 1;
-          const soldCostIdr = pos.costIdr * matchedRatio;
-          const soldCostUsdt = pos.costUsdt * matchedRatio;
+        inv.totalSoldQty += ex.qtyNum;
+        let remToSell = ex.qtyNum;
+        let matchedPrincipalIdr = 0;
+        let matchedPrincipalUsdt = 0;
+        let matchedEntryFeesIdr = 0;
+        let matchedEntryFeesUsdt = 0;
+        let matchedQty = 0;
 
-          // Only realize PnL against tracked cost basis for the portion bought via trades;
-          // unbacked portion (e.g. deposited prior to spot tracking) only subtracts real fee paid.
-          const backedProceedsIdr = valIdr * matchedFraction;
-          const backedProceedsUsdt = valUsdt * matchedFraction;
-          tradePnlIdr = backedProceedsIdr - feeIdr - soldCostIdr;
-          tradePnlUsdt = backedProceedsUsdt - feeUsdt - soldCostUsdt;
+        while (remToSell > 1e-12 && inv.lots.length > 0) {
+          const head = inv.lots[0];
+          const takeQty = Math.min(remToSell, head.qty);
+          const ratio = head.qty > 0 ? takeQty / head.qty : 0;
 
-          pos.qty = Math.max(0, pos.qty - qtyNum);
-          pos.costIdr = Math.max(0, pos.costIdr - soldCostIdr);
-          pos.costUsdt = Math.max(0, pos.costUsdt - soldCostUsdt);
-          if (pos.qty > 0) {
-            pos.weightedBuyPriceIdr = pos.costIdr / pos.qty;
-            pos.weightedBuyPriceUsdt = pos.costUsdt / pos.qty;
-          } else {
-            pos.weightedBuyPriceIdr = 0;
-            pos.weightedBuyPriceUsdt = 0;
+          matchedPrincipalIdr += takeQty * head.execPriceIdr;
+          matchedPrincipalUsdt += takeQty * head.execPriceUsdt;
+          matchedEntryFeesIdr += head.feeIdr * ratio;
+          matchedEntryFeesUsdt += head.feeUsdt * ratio;
+          matchedQty += takeQty;
+
+          head.qty -= takeQty;
+          head.feeIdr -= head.feeIdr * ratio;
+          head.feeUsdt -= head.feeUsdt * ratio;
+          remToSell -= takeQty;
+
+          if (head.qty <= 1e-12) {
+            inv.lots.shift();
           }
-          positions.set(baseCurr, pos);
+        }
+
+        if (matchedQty > 1e-12) {
+          const backedRatio = ex.qtyNum > 0 ? Math.min(1, matchedQty / ex.qtyNum) : 0;
+          tradePnlIdr =
+            valIdr * backedRatio - ex.feeIdr - matchedPrincipalIdr - matchedEntryFeesIdr;
+          tradePnlUsdt =
+            valUsdt * backedRatio - ex.feeUsdt - matchedPrincipalUsdt - matchedEntryFeesUsdt;
         } else {
-          // Pure deposit/non-trade holding sold: cannot invent fake buy price; real cost is fee paid
-          tradePnlIdr = -feeIdr;
-          tradePnlUsdt = -feeUsdt;
-          positions.set(baseCurr, pos);
+          // Pure deposit / pre-existing non-trade holding sold: real fee cost only
+          tradePnlIdr = -ex.feeIdr;
+          tradePnlUsdt = -ex.feeUsdt;
         }
       }
 
-      const dateKey = getJakartaDateKey(t.createdAt);
-      const bucket = ensureLiveBucket(dateKey, t.createdAt);
+      const dateKey = getJakartaDateKey(ex.createdAt);
+      const bucket = ensureLiveBucket(dateKey, ex.createdAt);
       bucket.pnlIdr += tradePnlIdr;
       bucket.pnlUsdt += tradePnlUsdt;
       bucket.volumeIdr += valIdr;
       bucket.volumeUsdt += valUsdt;
-      bucket.feesIdr += feeIdr;
-      bucket.feesUsdt += feeUsdt;
+      bucket.feesIdr += ex.feeIdr;
+      bucket.feesUsdt += ex.feeUsdt;
       bucket.tradesCount += 1;
-      if (!isUserBuyer) {
+      if (ex.side === 'SELL') {
         if (tradePnlIdr > 0) bucket.winCount += 1;
         else if (tradePnlIdr < 0) bucket.lossCount += 1;
       }
 
       const formattedPrice =
-        quoteCurr === 'IDR'
-          ? PrecisionMath.formatIDRDisplay(priceUnits)
-          : `${PrecisionMath.formatFromUnits(priceUnits, quoteDec, true)} USDT`;
-      const formattedQty = `${PrecisionMath.formatFromUnits(qtyUnits, baseDec, true)} ${baseCurr}`;
+        ex.quoteCurr === 'IDR'
+          ? PrecisionMath.formatIDRDisplay(ex.priceUnits)
+          : `${PrecisionMath.formatFromUnits(ex.priceUnits, ex.quoteDec, true)} USDT`;
+      const formattedQty = `${PrecisionMath.formatFromUnits(ex.qtyUnits, ex.baseDec, true)} ${ex.baseCurr}`;
       const formattedQuoteVol =
-        quoteCurr === 'IDR'
-          ? PrecisionMath.formatIDRDisplay(quoteVolUnits)
-          : `${PrecisionMath.formatFromUnits(quoteVolUnits, quoteDec, true)} USDT`;
+        ex.quoteCurr === 'IDR'
+          ? PrecisionMath.formatIDRDisplay(ex.quoteVolUnits)
+          : `${PrecisionMath.formatFromUnits(ex.quoteVolUnits, ex.quoteDec, true)} USDT`;
 
       const snapTrade: DailyPnlTradeSnapshot = {
-        id: t.id,
-        pairId: t.pairId,
-        side: isUserBuyer ? 'BUY' : 'SELL',
+        id: ex.id,
+        pairId: ex.pairId,
+        side: ex.side,
         price: formattedPrice,
-        rawPrice: t.price,
+        rawPrice: ex.priceUnits.toString(),
         quantity: formattedQty,
-        rawQuantity: t.quantity,
+        rawQuantity: ex.qtyUnits.toString(),
         quoteVolume: formattedQuoteVol,
-        rawQuoteVolume: t.quoteVolume,
+        rawQuoteVolume: ex.quoteVolUnits.toString(),
         pnlIdr: Math.round(tradePnlIdr),
         pnlUsdt: Number(tradePnlUsdt.toFixed(4)),
-        feeIdr: Math.round(feeIdr),
-        feeUsdt: Number(feeUsdt.toFixed(4)),
-        time: getJakartaTimeStr(t.createdAt),
-        timestamp: t.createdAt,
+        feeIdr: Math.round(ex.feeIdr),
+        feeUsdt: Number(ex.feeUsdt.toFixed(4)),
+        time: getJakartaTimeStr(ex.createdAt),
+        timestamp: ex.createdAt,
         source: 'SPOT',
       };
       bucket.trades.push(snapTrade);
@@ -474,17 +647,22 @@ export class PnLService {
       const bucket = ensureLiveBucket(dateKey, ts);
 
       const qCurr = (fp.quoteCurrency || 'USDT').toUpperCase();
-      const qDec = typeof fp.quoteDecimals === 'number' ? fp.quoteDecimals : qCurr === 'IDR' ? 2 : 6;
-      const bDec = typeof fp.baseDecimals === 'number' ? fp.baseDecimals : getCurrencyDecimalsServer(fp.baseCurrency || 'BTC');
+      const qDec =
+        typeof fp.quoteDecimals === 'number' ? fp.quoteDecimals : qCurr === 'IDR' ? 2 : 6;
+      const bDec =
+        typeof fp.baseDecimals === 'number'
+          ? fp.baseDecimals
+          : getCurrencyDecimalsServer(fp.baseCurrency || 'BTC');
 
       const realizedQuoteNum = Number(safeBigInt(fp.realizedPnlUnits)) / 10 ** qDec;
       const feeQuoteNum =
         Number(safeBigInt(fp.openFeeUnits) + safeBigInt(fp.closeFeeUnits)) / 10 ** qDec;
 
       const realizedIdr = qCurr === 'IDR' ? realizedQuoteNum : realizedQuoteNum * usdtRate;
-      const realizedUsdt = qCurr === 'USDT' ? realizedQuoteNum : realizedQuoteNum / usdtRate;
+      const realizedUsdt =
+        qCurr === 'USDT' ? realizedQuoteNum : realizedQuoteNum / (usdtRate || 16450);
       const feeIdr = qCurr === 'IDR' ? feeQuoteNum : feeQuoteNum * usdtRate;
-      const feeUsdt = qCurr === 'USDT' ? feeQuoteNum : feeQuoteNum / usdtRate;
+      const feeUsdt = qCurr === 'USDT' ? feeQuoteNum : feeQuoteNum / (usdtRate || 16450);
 
       bucket.pnlIdr += realizedIdr;
       bucket.pnlUsdt += realizedUsdt;
@@ -524,7 +702,7 @@ export class PnLService {
       });
     }
 
-    // 4. Process Mirrored Copy Trades (non-duplicate sleeve activity)
+    // 4. Process Mirrored Copy Trades
     for (const cm of userCopyTrades) {
       const pair = db.tradingPairs.get(cm.pairId);
       const quoteCurr = pair?.quoteCurrency || (cm.pairId.endsWith('-USDT') ? 'USDT' : 'IDR');
@@ -537,11 +715,11 @@ export class PnLService {
       const feeNum = Number(safeBigInt(cm.feeUnits)) / 10 ** quoteDec;
 
       const pnlIdr = quoteCurr === 'IDR' ? pnlUnitsNum : pnlUnitsNum * usdtRate;
-      const pnlUsdt = quoteCurr === 'USDT' ? pnlUnitsNum : pnlUnitsNum / usdtRate;
+      const pnlUsdt = quoteCurr === 'USDT' ? pnlUnitsNum : pnlUnitsNum / (usdtRate || 16450);
       const valIdr = quoteCurr === 'IDR' ? quoteVolNum : quoteVolNum * usdtRate;
-      const valUsdt = quoteCurr === 'USDT' ? quoteVolNum : quoteVolNum / usdtRate;
+      const valUsdt = quoteCurr === 'USDT' ? quoteVolNum : quoteVolNum / (usdtRate || 16450);
       const feeIdr = quoteCurr === 'IDR' ? feeNum : feeNum * usdtRate;
-      const feeUsdt = quoteCurr === 'USDT' ? feeNum : feeNum / usdtRate;
+      const feeUsdt = quoteCurr === 'USDT' ? feeNum : feeNum / (usdtRate || 16450);
 
       const dateKey = getJakartaDateKey(cm.createdAt);
       const bucket = ensureLiveBucket(dateKey, cm.createdAt);
@@ -587,7 +765,7 @@ export class PnLService {
       });
     }
 
-    // 5. Real-Time Unrealized PnL & Portfolio Valuation from Real Balances + Live Market Prices
+    // 5. Real-Time Unrealized PnL & Exact FIFO Entry Avg Buy Price per Asset
     const userAccounts = db.getUserAccounts(userId);
     let totalUnrealizedPnlIdr = 0;
     let totalUnrealizedPnlUsdt = 0;
@@ -605,8 +783,9 @@ export class PnLService {
         continue;
       }
 
-      const pos = positions.get(cleanCurr);
-      const hasActivity = holding > 0 || (pos && (pos.totalBoughtQty > 0 || pos.totalSoldQty > 0));
+      const inv = inventoryMap.get(cleanCurr);
+      const hasActivity =
+        holding > 0 || (inv && (inv.totalBoughtQty > 0 || inv.totalSoldQty > 0));
       if (!hasActivity) continue;
 
       const resolved = this.resolveRealAssetPrice(cleanCurr, usdtRate);
@@ -616,41 +795,73 @@ export class PnLService {
       const assetValIdr = holding * curPriceIdr;
       totalPortfolioEstIdr += assetValIdr;
 
-      const hasCostBasis = Boolean(pos && pos.qty > 1e-12 && (pos.costIdr > 0 || pos.costUsdt > 0));
-      let avgCostIdr = 0;
-      let avgCostUsdt = 0;
+      let openTrackedQty = 0;
+      let weightedExecIdr = 0;
+      let weightedExecUsdt = 0;
+      if (inv && inv.lots.length > 0) {
+        for (const lot of inv.lots) {
+          openTrackedQty += lot.qty;
+          weightedExecIdr += lot.qty * lot.execPriceIdr;
+          weightedExecUsdt += lot.qty * lot.execPriceUsdt;
+        }
+      }
+
+      const hasCostBasis = Boolean(openTrackedQty > 1e-12 && weightedExecIdr > 0);
+      let avgBuyIdr = 0;
+      let avgBuyUsdt = 0;
       let unPnlIdr = 0;
       let unPnlUsdt = 0;
       let returnPct = 0;
+      const trackedQty = Math.min(holding, openTrackedQty);
 
-      if (hasCostBasis && pos) {
-        avgCostIdr = pos.costIdr / pos.qty;
-        avgCostUsdt = pos.costUsdt / pos.qty;
-        const trackedHolding = Math.min(holding, pos.qty);
-        if (trackedHolding > 0 && curPriceIdr > 0) {
-          unPnlIdr = (curPriceIdr - avgCostIdr) * trackedHolding;
-          unPnlUsdt = (curPriceUsdt - avgCostUsdt) * trackedHolding;
-          returnPct = avgCostIdr > 0 ? ((curPriceIdr - avgCostIdr) / avgCostIdr) * 100 : 0;
+      if (hasCostBasis) {
+        // Pure volume-weighted historical execution price across open FIFO lots
+        avgBuyIdr = weightedExecIdr / openTrackedQty;
+        avgBuyUsdt = weightedExecUsdt / openTrackedQty;
+        if (trackedQty > 0 && curPriceIdr > 0) {
+          unPnlIdr = (curPriceIdr - avgBuyIdr) * trackedQty;
+          unPnlUsdt = (curPriceUsdt - avgBuyUsdt) * trackedQty;
+          returnPct = avgBuyIdr > 0 ? ((curPriceIdr - avgBuyIdr) / avgBuyIdr) * 100 : 0;
         }
       }
 
       totalUnrealizedPnlIdr += unPnlIdr;
       totalUnrealizedPnlUsdt += unPnlUsdt;
 
+      const recentFills: ExecutionFillPreview[] = inv
+        ? inv.lots
+            .slice(-5)
+            .reverse()
+            .map(l => ({
+              tradeId: l.tradeId,
+              pairId: l.pairId,
+              qty: Number(l.qty.toFixed(dec > 6 ? 6 : dec)),
+              priceIdr: roundPricePrecision(l.execPriceIdr),
+              priceUsdt: roundUsdtPrecision(l.execPriceUsdt),
+              timestamp: l.timestamp,
+            }))
+        : [];
+
       assetBreakdown.push({
         symbol: cleanCurr,
         holding: Number(holding.toFixed(dec > 6 ? 6 : dec)),
-        avgBuyPriceIdr: roundPricePrecision(avgCostIdr),
+        trackedQty: Number(trackedQty.toFixed(dec > 6 ? 6 : dec)),
+        openLotsCount: inv ? inv.lots.length : 0,
+        avgBuyPriceIdr: roundPricePrecision(avgBuyIdr),
         currentPriceIdr: roundPricePrecision(curPriceIdr),
-        avgBuyPriceUsdt: roundUsdtPrecision(avgCostUsdt),
+        avgBuyPriceUsdt: roundUsdtPrecision(avgBuyUsdt),
         currentPriceUsdt: roundUsdtPrecision(curPriceUsdt),
+        lastBuyPriceIdr: roundPricePrecision(inv?.lastBuyPriceIdr || 0),
+        lastBuyPriceUsdt: roundUsdtPrecision(inv?.lastBuyPriceUsdt || 0),
+        lastBuyTimestamp: inv?.lastBuyTimestamp ?? null,
         unrealizedPnlIdr: Math.round(unPnlIdr),
         unrealizedPnlUsdt: Number(unPnlUsdt.toFixed(4)),
         returnPct: Number(returnPct.toFixed(2)),
-        totalBought: Number((pos?.totalBoughtQty || 0).toFixed(dec > 6 ? 6 : dec)),
-        totalSold: Number((pos?.totalSoldQty || 0).toFixed(dec > 6 ? 6 : dec)),
+        totalBought: Number((inv?.totalBoughtQty || 0).toFixed(dec > 6 ? 6 : dec)),
+        totalSold: Number((inv?.totalSoldQty || 0).toFixed(dec > 6 ? 6 : dec)),
         hasCostBasis,
         priceSource: resolved.source,
+        recentFills,
       });
     }
 
@@ -678,7 +889,6 @@ export class PnLService {
     // 6. Merge live daily buckets with permanent disk-persisted db.dailyPnlSnapshots
     const mergedDailyMap = new Map<string, DailyPnlSnapshot>();
 
-    // First load all saved daily snapshots for this user
     for (const snap of db.dailyPnlSnapshots.values()) {
       if (snap.userId === userId) {
         mergedDailyMap.set(snap.date, {
@@ -741,7 +951,6 @@ export class PnLService {
       }
     }
 
-    // Ensure past snapshots get marked finalized once midnight WIB passes
     for (const [dateKey, snap] of mergedDailyMap.entries()) {
       if (dateKey < todayKey && !snap.finalized) {
         snap.finalized = true;
@@ -751,7 +960,6 @@ export class PnLService {
       }
     }
 
-    // Even if user had zero trades today, save today's baseline snapshot if portfolio > 0 or user has prior snapshots
     if (
       !mergedDailyMap.has(todayKey) &&
       (mergedDailyMap.size > 0 || totalPortfolioEstIdr > 0)

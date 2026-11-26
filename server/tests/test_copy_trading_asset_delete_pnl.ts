@@ -298,12 +298,70 @@ async function main() {
       assert.strictEqual(afterBuyPnlRes.data.summary.totalTrades, 1);
       const boughtBtc = afterBuyPnlRes.data.assetBreakdown.find((a: any) => a.symbol === 'BTC');
       assert.strictEqual(boughtBtc.hasCostBasis, true, 'After real BUY, BTC must have hasCostBasis=true');
-      assert(
-        Math.abs(boughtBtc.avgBuyPriceIdr - 1500000000) < 5000000,
-        `avgBuyPriceIdr (${boughtBtc.avgBuyPriceIdr}) should reflect Rp 1.500.000.000 + fee`
+      assert.strictEqual(
+        boughtBtc.avgBuyPriceIdr,
+        1500000000,
+        `avgBuyPriceIdr (${boughtBtc.avgBuyPriceIdr}) must match exact historical execution price 1500000000`
       );
+      assert.strictEqual(boughtBtc.openLotsCount, 1, 'Expected 1 open FIFO lot');
+      assert.strictEqual(boughtBtc.recentFills?.[0]?.priceIdr, 1500000000, 'Expected recentFills[0].priceIdr === 1500000000');
       assert.strictEqual(boughtBtc.currentPriceIdr, 1500000000, 'currentPriceIdr must equal real BTC-IDR lastPrice');
-      pass('LivePnLView computes exact avgBuyPrice & currentPrice from real Spot trades');
+
+      // Test closed FuturesPosition BigInt safety (must never throw Cannot convert undefined to a BigInt)
+      const futId = `fut-test-${crypto.randomUUID().slice(0, 8)}`;
+      db.futuresPositions.set(futId, {
+        id: futId,
+        userId: traderUser.id,
+        pairId: 'BTC-USDT',
+        baseCurrency: 'BTC',
+        quoteCurrency: 'USDT',
+        baseDecimals: 8,
+        quoteDecimals: 6,
+        side: 'LONG',
+        marginMode: 'ISOLATED',
+        leverage: 10,
+        sizeUnits: PrecisionMath.parseToUnits('0.01', 8).toString(),
+        entryPriceUnits: PrecisionMath.parseToUnits('90000', 6).toString(),
+        markPriceUnits: PrecisionMath.parseToUnits('91000', 6).toString(),
+        liqPriceUnits: PrecisionMath.parseToUnits('82000', 6).toString(),
+        marginLockedUnits: PrecisionMath.parseToUnits('90', 6).toString(),
+        openFeeUnits: PrecisionMath.parseToUnits('0.45', 6).toString(),
+        closeFeeUnits: PrecisionMath.parseToUnits('0.45', 6).toString(),
+        unrealizedPnlUnits: '0',
+        realizedPnlUnits: PrecisionMath.parseToUnits('10', 6).toString(),
+        roePct: 11.11,
+        status: 'CLOSED',
+        openedAt: Date.now() - 60_000,
+        closedAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      try {
+        const afterFutPnlRes = await reqJson(baseUrl, 'GET', '/api/wallet/pnl-analytics', traderUser.tok);
+        assert.strictEqual(afterFutPnlRes.status, 200, 'PnL analytics with closed FuturesPosition must return 200 without BigInt error');
+        const todayKeyFut = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Jakarta' });
+        assert(
+          afterFutPnlRes.data.calendarData[todayKeyFut]?.trades?.some((x: any) => x.id === `fut-${futId}`),
+          'Closed FuturesPosition must be tracked cleanly in daily calendar'
+        );
+      } finally {
+        db.futuresPositions.delete(futId);
+      }
+
+      // Verify exact FIFO historical recovery even after db.trades is pruned
+      const savedTradesSnapshot = db.trades.splice(0, db.trades.length);
+      try {
+        const prunedRecoveryRes = await reqJson(baseUrl, 'GET', '/api/wallet/pnl-analytics', traderUser.tok);
+        assert.strictEqual(prunedRecoveryRes.status, 200);
+        const recoveredBtc = prunedRecoveryRes.data.assetBreakdown.find((a: any) => a.symbol === 'BTC');
+        assert.strictEqual(
+          recoveredBtc.avgBuyPriceIdr,
+          1500000000,
+          'FIFO avgBuyPriceIdr must remain exact 1500000000 even after db.trades pruning'
+        );
+      } finally {
+        db.trades.push(...savedTradesSnapshot);
+      }
+      pass('LivePnLView computes exact FIFO execution avgBuyPrice, recovers after pruning & handles Futures safely');
 
       // Profitable SELL at Rp 1.650.000.000 (+10%)
       const bidHighOrder = matchingEngine.placeOrder({
