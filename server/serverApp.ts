@@ -45,6 +45,9 @@ import { rewardsRouter } from './routes/rewards.js';
 import { rewardsAdminRouter } from './routes/rewardsAdmin.js';
 import { earnRouter } from './routes/earn.js';
 import { earnService } from './services/earn/EarnService.js';
+import { copyTradingRouter } from './routes/copyTrading.js';
+import { copyTradingService } from './services/copy/CopyTradingService.js';
+import { pnlService } from './services/pnl/PnLService.js';
 
 export async function startServer() {
   const app = express();
@@ -86,6 +89,7 @@ export async function startServer() {
   app.use('/api/notifications', notificationsRouter);
   app.use('/api/rewards', rewardsRouter);
   app.use('/api/earn', earnRouter);
+  app.use('/api/copy-trading', copyTradingRouter);
   app.use('/api/risk', riskRouter);
   app.use('/api/bot/volume-v2', volumeExecutionV2Router);
   app.use('/api/bot', botRouter);
@@ -193,6 +197,8 @@ export async function startServer() {
     notificationBroadcastService.start();
     volumeExecutionV2Service.startRecoveryScheduler();
     earnService.startScheduler();
+    copyTradingService.start();
+    pnlService.startScheduler();
 
     // Background periodic live rate sync every 60 seconds
     setInterval(() => {

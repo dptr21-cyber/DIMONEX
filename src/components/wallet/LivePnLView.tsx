@@ -25,6 +25,7 @@ import {
   CartesianGrid
 } from 'recharts';
 import { formatIDR } from '../../lib/formatters.js';
+import { safeFetchJson } from '../../lib/safeFetch.js';
 import { AssetIcon } from '../ui/AssetIcon.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
 import { Button } from '../ui/Button.js';
@@ -84,6 +85,8 @@ export interface AssetPnLItem {
   returnPct: number;
   totalBought: number;
   totalSold: number;
+  hasCostBasis?: boolean;
+  priceSource?: 'PAIR_IDR' | 'PAIR_USDT' | 'EXTERNAL_WS' | 'NONE';
 }
 
 export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = false }) => {
@@ -102,17 +105,16 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
 
     try {
       setIsLoading(true);
-      const res = await fetch(`/api/wallet/pnl-analytics?currency=${currency}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.summary) {
-          setSummary(data.summary);
-          setCumulativeSeries(data.cumulativeSeries || []);
-          setAssetBreakdown(data.assetBreakdown || []);
-          setLastUpdated(new Date());
-        }
+      const res = await safeFetchJson<any>(
+        `/api/wallet/pnl-analytics?currency=${currency}`,
+        { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' },
+        { retries: 1, retryDelayMs: 250 }
+      );
+      if (res.ok && res.data?.summary) {
+        setSummary(res.data.summary);
+        setCumulativeSeries(res.data.cumulativeSeries || []);
+        setAssetBreakdown(res.data.assetBreakdown || []);
+        setLastUpdated(new Date());
       }
     } catch (e) {
       console.warn('Failed to load PnL analytics:', e);
@@ -123,7 +125,10 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
 
   useEffect(() => {
     fetchPnLData();
-    const interval = setInterval(fetchPnLData, 5000);
+    const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      fetchPnLData();
+    }, 5000);
     return () => clearInterval(interval);
   }, [fetchPnLData]);
 
@@ -143,7 +148,19 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
     if (isIdr) {
       return `${sign}${formatIDR(String(Math.round(val)))}`;
     }
-    return `${sign}$${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
+    const maxDigits = Math.abs(val) > 0 && Math.abs(val) < 1 ? 4 : 2;
+    return `${sign}$${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: maxDigits })} USDT`;
+  };
+
+  const formatMarketPrice = (valIdr: number, valUsdt: number): string => {
+    if (currency === 'IDR') {
+      if (!(valIdr > 0)) return '-';
+      const maxFrac = valIdr >= 1000 ? (valIdr % 1 === 0 ? 0 : 2) : valIdr >= 1 ? 4 : 8;
+      return `Rp ${valIdr.toLocaleString('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: maxFrac })}`;
+    }
+    if (!(valUsdt > 0)) return '-';
+    const maxFrac = valUsdt >= 100 ? 2 : valUsdt >= 1 ? 4 : valUsdt >= 0.001 ? 6 : 8;
+    return `$${valUsdt.toLocaleString('en-US', { minimumFractionDigits: valUsdt >= 1 ? 2 : 4, maximumFractionDigits: maxFrac })}`;
   };
 
   const isNetProfit = (summary?.netPnlIdr ?? 0) >= 0;
@@ -473,12 +490,13 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
                 </tr>
               ) : (
                 assetBreakdown.map(item => {
+                  const hasBasis = item.hasCostBasis !== false && (currency === 'IDR' ? item.avgBuyPriceIdr > 0 : item.avgBuyPriceUsdt > 0);
                   const isUp = item.unrealizedPnlIdr >= 0;
-                  const avgPrice =
-                    currency === 'IDR' ? formatIDR(String(item.avgBuyPriceIdr * 100)) : `$${item.avgBuyPriceUsdt.toLocaleString()}`;
-                  const curPrice =
-                    currency === 'IDR' ? formatIDR(String(item.currentPriceIdr * 100)) : `$${item.currentPriceUsdt.toLocaleString()}`;
-                  const pnlDisplay = formatValue(item.unrealizedPnlIdr, item.unrealizedPnlUsdt);
+                  const avgPrice = hasBasis
+                    ? formatMarketPrice(item.avgBuyPriceIdr, item.avgBuyPriceUsdt)
+                    : 'Deposit / Non-Trade';
+                  const curPrice = formatMarketPrice(item.currentPriceIdr, item.currentPriceUsdt);
+                  const pnlDisplay = hasBasis ? formatValue(item.unrealizedPnlIdr, item.unrealizedPnlUsdt) : '—';
 
                   return (
                     <tr key={item.symbol} className="hover:bg-[#17212B] transition-colors">
@@ -488,7 +506,9 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
                           <div>
                             <span className="font-semibold text-[#E4EBEF] block">{item.symbol}</span>
                             <span className="text-[10px] text-[#71818B] font-mono">
-                              Total Beli: {item.totalBought} {item.symbol}
+                              {hasBasis
+                                ? `Total Beli: ${item.totalBought} ${item.symbol}`
+                                : 'Saldo awal / deposit'}
                             </span>
                           </div>
                         </div>
@@ -496,17 +516,23 @@ export const LivePnLView: React.FC<Props> = ({ onNavigateTrade, hideBalance = fa
                       <td className="py-3 px-4 text-right font-semibold text-[#E4EBEF]">
                         {hideBalance ? '••••' : `${item.holding} ${item.symbol}`}
                       </td>
-                      <td className="py-3 px-4 text-right text-[#A1AFB8]">{avgPrice}</td>
+                      <td className={`py-3 px-4 text-right ${hasBasis ? 'text-[#A1AFB8]' : 'text-[#71818B] font-sans text-[11px]'}`}>
+                        {avgPrice}
+                      </td>
                       <td className="py-3 px-4 text-right font-semibold text-[#E4EBEF]">{curPrice}</td>
-                      <td className={`py-3 px-4 text-right font-semibold ${isUp ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
+                      <td className={`py-3 px-4 text-right font-semibold ${!hasBasis ? 'text-[#71818B]' : isUp ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
                         {pnlDisplay}
                       </td>
                       <td className="py-3 px-4 text-right font-semibold">
-                        <span className={`inline-flex items-center ${isUp ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
-                          {isUp ? <ArrowUpRight className="w-3.5 h-3.5 mr-0.5" /> : <ArrowDownRight className="w-3.5 h-3.5 mr-0.5" />}
-                          {isUp ? '+' : ''}
-                          {item.returnPct}%
-                        </span>
+                        {hasBasis ? (
+                          <span className={`inline-flex items-center ${isUp ? 'text-[#16A879]' : 'text-[#EA5B65]'}`}>
+                            {isUp ? <ArrowUpRight className="w-3.5 h-3.5 mr-0.5" /> : <ArrowDownRight className="w-3.5 h-3.5 mr-0.5" />}
+                            {isUp ? '+' : ''}
+                            {item.returnPct}%
+                          </span>
+                        ) : (
+                          <span className="text-[#71818B]">—</span>
+                        )}
                       </td>
                       <td className="py-3 px-4 text-right font-sans">
                         {onNavigateTrade && item.symbol !== 'IDR' && (

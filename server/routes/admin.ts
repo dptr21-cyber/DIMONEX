@@ -22,6 +22,8 @@ import {
   relistMarket
 } from '../services/MarketLifecycleScheduler.js';
 import { earnService } from '../services/earn/EarnService.js';
+import { copyTradingService } from '../services/copy/CopyTradingService.js';
+import { matchingEngine } from '../engine/MatchingEngine.js';
 
 export const adminRouter = Router();
 
@@ -887,40 +889,57 @@ adminRouter.post('/treasury-fees/sweep', requireAdmin, (req, res) => {
   }
 });
 
-// 16. Copy Trading Masters Control
-const defaultMasters = [
-  { id: 'trader-apex', name: 'ApexQuant Master', asset: 'BTC/IDR', roi30d: 48.2, winRate: 78.5, maxDrawdown: 6.2, followers: 412, profitShareBps: 1000, status: 'APPROVED' },
-  { id: 'trader-crypto-king', name: 'CryptoKing ID', asset: 'ETH/IDR', roi30d: 32.8, winRate: 71.0, maxDrawdown: 8.5, followers: 289, profitShareBps: 1200, status: 'APPROVED' },
-  { id: 'trader-scalper-pro', name: 'ScalperPro 24/7', asset: 'SOL/IDR', roi30d: 64.5, winRate: 65.4, maxDrawdown: 12.1, followers: 580, profitShareBps: 1500, status: 'APPROVED' }
-];
-
-adminRouter.get('/copy-trading/masters', requireAdmin, (req, res) => {
-  res.json(defaultMasters);
+// 16. Real Copy Trading Masters Control (Persisted in db.copyMasters)
+adminRouter.get('/copy-trading/masters', requireAdmin, (_req, res) => {
+  try {
+    res.json(copyTradingService.listAdminMasters());
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Gagal memuat daftar Master Trader' });
+  }
 });
 
 adminRouter.post('/copy-trading/masters/update', requireAdmin, (req, res) => {
   try {
     const adminUser = (req as any).user;
-    const { masterId, status, profitShareBps } = req.body;
+    const { masterId, status, profitShareBps, badge, maxFollowers, riskScore } = req.body || {};
+    if (!masterId) return res.status(400).json({ error: 'masterId wajib diisi' });
 
-    const master = defaultMasters.find(m => m.id === masterId);
-    if (!master) return res.status(404).json({ error: 'Master trader tidak ditemukan' });
+    const master = copyTradingService.adminUpdateMaster(
+      String(masterId),
+      { status, profitShareBps, badge, maxFollowers, riskScore },
+      adminUser.id
+    );
 
-    if (status !== undefined) master.status = status;
-    if (profitShareBps !== undefined) master.profitShareBps = Number(profitShareBps);
-
-    db.auditLogs.push({
-      id: crypto.randomUUID(),
-      actorId: adminUser.id,
-      action: 'COPY_MASTER_UPDATED',
-      resource: `master:${masterId}`,
-      details: `Master trader ${masterId} updated: Status ${master.status}, Profit Share ${master.profitShareBps / 100}% by admin ${adminUser.email}`,
-      createdAt: Date.now()
+    res.json({
+      success: true,
+      message: `Master trader ${master.name} berhasil diperbarui (Status: ${master.status}, Profit Share: ${master.profitSharePct}%).`,
+      master,
     });
-
-    res.json({ success: true, message: `Master trader ${masterId} berhasil diperbarui!`, master });
   } catch (err: any) {
-    res.status(400).json({ error: err.message });
+    res.status(400).json({ error: err?.message || 'Gagal memperbarui Master Trader' });
+  }
+});
+
+adminRouter.post('/copy-trading/masters/execute-signal', requireAdmin, (req, res) => {
+  try {
+    const { masterId, pairId, side, quantity, price, orderType } = req.body || {};
+    if (!masterId || !pairId || (side !== 'BUY' && side !== 'SELL') || !quantity) {
+      return res.status(400).json({ error: 'masterId, pairId, side (BUY/SELL), dan quantity wajib diisi.' });
+    }
+    const result = copyTradingService.executeMasterSignal(String(masterId), {
+      pairId: String(pairId),
+      side,
+      quantity: String(quantity),
+      price: price ? String(price) : undefined,
+      orderType: orderType === 'LIMIT' ? 'LIMIT' : 'MARKET',
+    });
+    res.json({
+      success: true,
+      message: `Sinyal Master ${side} ${quantity} pada ${pairId} tereksekusi (${result.trades.length} matched trade, ${result.mirroredOrdersCount} mirror ke pengikut).`,
+      ...result,
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Gagal mengeksekusi sinyal Master' });
   }
 });
 
@@ -1329,6 +1348,7 @@ adminRouter.post('/assets', requireAdmin, (req, res) => {
       updatedAt: now
     };
 
+    db.deletedAssetSymbols.delete(rawSymbol);
     db.assets.set(newAsset.id, newAsset);
     db.auditLogs.push({
       id: crypto.randomUUID(),
@@ -1524,6 +1544,151 @@ adminRouter.put('/assets/:id', requireAdmin, (req, res) => {
     });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/assets/:id - Delete a crypto token/asset with dependency safeguard & optional force cleanup
+adminRouter.delete('/assets/:id', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const assetId = String(req.params.id || '').trim();
+    const asset =
+      db.assets.get(assetId) ||
+      Array.from(db.assets.values()).find(a => a.symbol.toUpperCase() === assetId.toUpperCase());
+
+    if (!asset) {
+      return res.status(404).json({ error: `Aset ${assetId} tidak ditemukan.` });
+    }
+
+    const sym = asset.symbol.toUpperCase();
+    if (sym === 'IDR') {
+      return res.status(400).json({
+        error: 'Mata uang dasar IDR tidak dapat dihapus karena merupakan settlement utama bursa.',
+      });
+    }
+
+    const force =
+      req.query.force === '1' ||
+      req.query.force === 'true' ||
+      Boolean(req.body?.force);
+
+    const linkedPairs = Array.from(db.tradingPairs.values()).filter(
+      p => p.baseCurrency.toUpperCase() === sym || p.quoteCurrency.toUpperCase() === sym
+    );
+    const linkedPairIds = new Set(linkedPairs.map(p => p.id));
+
+    const openOrders = Array.from(db.orders.values()).filter(
+      o => linkedPairIds.has(o.pairId) && (o.status === 'NEW' || o.status === 'PARTIALLY_FILLED')
+    );
+
+    const activeBots = Array.from(db.botInstances.values()).filter(
+      b =>
+        linkedPairIds.has(b.pairId) &&
+        (b.status === 'RUNNING' || b.status === 'PAUSED' || b.status === 'READY')
+    );
+
+    const activeEarnPositions = Array.from(db.earnPositions.values()).filter(
+      p => p.asset.toUpperCase() === sym && p.status !== 'REDEEMED'
+    );
+
+    const holdersWithBalance = Array.from(db.ledgerAccounts.values()).filter(
+      acc =>
+        !acc.userId.startsWith('sys-') &&
+        acc.currency.toUpperCase() === sym &&
+        BigInt(acc.balanceAvailable) + BigInt(acc.balanceLocked) > 0n
+    );
+
+    const hasDependencies =
+      linkedPairs.length > 0 ||
+      openOrders.length > 0 ||
+      activeBots.length > 0 ||
+      activeEarnPositions.length > 0 ||
+      holdersWithBalance.length > 0;
+
+    if (hasDependencies && !force) {
+      return res.status(409).json({
+        error: `Token ${sym} masih memiliki keterkaitan aktif. Gunakan opsi Hapus Paksa (Force Delete) untuk membersihkan pair & order terbuka secara atomik.`,
+        requiresForce: true,
+        dependencies: {
+          linkedPairs: linkedPairs.map(p => p.id),
+          openOrdersCount: openOrders.length,
+          activeBotsCount: activeBots.length,
+          activeEarnPositionsCount: activeEarnPositions.length,
+          holdersCount: holdersWithBalance.length,
+        },
+      });
+    }
+
+    const now = Date.now();
+    let cancelledOrdersCount = 0;
+    for (const order of openOrders) {
+      try {
+        matchingEngine.cancelOrder(order.id, order.pairId, order.userId);
+        cancelledOrdersCount++;
+      } catch (err: any) {
+        console.warn(`[Admin Delete Asset] Gagal batalkan order ${order.id}:`, err?.message || err);
+      }
+    }
+
+    let stoppedBotsCount = 0;
+    for (const bot of activeBots) {
+      bot.status = 'STOPPED';
+      bot.stoppedAt = now;
+      bot.updatedAt = now;
+      bot.lastExecutionResult = `Auto-stopped because asset ${sym} was deleted by admin`;
+      db.botInstances.set(bot.id, bot);
+      stoppedBotsCount++;
+    }
+
+    // Remove linked pairs, markets, and listing requests so asset does not auto-resurrect
+    let removedPairsCount = 0;
+    for (const pair of linkedPairs) {
+      db.tradingPairs.delete(pair.id);
+      db.markets.delete(pair.id);
+      removedPairsCount++;
+    }
+    for (const [reqId, lr] of db.listingRequests.entries()) {
+      if (lr.assetId === asset.id || lr.quoteAssetId === asset.id) {
+        db.listingRequests.delete(reqId);
+      }
+    }
+
+    // Pause any Earn vaults tied to the deleted token
+    for (const vault of db.earnVaults.values()) {
+      if (vault.asset.toUpperCase() === sym && vault.status === 'ACTIVE') {
+        vault.status = 'PAUSED';
+        vault.updatedAt = now;
+        db.earnVaults.set(vault.id, vault);
+      }
+    }
+
+    db.deletedAssetSymbols.add(sym);
+    db.assets.delete(asset.id);
+
+    db.auditLogs.push({
+      id: crypto.randomUUID(),
+      actorId: adminUser?.id || 'ADMIN',
+      action: 'ASSET_DELETED',
+      resource: `asset:${sym}`,
+      details: `Token/Aset ${sym} (${asset.name}) dihapus permanen oleh ${adminUser?.email} (force=${force}, removedPairs=${removedPairsCount}, cancelledOrders=${cancelledOrdersCount}, stoppedBots=${stoppedBotsCount}).`,
+      createdAt: now,
+    });
+    db.saveToDisk();
+
+    const serializedList = Array.from(db.assets.values()).map(serializeAdminAsset);
+    marketWsService.broadcastAssetsUpdated(serializedList);
+    marketWsService.broadcastTickerSnapshot();
+
+    res.json({
+      success: true,
+      message: `Token ${sym} (${asset.name}) berhasil dihapus permanen${removedPairsCount > 0 ? ` beserta ${removedPairsCount} pair pasar terkait` : ''}.`,
+      deletedSymbol: sym,
+      removedPairsCount,
+      cancelledOrdersCount,
+      stoppedBotsCount,
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Gagal menghapus aset token' });
   }
 });
 

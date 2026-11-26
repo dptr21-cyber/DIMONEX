@@ -200,6 +200,18 @@ export const AssetManagementSection: React.FC<Props> = ({ onRefreshPairs, onNoti
   const [formError, setFormError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const [deleteTarget, setDeleteTarget] = useState<AssetItem | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteForce, setDeleteForce] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteDependencies, setDeleteDependencies] = useState<{
+    linkedPairs: string[];
+    openOrdersCount: number;
+    activeBotsCount: number;
+    activeEarnPositionsCount: number;
+    holdersCount: number;
+  } | null>(null);
+
   const fetchAssets = useCallback(async () => {
     const token = localStorage.getItem('dimonex_auth_token');
     if (!token) return;
@@ -371,6 +383,54 @@ export const AssetManagementSection: React.FC<Props> = ({ onRefreshPairs, onNoti
       setFormError(err?.message || 'Terjadi kesalahan jaringan saat menyimpan aset.');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const openDeleteModal = (asset: AssetItem) => {
+    setDeleteTarget(asset);
+    setDeleteForce(false);
+    setDeleteError(null);
+    setDeleteDependencies(null);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget) return;
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!token) {
+      setDeleteError('Sesi admin tidak valid. Silakan login kembali.');
+      return;
+    }
+
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      const url = `/api/admin/assets/${encodeURIComponent(deleteTarget.id)}${deleteForce ? '?force=1' : ''}`;
+      const res = await fetch(url, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+
+      if (res.status === 409 && data.requiresForce && data.dependencies) {
+        setDeleteDependencies(data.dependencies);
+        setDeleteError(data.error || 'Token ini masih memiliki keterkaitan aktif.');
+        return;
+      }
+
+      if (!res.ok) {
+        setDeleteError(data.error || 'Gagal menghapus aset token.');
+        return;
+      }
+
+      const deletedSym = deleteTarget.symbol;
+      setDeleteTarget(null);
+      await Promise.all([fetchAssets(), loadAssetRegistry(true)]);
+      onRefreshPairs();
+      onNotify('success', data.message || `Token ${deletedSym} berhasil dihapus.`);
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Kesalahan jaringan saat menghapus token.');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -605,14 +665,27 @@ export const AssetManagementSection: React.FC<Props> = ({ onRefreshPairs, onNoti
                       </td>
 
                       <td className="px-4 py-3 text-right">
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => openEditModal(asset)}
-                          icon={<Pencil className="w-3.5 h-3.5" />}
-                        >
-                          Edit Aset
-                        </Button>
+                        <div className="inline-flex items-center justify-end gap-2">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => openEditModal(asset)}
+                            icon={<Pencil className="w-3.5 h-3.5" />}
+                          >
+                            Edit Aset
+                          </Button>
+                          {asset.symbol.toUpperCase() !== 'IDR' && (
+                            <Button
+                              variant="danger"
+                              size="sm"
+                              onClick={() => openDeleteModal(asset)}
+                              icon={<Trash2 className="w-3.5 h-3.5" />}
+                              title={`Hapus token ${asset.symbol}`}
+                            >
+                              Hapus
+                            </Button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1013,6 +1086,108 @@ export const AssetManagementSection: React.FC<Props> = ({ onRefreshPairs, onNoti
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Delete Asset / Token Confirmation Modal */}
+      <Modal
+        isOpen={Boolean(deleteTarget)}
+        onClose={() => !isDeleting && setDeleteTarget(null)}
+        title={deleteTarget ? `Hapus Token / Aset — ${deleteTarget.symbol}` : 'Hapus Token'}
+        subtitle={
+          deleteTarget
+            ? `Konfirmasi penghapusan permanen ${deleteTarget.name} (${deleteTarget.symbol}) dari daftar aset & pasar bursa.`
+            : undefined
+        }
+        maxWidth="max-w-lg"
+      >
+        {deleteTarget && (
+          <div className="space-y-4">
+            <div className="p-3.5 rounded-[10px] bg-[#111820] border border-[#202B34] flex items-center gap-3">
+              <AssetIcon
+                symbol={deleteTarget.symbol}
+                logoUrl={deleteTarget.logoUrl || undefined}
+                size="md"
+              />
+              <div>
+                <div className="text-xs font-mono font-bold text-[#E4EBEF]">
+                  {deleteTarget.symbol} · {deleteTarget.name}
+                </div>
+                <div className="text-[11px] text-[#71818B] font-mono">
+                  Network: {deleteTarget.network} · {deleteTarget.decimals} desimal
+                </div>
+              </div>
+            </div>
+
+            {deleteError && (
+              <div className="p-3 rounded-[8px] bg-[#401F27]/70 border border-[#EA5B65]/50 text-xs text-[#E4EBEF] flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-[#EA5B65] shrink-0 mt-0.5" />
+                <span>{deleteError}</span>
+              </div>
+            )}
+
+            {deleteDependencies && (
+              <div className="p-3.5 rounded-[10px] bg-[#2C2415]/60 border border-[#D6A85C]/40 space-y-2 text-xs">
+                <div className="font-semibold text-[#D6A85C]">
+                  Keterkaitan Aktif Ditemukan:
+                </div>
+                <ul className="space-y-1 text-[11px] font-mono text-[#E4EBEF]">
+                  <li>
+                    • Trading Pairs Terkait:{' '}
+                    {deleteDependencies.linkedPairs.length > 0
+                      ? deleteDependencies.linkedPairs.join(', ')
+                      : 'Tidak ada'}
+                  </li>
+                  <li>• Order Terbuka: {deleteDependencies.openOrdersCount} order (akan dibatalkan &amp; direfund otomatis)</li>
+                  <li>• Bot Trading Aktif: {deleteDependencies.activeBotsCount} bot (akan dihentikan)</li>
+                  <li>• Posisi Staking/Earn Aktif: {deleteDependencies.activeEarnPositionsCount} posisi</li>
+                  <li>• Pengguna dengan Saldo &gt; 0: {deleteDependencies.holdersCount} pengguna</li>
+                </ul>
+
+                <label className="pt-2 border-t border-[#D6A85C]/25 flex items-center gap-2 text-xs font-semibold text-[#E4EBEF] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={deleteForce}
+                    onChange={e => setDeleteForce(e.target.checked)}
+                    className="rounded border-[#40515D] bg-[#141C24] accent-[#EA5B65]"
+                  />
+                  <span>Saya mengerti, aktifkan Hapus Paksa (Force Delete) &amp; bersihkan pair terkait</span>
+                </label>
+              </div>
+            )}
+
+            {!deleteDependencies && (
+              <p className="text-xs text-[#A1AFB8]">
+                Aset yang dihapus tidak akan muncul lagi di daftar Pasar, Terminal Trading, maupun Admin Registry.
+              </p>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#202B34]">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={isDeleting}
+                onClick={() => setDeleteTarget(null)}
+              >
+                Batal
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                size="sm"
+                disabled={isDeleting || (Boolean(deleteDependencies) && !deleteForce)}
+                onClick={handleConfirmDelete}
+                icon={<Trash2 className="w-3.5 h-3.5" />}
+              >
+                {isDeleting
+                  ? 'Menghapus...'
+                  : deleteDependencies
+                  ? 'Konfirmasi Hapus Paksa'
+                  : `Hapus Token ${deleteTarget.symbol}`}
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

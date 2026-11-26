@@ -7,8 +7,9 @@
  */
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
+import { ChevronLeft, ChevronRight, RefreshCw, CheckCircle2 } from 'lucide-react';
 import { formatIDR } from '../../lib/formatters.js';
+import { safeFetchJson } from '../../lib/safeFetch.js';
 import { Modal } from '../ui/Modal.js';
 import { Button } from '../ui/Button.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
@@ -34,6 +35,7 @@ export interface DayTradeDetail {
   feeUsdt: number;
   time: string;
   timestamp: number;
+  source?: 'SPOT' | 'FUTURES' | 'COPY';
 }
 
 export interface DayPnLRecord {
@@ -50,16 +52,28 @@ export interface DayPnLRecord {
   lossCount: number;
   returnPct: number;
   trades: DayTradeDetail[];
+  finalized?: boolean;
+}
+
+function getJakartaCurrentYearMonth(): { year: number; month: number } {
+  const jakartaIso = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Jakarta' });
+  const [yStr, mStr] = jakartaIso.split('-');
+  return {
+    year: parseInt(yStr, 10) || new Date().getFullYear(),
+    month: (parseInt(mStr, 10) || new Date().getMonth() + 1) - 1,
+  };
 }
 
 export const PnLCalendarView: React.FC<Props> = ({ hideBalance = false }) => {
   const [currency, setCurrency] = useState<'IDR' | 'USDT'>('IDR');
   const [isLoading, setIsLoading] = useState(false);
   const [calendarMap, setCalendarMap] = useState<Record<string, DayPnLRecord>>({});
+  const [persistedDaysCount, setPersistedDaysCount] = useState<number>(0);
   const [selectedDayRecord, setSelectedDayRecord] = useState<DayPnLRecord | null>(null);
 
-  const [currentYear, setCurrentYear] = useState<number>(2026);
-  const [currentMonth, setCurrentMonth] = useState<number>(10);
+  const initialYm = useMemo(() => getJakartaCurrentYearMonth(), []);
+  const [currentYear, setCurrentYear] = useState<number>(initialYm.year);
+  const [currentMonth, setCurrentMonth] = useState<number>(initialYm.month);
 
   const monthNamesID = [
     'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
@@ -79,13 +93,17 @@ export const PnLCalendarView: React.FC<Props> = ({ hideBalance = false }) => {
 
     try {
       setIsLoading(true);
-      const res = await fetch(`/api/wallet/pnl-analytics?currency=${currency}&month=${currentMonthKey}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.calendarData) {
-          setCalendarMap(data.calendarData);
+      const res = await safeFetchJson<any>(
+        `/api/wallet/pnl-analytics?currency=${currency}&month=${currentMonthKey}`,
+        { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' },
+        { retries: 1, retryDelayMs: 250 }
+      );
+      if (res.ok && res.data?.calendarData) {
+        setCalendarMap(res.data.calendarData);
+        if (typeof res.data.summary?.persistedDaysCount === 'number') {
+          setPersistedDaysCount(res.data.summary.persistedDaysCount);
+        } else {
+          setPersistedDaysCount(Object.keys(res.data.calendarData).length);
         }
       }
     } catch (e) {
@@ -118,9 +136,9 @@ export const PnLCalendarView: React.FC<Props> = ({ hideBalance = false }) => {
   };
 
   const handleJumpToday = () => {
-    const now = new Date();
-    setCurrentYear(now.getFullYear());
-    setCurrentMonth(now.getMonth());
+    const ym = getJakartaCurrentYearMonth();
+    setCurrentYear(ym.year);
+    setCurrentMonth(ym.month);
   };
 
   const formatVal = (valIdr: number, valUsdt: number, showSign = true): string => {
@@ -254,6 +272,11 @@ export const PnLCalendarView: React.FC<Props> = ({ hideBalance = false }) => {
           <Button variant="secondary" size="sm" onClick={handleJumpToday}>
             Hari Ini
           </Button>
+
+          <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-mono text-[#16A879]">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            {persistedDaysCount} Hari Tersimpan Permanen
+          </span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -514,7 +537,12 @@ export const PnLCalendarView: React.FC<Props> = ({ hideBalance = false }) => {
                       return (
                         <tr key={tx.id} className="hover:bg-[#17212B] transition-colors">
                           <td className="py-2.5 px-3 text-[#A1AFB8]">{tx.time}</td>
-                          <td className="py-2.5 px-3 font-semibold text-[#E4EBEF]">{tx.pairId}</td>
+                          <td className="py-2.5 px-3 font-semibold text-[#E4EBEF]">
+                            <span>{tx.pairId}</span>
+                            {tx.source && tx.source !== 'SPOT' && (
+                              <span className="ml-1.5 text-[9px] font-mono text-[#8DA5B1]">{tx.source}</span>
+                            )}
+                          </td>
                           <td className="py-2.5 px-3 font-sans">
                             <StatusBadge tone={isBuy ? 'buy' : 'sell'}>{tx.side}</StatusBadge>
                           </td>

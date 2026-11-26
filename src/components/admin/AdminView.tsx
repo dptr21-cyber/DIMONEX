@@ -1186,8 +1186,10 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
     }
   };
 
-  const handleUpdateMasterTrader = async (masterId: string, currentStatus: string) => {
-    const newStatus = currentStatus === 'APPROVED' ? 'PAUSED' : 'APPROVED';
+  const handleUpdateMasterTrader = async (
+    masterId: string,
+    newStatus: 'APPROVED' | 'PAUSED' | 'REJECTED'
+  ) => {
     try {
       const token = localStorage.getItem('dimonex_auth_token');
       const res = await fetch('/api/admin/copy-trading/masters/update', {
@@ -1205,6 +1207,104 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
     } catch (e: any) {
       showToast('error', e.message);
     }
+  };
+
+  const handleEditMasterShare = (masterId: string, name: string, currentSharePct: number) => {
+    setConfirmConfig({
+      isOpen: true,
+      title: `Ubah Profit Share — ${name}`,
+      description: 'Tentukan persentase bagi hasil (High-Water Mark) untuk Master Trader ini (0% - 50%).',
+      confirmLabel: 'Simpan Share %',
+      tone: 'brand',
+      fields: [
+        {
+          key: 'profitSharePct',
+          label: 'Profit Share (%)',
+          type: 'number',
+          defaultValue: String(currentSharePct),
+          required: true,
+        },
+      ],
+      onSubmit: async (values) => {
+        const pct = parseFloat(values.profitSharePct);
+        if (!Number.isFinite(pct) || pct < 0 || pct > 50) {
+          showToast('error', 'Profit Share harus antara 0% sampai 50%.');
+          return;
+        }
+        const token = localStorage.getItem('dimonex_auth_token');
+        const res = await fetch('/api/admin/copy-trading/masters/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ masterId, profitShareBps: Math.round(pct * 100) }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast('success', data.message);
+          loadAllData();
+        } else {
+          showToast('error', data.error);
+        }
+      },
+    });
+  };
+
+  const handleTestMasterSignal = (masterId: string, name: string, primaryPair: string) => {
+    setConfirmConfig({
+      isOpen: true,
+      title: `Uji Sinyal Spot — ${name}`,
+      description: 'Mengeksekusi order Market riil di OrderBook pada akun Master ini dan langsung men-mirror ke seluruh pengikut aktif.',
+      confirmLabel: 'Eksekusi Sinyal',
+      tone: 'buy',
+      fields: [
+        {
+          key: 'pairId',
+          label: 'Pair Spot (contoh: BTC-IDR)',
+          type: 'text',
+          defaultValue: primaryPair || 'BTC-IDR',
+          required: true,
+        },
+        {
+          key: 'side',
+          label: 'Arah Order (BUY atau SELL)',
+          type: 'text',
+          defaultValue: 'BUY',
+          required: true,
+        },
+        {
+          key: 'quantity',
+          label: 'Kuantitas Base Aset',
+          type: 'text',
+          defaultValue: '0.001',
+          required: true,
+        },
+      ],
+      onSubmit: async (values) => {
+        const side = (values.side || '').trim().toUpperCase();
+        if (side !== 'BUY' && side !== 'SELL') {
+          showToast('error', 'Arah order harus BUY atau SELL.');
+          return;
+        }
+        const token = localStorage.getItem('dimonex_auth_token');
+        const res = await fetch('/api/admin/copy-trading/masters/execute-signal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            masterId,
+            pairId: (values.pairId || primaryPair || 'BTC-IDR').trim().toUpperCase(),
+            side,
+            quantity: (values.quantity || '').trim(),
+            orderType: 'MARKET',
+          }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          showToast('success', data.message);
+          loadAllData();
+        } else {
+          showToast('error', data.error);
+        }
+      },
+    });
   };
 
   const handleUpdateVipTier = (tier: number, currentMaker: number, currentTaker: number) => {
@@ -3217,45 +3317,125 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
 
           {/* Section 2: Copy Trading Master Traders */}
           <div className="space-y-3">
-            <h4 className="text-sm font-semibold text-[#E4EBEF]">Manajemen Master Trader (Copy Trading)</h4>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <h4 className="text-sm font-semibold text-[#E4EBEF]">Manajemen Master Trader (Copy Trading Riil)</h4>
+              <span className="text-[11px] text-[#71818B] font-mono">
+                {copyMasters.filter(m => m.status === 'APPROVED').length} Aktif · {copyMasters.filter(m => m.status === 'PENDING').length} Menunggu Persetujuan
+              </span>
+            </div>
             <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs font-mono tabular-nums">
                   <thead className="bg-[#17212B] text-[11px] text-[#A1AFB8] border-b border-[#202B34] font-sans">
                     <tr>
                       <th className="px-4 py-2.5 font-semibold">Master Trader</th>
-                      <th className="px-4 py-2.5 font-semibold">Pair</th>
+                      <th className="px-4 py-2.5 font-semibold">Pair Utama</th>
                       <th className="px-4 py-2.5 font-semibold">30d ROI</th>
+                      <th className="px-4 py-2.5 font-semibold">AUM</th>
                       <th className="px-4 py-2.5 font-semibold">Followers</th>
-                      <th className="px-4 py-2.5 font-semibold">Profit Share</th>
+                      <th className="px-4 py-2.5 font-semibold">Share</th>
                       <th className="px-4 py-2.5 font-semibold">Status</th>
                       <th className="px-4 py-2.5 font-semibold text-right">Aksi</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#202B34]">
-                    {copyMasters.map(m => (
-                      <tr key={m.id} className="hover:bg-[#17212B]/60 transition-colors">
-                        <td className="px-4 py-3 font-semibold text-[#E4EBEF]">{m.name}</td>
-                        <td className="px-4 py-3 text-[#A1AFB8]">{m.asset}</td>
-                        <td className="px-4 py-3 text-[#35B887] font-bold">+{m.roi30d}%</td>
-                        <td className="px-4 py-3 text-[#E4EBEF]">{m.followers} orang</td>
-                        <td className="px-4 py-3 text-[#E4EBEF]">{m.profitShareBps / 100}%</td>
-                        <td className="px-4 py-3 font-sans">
-                          <StatusBadge tone={m.status === 'APPROVED' ? 'success' : 'danger'}>
-                            {m.status}
-                          </StatusBadge>
-                        </td>
-                        <td className="px-4 py-3 text-right font-sans">
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => handleUpdateMasterTrader(m.id, m.status)}
+                    {copyMasters.map(m => {
+                      const sharePct = m.profitSharePct ?? (m.profitShareBps ? m.profitShareBps / 100 : 10);
+                      const statusTone =
+                        m.status === 'APPROVED'
+                          ? 'success'
+                          : m.status === 'PENDING'
+                          ? 'warning'
+                          : 'danger';
+                      return (
+                        <tr key={m.id} className="hover:bg-[#17212B]/60 transition-colors">
+                          <td className="px-4 py-3">
+                            <div className="font-semibold text-[#E4EBEF] font-sans flex items-center gap-1.5">
+                              <span>{m.name}</span>
+                              {m.badge && <StatusBadge tone="brand">{m.badge}</StatusBadge>}
+                            </div>
+                            <div className="text-[11px] text-[#71818B]">{m.handle || m.userId}</div>
+                          </td>
+                          <td className="px-4 py-3 text-[#A1AFB8]">{m.asset || m.primaryPair}</td>
+                          <td
+                            className={`px-4 py-3 font-bold ${
+                              Number(m.roi30d) >= 0 ? 'text-[#35B887]' : 'text-[#EA5B65]'
+                            }`}
                           >
-                            {m.status === 'APPROVED' ? 'Jeda Master' : 'Aktifkan'}
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
+                            {Number(m.roi30d) >= 0 ? '+' : ''}
+                            {Number(m.roi30d ?? 0).toFixed(2)}%
+                          </td>
+                          <td className="px-4 py-3 text-[#E4EBEF]">{m.aum || '$0'}</td>
+                          <td className="px-4 py-3 text-[#E4EBEF]">
+                            {m.followers}/{m.maxFollowers ?? 500}
+                          </td>
+                          <td className="px-4 py-3 text-[#E4EBEF]">{sharePct}%</td>
+                          <td className="px-4 py-3 font-sans">
+                            <StatusBadge tone={statusTone} dot>
+                              {m.status}
+                            </StatusBadge>
+                          </td>
+                          <td className="px-4 py-3 text-right font-sans">
+                            <div className="inline-flex items-center gap-1.5 flex-wrap justify-end">
+                              {m.status === 'PENDING' && (
+                                <>
+                                  <Button
+                                    variant="profit"
+                                    size="sm"
+                                    onClick={() => handleUpdateMasterTrader(m.id, 'APPROVED')}
+                                  >
+                                    Setujui
+                                  </Button>
+                                  <Button
+                                    variant="danger"
+                                    size="sm"
+                                    onClick={() => handleUpdateMasterTrader(m.id, 'REJECTED')}
+                                  >
+                                    Tolak
+                                  </Button>
+                                </>
+                              )}
+                              {m.status === 'APPROVED' && (
+                                <>
+                                  <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={() => handleUpdateMasterTrader(m.id, 'PAUSED')}
+                                  >
+                                    Jeda
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                      handleTestMasterSignal(m.id, m.name, m.primaryPair || 'BTC-IDR')
+                                    }
+                                  >
+                                    Uji Sinyal
+                                  </Button>
+                                </>
+                              )}
+                              {(m.status === 'PAUSED' || m.status === 'REJECTED') && (
+                                <Button
+                                  variant="primary"
+                                  size="sm"
+                                  onClick={() => handleUpdateMasterTrader(m.id, 'APPROVED')}
+                                >
+                                  Aktifkan
+                                </Button>
+                              )}
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleEditMasterShare(m.id, m.name, sharePct)}
+                              >
+                                Edit Share
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

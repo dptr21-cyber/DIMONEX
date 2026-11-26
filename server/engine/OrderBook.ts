@@ -19,6 +19,16 @@ import { LedgerService } from '../ledger/LedgerService.js';
 import { db } from '../db/database.js';
 import { klineService } from './KlineService.js';
 
+export type TradeSettledListener = (trade: Trade) => void;
+const tradeSettledListeners: Set<TradeSettledListener> = new Set();
+
+export function registerTradeSettledListener(listener: TradeSettledListener): () => void {
+  tradeSettledListeners.add(listener);
+  return () => {
+    tradeSettledListeners.delete(listener);
+  };
+}
+
 export interface MatchResult {
   trades: Trade[];
   takerOrder: Order;
@@ -293,6 +303,14 @@ export class OrderBook {
       klineService.processTrade(trade);
       result.trades.push(trade);
       result.events.push(this.recordEvent('ORDER_MATCHED', trade));
+
+      for (const listener of tradeSettledListeners) {
+        try {
+          listener(trade);
+        } catch (err: any) {
+          console.warn('[OrderBook] Trade listener error:', err?.message || err);
+        }
+      }
 
       if (makerOrder.status === 'FILLED') {
         bookSide.splice(bookIdx, 1);

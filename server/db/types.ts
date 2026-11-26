@@ -111,7 +111,10 @@ export type JournalTxType =
   | 'EARN_STAKE'
   | 'EARN_REDEEM'
   | 'EARN_YIELD'
-  | 'FEE_TREASURY_SWEEP';
+  | 'FEE_TREASURY_SWEEP'
+  | 'COPY_TRADE_ALLOC'
+  | 'COPY_TRADE_SETTLE'
+  | 'COPY_TRADE_PROFIT_SHARE';
 
 export type LedgerEntryType = 'DEBIT' | 'CREDIT';
 
@@ -1657,3 +1660,128 @@ export interface EarnPayoutRecord {
   treasuryFundedUnits?: string;
   createdAt: number;
 }
+
+// -------------------------------------------------------------
+// REAL COPY TRADING DOMAIN ENTITIES
+// -------------------------------------------------------------
+export type CopyMasterBadge = 'ELITE' | 'MASTER' | 'PRO';
+export type CopyMasterStatus = 'PENDING' | 'APPROVED' | 'PAUSED' | 'REJECTED';
+export type CopyRelationshipStatus = 'ACTIVE' | 'PAUSED' | 'STOPPED';
+
+export interface CopyMasterTrader {
+  id: string;
+  userId: string;
+  name: string;
+  handle: string;
+  avatarInitial: string;
+  badge: CopyMasterBadge;
+  strategySummary: string;
+  primaryPair: string;
+  supportedPairs: string[];
+  status: CopyMasterStatus;
+  profitShareBps: number; // e.g., 1000 = 10.00%
+  minCopyUsdt: number;
+  minCopyIdr: number;
+  maxFollowers: number;
+  riskScore: number; // 1..10
+  initialEquityUsdt: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CopyCostBasisSlot {
+  costUnits: string;
+  qtyUnits: string;
+}
+
+export interface CopyRelationship {
+  id: string;
+  followerUserId: string;
+  masterId: string;
+  status: CopyRelationshipStatus;
+  allocationCurrency: 'USDT' | 'IDR';
+  allocatedUnits: string;
+  availableSleeveUnits: string;
+  heldBaseBySymbol: Record<string, string>;
+  costBasisBySymbol: Record<string, CopyCostBasisSlot>;
+  highWaterMarkUnits: string;
+  realizedPnlUnits: string;
+  profitSharePaidUnits: string;
+  stopLossPct: number;
+  takeProfitPct: number;
+  maxPerTradePct: number;
+  mirroredTradesCount: number;
+  stopReason?: string;
+  startedAt: number;
+  stoppedAt?: number;
+  updatedAt: number;
+}
+
+export interface CopyMirroredOrder {
+  id: string;
+  relationshipId: string;
+  masterId: string;
+  followerUserId: string;
+  masterTradeId: string;
+  followerOrderId?: string;
+  pairId: string;
+  side: OrderSide;
+  executionPriceUnits: string;
+  executedQtyUnits: string;
+  quoteVolumeUnits: string;
+  feeUnits: string;
+  realizedPnlUnits: string;
+  profitShareUnits: string;
+  status: 'FILLED' | 'SKIPPED' | 'FAILED';
+  note?: string;
+  createdAt: number;
+}
+
+// -------------------------------------------------------------
+// PERSISTENT DAILY PNL SNAPSHOTS (CALENDAR HISTORY)
+// -------------------------------------------------------------
+export interface DailyPnlTradeSnapshot {
+  id: string;
+  pairId: string;
+  side: 'BUY' | 'SELL';
+  price: string;
+  rawPrice: string;
+  quantity: string;
+  rawQuantity: string;
+  quoteVolume: string;
+  rawQuoteVolume: string;
+  pnlIdr: number;
+  pnlUsdt: number;
+  feeIdr: number;
+  feeUsdt: number;
+  time: string;
+  timestamp: number;
+  source?: 'SPOT' | 'FUTURES' | 'COPY';
+}
+
+export interface DailyPnlSnapshot {
+  id: string; // `${userId}:${date}`
+  userId: string;
+  date: string; // YYYY-MM-DD (Asia/Jakarta)
+  timestamp: number;
+  pnlIdr: number; // Realized PnL of the day
+  pnlUsdt: number;
+  unrealizedPnlIdr: number;
+  unrealizedPnlUsdt: number;
+  netPnlIdr: number;
+  netPnlUsdt: number;
+  portfolioValueIdr: number;
+  portfolioValueUsdt: number;
+  volumeIdr: number;
+  volumeUsdt: number;
+  feesIdr: number;
+  feesUsdt: number;
+  tradesCount: number;
+  winCount: number;
+  lossCount: number;
+  returnPct: number;
+  trades: DailyPnlTradeSnapshot[];
+  finalized: boolean;
+  updatedAt: number;
+}
+

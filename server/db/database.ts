@@ -24,7 +24,8 @@ import {
   RewardTaskConfig, RewardVoucher, VoucherRedemptionRecord,
   RewardClaimRecord, ReferralRelation, ReferralPayoutRecord,
   VolumeExecutionV2Bot, ChartDrawingRecord,
-  EarnVault, EarnPosition, EarnPayoutRecord
+  EarnVault, EarnPosition, EarnPayoutRecord,
+  CopyMasterTrader, CopyRelationship, CopyMirroredOrder, DailyPnlSnapshot
 } from './types.js';
 import { PrecisionMath } from '../ledger/PrecisionMath.js';
 
@@ -32,6 +33,7 @@ export const SYSTEM_TREASURY_ID = 'sys-treasury-0000-0000-000000000000';
 export const SYSTEM_FEE_ID = 'sys-fees-0000-0000-000000000000';
 export const SYSTEM_HOT_WALLET_ID = 'sys-hotwallet-0000-0000-000000000000';
 export const SYSTEM_EARN_CUSTODY_ID = 'sys-earn-custody-0000-0000-000000000000';
+export const SYSTEM_COPY_CUSTODY_ID = 'sys-copy-custody-0000-0000-000000000000';
 
 export const DEFAULT_RISK_CONTROLS: RiskControlsConfig = {
   maxActiveBots: 50,
@@ -133,6 +135,11 @@ export interface PersistedExchangeState {
   earnVaults?: [string, EarnVault][];
   earnPositions?: [string, EarnPosition][];
   earnPayouts?: EarnPayoutRecord[];
+  copyMasters?: [string, CopyMasterTrader][];
+  copyRelationships?: [string, CopyRelationship][];
+  copyMirroredOrders?: CopyMirroredOrder[];
+  dailyPnlSnapshots?: [string, DailyPnlSnapshot][];
+  deletedAssetSymbols?: string[];
 }
 
 class DatabaseStore {
@@ -186,6 +193,11 @@ class DatabaseStore {
   earnVaults: Map<string, EarnVault> = new Map(); // key: vaultId
   earnPositions: Map<string, EarnPosition> = new Map(); // key: positionId
   earnPayouts: EarnPayoutRecord[] = [];
+  copyMasters: Map<string, CopyMasterTrader> = new Map(); // key: masterId
+  copyRelationships: Map<string, CopyRelationship> = new Map(); // key: relationshipId
+  copyMirroredOrders: CopyMirroredOrder[] = [];
+  dailyPnlSnapshots: Map<string, DailyPnlSnapshot> = new Map(); // key: `${userId}:${date}`
+  deletedAssetSymbols: Set<string> = new Set();
   
   private saveTimer: NodeJS.Timeout | null = null;
   private isSaving = false;
@@ -307,12 +319,14 @@ class DatabaseStore {
 
     pairs.forEach(p => this.tradingPairs.set(p.id, p));
 
-    // 2. Setup System Accounts (Treasury, Fee Collector, Hot Wallets)
+    // 2. Setup System Accounts (Treasury, Fee Collector, Hot Wallets, Earn & Copy Custody)
     const systemCurrencies = ['IDR', 'BTC', 'ETH', 'USDT', 'SOL'];
     const systemUsers = [
       { id: SYSTEM_TREASURY_ID, name: 'System Treasury' },
       { id: SYSTEM_FEE_ID, name: 'System Fee Collector' },
-      { id: SYSTEM_HOT_WALLET_ID, name: 'System Hot Wallet' }
+      { id: SYSTEM_HOT_WALLET_ID, name: 'System Hot Wallet' },
+      { id: SYSTEM_EARN_CUSTODY_ID, name: 'System Earn Custody' },
+      { id: SYSTEM_COPY_CUSTODY_ID, name: 'System Copy Custody' }
     ];
 
     for (const sysUser of systemUsers) {
@@ -738,13 +752,26 @@ class DatabaseStore {
   }
 
   getAllCurrencies(): string[] {
-    const set = new Set<string>(['IDR', 'BTC', 'ETH', 'USDT', 'SOL', 'TON', 'DOGE']);
+    const set = new Set<string>(['IDR', 'BTC', 'ETH', 'USDT', 'SOL']);
+    if (this.assets.size === 0) {
+      if (!this.deletedAssetSymbols.has('TON')) set.add('TON');
+      if (!this.deletedAssetSymbols.has('DOGE')) set.add('DOGE');
+    }
     for (const pair of this.tradingPairs.values()) {
       if (pair.baseCurrency) set.add(pair.baseCurrency.toUpperCase());
       if (pair.quoteCurrency) set.add(pair.quoteCurrency.toUpperCase());
     }
     for (const asset of this.assets.values()) {
       if (asset.symbol) set.add(asset.symbol.toUpperCase());
+    }
+    for (const sym of this.deletedAssetSymbols) {
+      // Remove deleted symbol if no active trading pair references it
+      const hasPair = Array.from(this.tradingPairs.values()).some(
+        p => p.baseCurrency.toUpperCase() === sym || p.quoteCurrency.toUpperCase() === sym
+      );
+      if (!hasPair && sym !== 'IDR') {
+        set.delete(sym);
+      }
     }
     return Array.from(set);
   }
@@ -903,6 +930,9 @@ class DatabaseStore {
     ];
 
     for (const dp of defaultPairs) {
+      if (this.deletedAssetSymbols.has(dp.base) || this.deletedAssetSymbols.has(dp.quote)) {
+        continue;
+      }
       const existing = this.tradingPairs.get(dp.id);
       if (!existing) {
         this.tradingPairs.set(dp.id, {
@@ -1085,11 +1115,21 @@ class DatabaseStore {
 
       // Balances
       for (const [curr, minBal] of Object.entries(acc.balances)) {
+        if (this.deletedAssetSymbols.has(curr)) continue;
         const ledgerAcc = this.createOrGetAccount(user.id, curr);
         if (BigInt(ledgerAcc.balanceAvailable) < BigInt(minBal)) {
           ledgerAcc.balanceAvailable = minBal;
         }
       }
+    }
+
+    // Ensure system custody & treasury accounts exist for all active currencies
+    for (const curr of this.getAllCurrencies()) {
+      this.createOrGetAccount(SYSTEM_TREASURY_ID, curr);
+      this.createOrGetAccount(SYSTEM_FEE_ID, curr);
+      this.createOrGetAccount(SYSTEM_HOT_WALLET_ID, curr);
+      this.createOrGetAccount(SYSTEM_EARN_CUSTODY_ID, curr);
+      this.createOrGetAccount(SYSTEM_COPY_CUSTODY_ID, curr);
     }
   }
 
@@ -1307,7 +1347,12 @@ class DatabaseStore {
         chartDrawings: Array.from(this.chartDrawings.entries()),
         earnVaults: Array.from(this.earnVaults.entries()),
         earnPositions: Array.from(this.earnPositions.entries()),
-        earnPayouts: this.earnPayouts.slice(-2000)
+        earnPayouts: this.earnPayouts.slice(-2000),
+        copyMasters: Array.from(this.copyMasters.entries()),
+        copyRelationships: Array.from(this.copyRelationships.entries()),
+        copyMirroredOrders: this.copyMirroredOrders.slice(-5000),
+        dailyPnlSnapshots: Array.from(this.dailyPnlSnapshots.entries()),
+        deletedAssetSymbols: Array.from(this.deletedAssetSymbols)
       };
 
       const jsonStr = JSON.stringify(state, (key, value) =>
@@ -1456,6 +1501,11 @@ class DatabaseStore {
             if (data.earnVaults) this.earnVaults = new Map(data.earnVaults);
             if (data.earnPositions) this.earnPositions = new Map(data.earnPositions);
             if (data.earnPayouts) this.earnPayouts = data.earnPayouts;
+            if (data.copyMasters) this.copyMasters = new Map(data.copyMasters);
+            if (data.copyRelationships) this.copyRelationships = new Map(data.copyRelationships);
+            if (data.copyMirroredOrders) this.copyMirroredOrders = data.copyMirroredOrders;
+            if (data.dailyPnlSnapshots) this.dailyPnlSnapshots = new Map(data.dailyPnlSnapshots);
+            if (data.deletedAssetSymbols) this.deletedAssetSymbols = new Set(data.deletedAssetSymbols);
 
             this.lastLoadedMtime = fs.statSync(p).mtimeMs;
             console.log(`[DIMONEX Database] Berhasil memuat snapshot disk (${p}): ${this.users.size} pengguna, ${this.orders.size} order, ${this.trades.length} transaksi, ${this.sessions.size} sesi login aktif.`);
@@ -1632,6 +1682,7 @@ class DatabaseStore {
     ];
 
     for (const a of defaultAssets) {
+      if (this.deletedAssetSymbols.has(a.symbol.toUpperCase())) continue;
       const existing = this.assets.get(a.id);
       if (!existing) {
         this.assets.set(a.id, a);
