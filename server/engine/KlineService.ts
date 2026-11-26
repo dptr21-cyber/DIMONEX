@@ -63,6 +63,8 @@ export class KlineService {
   private klineStore: Map<string, Candle[]> = new Map();
   private processedTradeIds: Set<string> = new Set();
   private saveTimer: NodeJS.Timeout | null = null;
+  private isDirty = false;
+  private isSavingAsync = false;
 
   constructor() {
     const loaded = this.loadFromDisk();
@@ -72,39 +74,97 @@ export class KlineService {
     }
   }
 
+  private fastStringify(obj: unknown): string {
+    try {
+      return JSON.stringify(obj);
+    } catch {
+      return JSON.stringify(obj, (_key, value) =>
+        typeof value === 'bigint' ? value.toString() : value
+      );
+    }
+  }
+
+  private buildPayloadObject(): Record<string, Candle[]> {
+    const obj: Record<string, Candle[]> = {};
+    for (const [k, v] of this.klineStore.entries()) {
+      // Keep maximum 1,000 candles per timeframe series to keep file compact
+      obj[k] = v.length > 1000 ? v.slice(-1000) : v;
+    }
+    return obj;
+  }
+
+  private getTargetFilePaths(): string[] {
+    const dir = getExchangeDataDirectory();
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    const primary = path.join(dir, 'klines_state.json');
+    const targetFiles = [primary];
+
+    const bundledDir = path.resolve(process.cwd(), 'server', 'data');
+    if (path.resolve(dir) !== path.resolve(bundledDir) && fs.existsSync(bundledDir)) {
+      const mirror = path.join(bundledDir, 'klines_state.json');
+      if (mirror !== primary) {
+        targetFiles.push(mirror);
+      }
+    }
+    return targetFiles;
+  }
+
   public scheduleSave() {
-    if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => {
+    this.isDirty = true;
+    if (process.env.VERCEL === '1') {
       this.saveToDisk();
+      return;
+    }
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-    }, 500);
+      void this.saveToDiskAsync();
+    }, 15_000);
+    if (typeof this.saveTimer.unref === 'function') {
+      this.saveTimer.unref();
+    }
+  }
+
+  public async saveToDiskAsync(): Promise<boolean> {
+    if (!this.isDirty && this.klineStore.size > 0) return true;
+    if (this.isSavingAsync) return false;
+    this.isSavingAsync = true;
+    this.isDirty = false;
+    try {
+      const jsonStr = this.fastStringify(this.buildPayloadObject());
+      const targetFiles = this.getTargetFilePaths();
+      for (const filePath of targetFiles) {
+        try {
+          const tempFile = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 6)}`;
+          await fs.promises.writeFile(tempFile, jsonStr, 'utf-8');
+          try {
+            await fs.promises.rename(tempFile, filePath);
+          } catch {
+            await fs.promises.copyFile(tempFile, filePath);
+            try { await fs.promises.unlink(tempFile); } catch {}
+          }
+        } catch {
+          // Continue to next path
+        }
+      }
+      return true;
+    } catch (e) {
+      console.error('[KlineService] Gagal menyimpan klines secara asinkron:', e);
+      return false;
+    } finally {
+      this.isSavingAsync = false;
+      if (this.isDirty && !this.saveTimer) {
+        this.scheduleSave();
+      }
+    }
   }
 
   public saveToDisk(): boolean {
     try {
-      const dir = getExchangeDataDirectory();
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-      const obj: Record<string, Candle[]> = {};
-      for (const [k, v] of this.klineStore.entries()) {
-        // Keep maximum 1,000 candles per timeframe series to keep file compact
-        obj[k] = v.length > 1000 ? v.slice(-1000) : v;
-      }
-
-      const jsonStr = JSON.stringify(obj, (key, value) =>
-        typeof value === 'bigint' ? value.toString() : value
-      );
-
-      const targetFiles = [
-        path.join(dir, 'klines_state.json')
-      ];
-
-      const bundledDir = path.resolve(process.cwd(), 'server', 'data');
-      if (dir !== bundledDir && fs.existsSync(bundledDir)) {
-        try {
-          targetFiles.push(path.join(bundledDir, 'klines_state.json'));
-        } catch {}
-      }
+      this.isDirty = false;
+      const jsonStr = this.fastStringify(this.buildPayloadObject());
+      const targetFiles = this.getTargetFilePaths();
 
       for (const filePath of targetFiles) {
         try {
@@ -199,15 +259,15 @@ export class KlineService {
       '1D', '1W', '1M'
     ];
     const quoteDec = pair.quoteDecimals !== undefined && pair.quoteDecimals !== null ? pair.quoteDecimals : (pair.quoteCurrency === 'USDT' ? 6 : 2);
-    const tradePrice = Number(BigInt(trade.price)) / (10 ** quoteDec);
-    const tradeQty = Number(trade.quantity) / (10 ** pair.baseDecimals);
+    const tradePrice = Number(BigInt(trade.price || '0')) / (10 ** quoteDec);
+    const tradeQty = Number(trade.quantity || '0') / (10 ** pair.baseDecimals);
     const tradeSec = Math.floor(trade.createdAt / 1000);
 
     const isDuplicate = this.processedTradeIds.has(trade.id);
     this.processedTradeIds.add(trade.id);
-    if (this.processedTradeIds.size > 2000) {
+    if (this.processedTradeIds.size > 5000) {
       const arr = Array.from(this.processedTradeIds);
-      this.processedTradeIds = new Set(arr.slice(-1000));
+      this.processedTradeIds = new Set(arr.slice(-2500));
     }
 
     for (const tf of timeframes) {
@@ -312,8 +372,8 @@ export class KlineService {
     for (const trade of pairTrades) {
       if (seenIds.has(trade.id)) continue;
       seenIds.add(trade.id);
-      const price = Number(BigInt(trade.price)) / (10 ** quoteDec);
-      const qty = Number(trade.quantity) / (10 ** pair.baseDecimals);
+      const price = Number(BigInt(trade.price || '0')) / (10 ** quoteDec);
+      const qty = Number(trade.quantity || '0') / (10 ** pair.baseDecimals);
       const tradeSec = Math.floor(trade.createdAt / 1000);
       const candleTime = Math.floor(tradeSec / interval) * interval;
 

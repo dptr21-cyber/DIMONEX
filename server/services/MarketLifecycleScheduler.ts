@@ -15,6 +15,7 @@ import crypto from 'crypto';
 import { db } from '../db/database.js';
 import { ListingRequest, TradingPair } from '../db/types.js';
 import { matchingEngine } from '../engine/MatchingEngine.js';
+import { LedgerService } from '../ledger/LedgerService.js';
 import { marketWsService } from '../websocket/MarketDataWs.js';
 import { ListingActivationService } from './listing/ListingActivationService.js';
 
@@ -181,10 +182,24 @@ export function executeDelistMarket(
 
   for (const order of openOrdersOnPair) {
     try {
-      matchingEngine.cancelOrder(order.id, pairId, order.userId);
+      matchingEngine.cancelOrder(order.id, order.userId, pairId, 'ADMIN');
       cancelledOrdersCount += 1;
     } catch (err: any) {
-      console.warn(`[MarketLifecycle] Failed to cancel order ${order.id} during delisting of ${pairId}:`, err?.message || err);
+      // Fallback: if order remained in db.orders with an inconsistent book/pair state, safely mark CANCELLED & unlock
+      try {
+        const lockedAmt = BigInt(order.lockedAmount || '0');
+        const unlockCurr = order.side === 'BUY' ? pair.quoteCurrency : pair.baseCurrency;
+        order.status = 'CANCELLED';
+        order.lockedAmount = '0';
+        order.updatedAt = now;
+        db.orders.set(order.id, order);
+        if (lockedAmt > 0n) {
+          LedgerService.unlockBalanceUpToLocked(order.userId, unlockCurr, lockedAmt);
+        }
+        cancelledOrdersCount += 1;
+      } catch (fallbackErr: any) {
+        console.warn(`[MarketLifecycle] Failed to cancel order ${order.id} during delisting of ${pairId}:`, err?.message || err);
+      }
     }
   }
 

@@ -26,6 +26,7 @@ export class MarketDataWebSocketService {
   private wss: WebSocketServer | null = null;
   private clients: Set<ClientSubscription> = new Set();
   private depthInterval: NodeJS.Timeout | null = null;
+  private lastBroadcastDepthSeq: Map<string, number> = new Map();
   private botProvider?: (userId: string) => any[];
 
   setBotProvider(fn: (userId: string) => any[]) {
@@ -93,13 +94,18 @@ export class MarketDataWebSocketService {
       });
     });
 
-    // 100ms Periodic Depth & Ticker broadcast
+    // 250ms Periodic Depth broadcast (dirty-checked via OrderBook.eventSequence)
     this.depthInterval = setInterval(() => {
       this.broadcastPeriodicDepth();
-    }, 150);
+    }, 250);
+    if (typeof this.depthInterval.unref === 'function') {
+      this.depthInterval.unref();
+    }
   }
 
   private broadcastPeriodicDepth() {
+    if (this.clients.size === 0) return;
+
     for (const [pairId] of db.tradingPairs.entries()) {
       const channel = `depth:${pairId}`;
       let hasSubscribers = false;
@@ -113,6 +119,11 @@ export class MarketDataWebSocketService {
 
       if (hasSubscribers) {
         const book = matchingEngine.getOrderBook(pairId);
+        const prevSeq = this.lastBroadcastDepthSeq.get(pairId);
+        if (prevSeq !== undefined && prevSeq === book.eventSequence) {
+          continue;
+        }
+        this.lastBroadcastDepthSeq.set(pairId, book.eventSequence);
         const depth = book.getDepth(60);
         this.broadcast(channel, { type: 'depth', pairId, data: depth });
       }
@@ -120,7 +131,9 @@ export class MarketDataWebSocketService {
   }
 
   broadcastDepth(pairId: string) {
+    if (this.clients.size === 0) return;
     const book = matchingEngine.getOrderBook(pairId);
+    this.lastBroadcastDepthSeq.set(pairId, book.eventSequence);
     const depth = book.getDepth(60);
     this.broadcast(`depth:${pairId}`, { type: 'depth', pairId, data: depth });
   }

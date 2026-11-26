@@ -154,6 +154,9 @@ export async function startServer() {
 
   // Global Error Handler to catch any file/route issues gracefully
   app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err?.code === 'ECONNABORTED' || err?.message === 'Request aborted' || req.aborted) {
+      return;
+    }
     if (res.headersSent) return next(err);
     console.error('[DIMONEX Server Error]:', err);
     res.status(500).json({ error: 'Internal Server Error', message: err?.message || 'Server error' });
@@ -200,10 +203,10 @@ export async function startServer() {
     copyTradingService.start();
     pnlService.startScheduler();
 
-    // Background periodic live rate sync every 60 seconds
+    // Background periodic live rate sync every 120 seconds (respects syncIntervalMinutes cache & CMC cooldown)
     setInterval(() => {
       fxConversionService.fetchAndSyncLiveRate('system@dimonex.id', 12).catch(() => {});
-    }, 60000);
+    }, 120_000);
   });
 }
 

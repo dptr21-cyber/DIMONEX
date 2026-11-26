@@ -201,6 +201,7 @@ class DatabaseStore {
   
   private saveTimer: NodeJS.Timeout | null = null;
   private isSaving = false;
+  private isDirty = false;
 
   constructor() {
     const loaded = this.loadFromDisk();
@@ -792,17 +793,19 @@ class DatabaseStore {
   }
 
   public scheduleSave() {
+    this.isDirty = true;
     if (process.env.VERCEL === '1') {
       this.saveToDisk();
       return;
     }
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer);
-    }
+    if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
-      this.saveToDisk();
       this.saveTimer = null;
-    }, 5000);
+      void this.saveToDiskAsync();
+    }, 10_000);
+    if (typeof this.saveTimer.unref === 'function') {
+      this.saveTimer.unref();
+    }
   }
 
   public flushSync() {
@@ -1207,166 +1210,213 @@ class DatabaseStore {
     this.scheduleSave();
   }
 
+  private fastJsonStringify(obj: unknown): string {
+    try {
+      return JSON.stringify(obj);
+    } catch {
+      return JSON.stringify(obj, (_key, value) =>
+        typeof value === 'bigint' ? value.toString() : value
+      );
+    }
+  }
+
+  private prepareSnapshotPayload(): { jsonStr: string; targetFiles: string[] } {
+    const dir = getExchangeDataDirectory();
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    // Memory & snapshot pruning to prevent multi-megabyte bloat and ensure fast atomic writes:
+    // Keep ALL active orders (NEW, PARTIALLY_FILLED)
+    // For completed/cancelled/rejected orders, keep only the 1,000 most recent
+    if (this.orders.size > 1500) {
+      const openOrders: [string, Order][] = [];
+      const closedOrders: [string, Order][] = [];
+      for (const [id, order] of this.orders.entries()) {
+        if (order.status === 'NEW' || order.status === 'PARTIALLY_FILLED') {
+          openOrders.push([id, order]);
+        } else {
+          closedOrders.push([id, order]);
+        }
+      }
+      if (closedOrders.length > 1000) {
+        closedOrders.sort((a, b) => b[1].createdAt - a[1].createdAt);
+        const keepClosed = closedOrders.slice(0, 1000);
+        this.orders = new Map([...openOrders, ...keepClosed]);
+      }
+    }
+
+    // Keep recent trades (last 2,000)
+    if (this.trades.length > 2500) {
+      this.trades = this.trades.slice(-2000);
+    }
+
+    // Keep recent audit logs (last 1,000)
+    if (this.auditLogs.length > 1500) {
+      this.auditLogs = this.auditLogs.slice(-1000);
+    }
+
+    // Keep recent journal transactions (last 1,000)
+    if (this.journalTransactions.size > 1500) {
+      const jEntries = Array.from(this.journalTransactions.entries());
+      jEntries.sort((a, b) => b[1].createdAt - a[1].createdAt);
+      const keepJ = jEntries.slice(0, 1000);
+      this.journalTransactions = new Map(keepJ);
+      const keepIds = new Set(keepJ.map(e => e[0]));
+      for (const [k, v] of this.journalIdempotencyIndex.entries()) {
+        if (!keepIds.has(v)) {
+          this.journalIdempotencyIndex.delete(k);
+        }
+      }
+    }
+
+    // Keep recent ledger entries (last 2,000) to avoid unbounded memory growth
+    if (this.ledgerEntries.length > 2500) {
+      this.ledgerEntries = this.ledgerEntries.slice(-2000);
+    }
+
+    // Remove expired sessions continuously
+    const nowMs = Date.now();
+    for (const [tokenKey, sess] of this.sessions.entries()) {
+      if (sess.expiresAt <= nowMs) {
+        this.sessions.delete(tokenKey);
+      }
+    }
+
+    // Bound per-bot deployedOrderIds and logs in memory & snapshots
+    for (const bot of this.botInstances.values()) {
+      if (bot.deployedOrderIds && bot.deployedOrderIds.length > 100) {
+        bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
+      }
+      if (bot.logs && bot.logs.length > 100) {
+        bot.logs = bot.logs.slice(0, 80);
+      }
+    }
+
+    // Bound outbox and idempotency records
+    if (this.outboxEvents.size > 1500) {
+      const entries = Array.from(this.outboxEvents.entries()).slice(-1000);
+      this.outboxEvents = new Map(entries);
+    }
+    if (this.idempotencyRecords.size > 1500) {
+      const entries = Array.from(this.idempotencyRecords.entries()).slice(-1000);
+      this.idempotencyRecords = new Map(entries);
+    }
+
+    const state: PersistedExchangeState = {
+      version: 1,
+      savedAt: Date.now(),
+      users: Array.from(this.users.entries()),
+      kyc: Array.from(this.kyc.entries()),
+      ledgerAccounts: Array.from(this.ledgerAccounts.entries()),
+      accountIndex: Array.from(this.accountIndex.entries()),
+      journalTransactions: Array.from(this.journalTransactions.entries()),
+      journalIdempotencyIndex: Array.from(this.journalIdempotencyIndex.entries()),
+      ledgerEntries: this.ledgerEntries,
+      tradingPairs: Array.from(this.tradingPairs.entries()),
+      orders: Array.from(this.orders.entries()),
+      trades: this.trades,
+      fiatTransactions: Array.from(this.fiatTransactions.entries()),
+      cryptoTransactions: Array.from(this.cryptoTransactions.entries()),
+      apiKeys: Array.from(this.apiKeys.entries()),
+      auditLogs: this.auditLogs,
+      sessions: Array.from(this.sessions.entries()),
+      botInstances: Array.from(this.botInstances.entries()),
+      riskControls: this.riskControls,
+      assets: Array.from(this.assets.entries()),
+      listingRequests: Array.from(this.listingRequests.entries()),
+      listingApprovals: Array.from(this.listingApprovals.entries()),
+      markets: Array.from(this.markets.entries()),
+      listingAuditEvents: this.listingAuditEvents,
+      outboxEvents: Array.from(this.outboxEvents.entries()),
+      idempotencyRecords: Array.from(this.idempotencyRecords.entries()),
+      portfolioRebalanceConfigs: Array.from(this.portfolioRebalanceConfigs.entries()),
+      externalWsWhitelist: Array.from(this.externalWsWhitelist.entries()),
+      priceThresholdTriggers: Array.from(this.priceThresholdTriggers.entries()),
+      priceThresholdEvents: this.priceThresholdEvents.slice(-500),
+      futuresOrders: Array.from(this.futuresOrders.entries()),
+      futuresPositions: Array.from(this.futuresPositions.entries()),
+      mediaAssets: Array.from(this.mediaAssets.entries()),
+      announcements: Array.from(this.announcements.entries()),
+      announcementVersions: this.announcementVersions,
+      cmsAuditLogs: this.cmsAuditLogs,
+      notificationCampaigns: Array.from(this.notificationCampaigns.entries()),
+      notificationOutboxJobs: Array.from(this.notificationOutboxJobs.entries()),
+      notificationDeliveries: Array.from(this.notificationDeliveries.entries()),
+      userNotifications: Array.from(this.userNotifications.entries()),
+      userNotificationPreferences: Array.from(this.userNotificationPreferences.entries()),
+      rewardTasks: Array.from(this.rewardTasks.entries()),
+      rewardVouchers: Array.from(this.rewardVouchers.entries()),
+      voucherRedemptions: Array.from(this.voucherRedemptions.entries()),
+      rewardClaims: Array.from(this.rewardClaims.entries()),
+      referralRelations: Array.from(this.referralRelations.entries()),
+      referralPayouts: Array.from(this.referralPayouts.entries()),
+      volumeExecutionV2Bots: Array.from(this.volumeExecutionV2Bots.entries()),
+      chartDrawings: Array.from(this.chartDrawings.entries()),
+      earnVaults: Array.from(this.earnVaults.entries()),
+      earnPositions: Array.from(this.earnPositions.entries()),
+      earnPayouts: this.earnPayouts.slice(-2000),
+      copyMasters: Array.from(this.copyMasters.entries()),
+      copyRelationships: Array.from(this.copyRelationships.entries()),
+      copyMirroredOrders: this.copyMirroredOrders.slice(-5000),
+      dailyPnlSnapshots: Array.from(this.dailyPnlSnapshots.entries()),
+      deletedAssetSymbols: Array.from(this.deletedAssetSymbols)
+    };
+
+    const jsonStr = this.fastJsonStringify(state);
+
+    const primaryFile = path.join(dir, 'exchange_state.json');
+    const targetFiles = [primaryFile];
+
+    const bundledDir = path.resolve(process.cwd(), 'server', 'data');
+    if (path.resolve(dir) !== path.resolve(bundledDir) && fs.existsSync(bundledDir)) {
+      const mirrorFile = path.join(bundledDir, 'exchange_state.json');
+      if (mirrorFile !== primaryFile) {
+        targetFiles.push(mirrorFile);
+      }
+    }
+
+    return { jsonStr, targetFiles };
+  }
+
+  public async saveToDiskAsync(): Promise<boolean> {
+    if (this.isSaving) return false;
+    this.isSaving = true;
+    this.isDirty = false;
+    try {
+      const { jsonStr, targetFiles } = this.prepareSnapshotPayload();
+      for (const filePath of targetFiles) {
+        try {
+          const tempFile = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 6)}`;
+          await fs.promises.writeFile(tempFile, jsonStr, 'utf-8');
+          try {
+            await fs.promises.rename(tempFile, filePath);
+          } catch {
+            await fs.promises.copyFile(tempFile, filePath);
+            try { await fs.promises.unlink(tempFile); } catch {}
+          }
+        } catch {
+          // Continue to next path if write fails
+        }
+      }
+      return true;
+    } catch (err) {
+      console.error('[DIMONEX Database] Gagal menyimpan snapshot asinkron ke disk:', err);
+      return false;
+    } finally {
+      this.isSaving = false;
+      if (this.isDirty && !this.saveTimer) {
+        this.scheduleSave();
+      }
+    }
+  }
+
   public saveToDisk(): boolean {
     if (this.isSaving) return false;
     this.isSaving = true;
+    this.isDirty = false;
     try {
-      const dir = getExchangeDataDirectory();
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-
-      // Memory & snapshot pruning to prevent multi-megabyte bloat and ensure fast atomic writes:
-      // Keep ALL active orders (NEW, PARTIALLY_FILLED)
-      // For completed/cancelled/rejected orders, keep only the 1,000 most recent
-      if (this.orders.size > 1500) {
-        const openOrders: [string, Order][] = [];
-        const closedOrders: [string, Order][] = [];
-        for (const [id, order] of this.orders.entries()) {
-          if (order.status === 'NEW' || order.status === 'PARTIALLY_FILLED') {
-            openOrders.push([id, order]);
-          } else {
-            closedOrders.push([id, order]);
-          }
-        }
-        if (closedOrders.length > 1000) {
-          closedOrders.sort((a, b) => b[1].createdAt - a[1].createdAt);
-          const keepClosed = closedOrders.slice(0, 1000);
-          this.orders = new Map([...openOrders, ...keepClosed]);
-        }
-      }
-
-      // Keep recent trades (last 2,000)
-      if (this.trades.length > 2500) {
-        this.trades = this.trades.slice(-2000);
-      }
-
-      // Keep recent audit logs (last 1,000)
-      if (this.auditLogs.length > 1500) {
-        this.auditLogs = this.auditLogs.slice(-1000);
-      }
-
-      // Keep recent journal transactions (last 1,000)
-      if (this.journalTransactions.size > 1500) {
-        const jEntries = Array.from(this.journalTransactions.entries());
-        jEntries.sort((a, b) => b[1].createdAt - a[1].createdAt);
-        const keepJ = jEntries.slice(0, 1000);
-        this.journalTransactions = new Map(keepJ);
-        const keepIds = new Set(keepJ.map(e => e[0]));
-        for (const [k, v] of this.journalIdempotencyIndex.entries()) {
-          if (!keepIds.has(v)) {
-            this.journalIdempotencyIndex.delete(k);
-          }
-        }
-      }
-
-      // Keep recent ledger entries (last 2,000) to avoid unbounded memory growth
-      if (this.ledgerEntries.length > 2500) {
-        this.ledgerEntries = this.ledgerEntries.slice(-2000);
-      }
-
-      // Remove expired sessions continuously
-      const nowMs = Date.now();
-      for (const [tokenKey, sess] of this.sessions.entries()) {
-        if (sess.expiresAt <= nowMs) {
-          this.sessions.delete(tokenKey);
-        }
-      }
-
-      // Bound per-bot deployedOrderIds and logs in memory & snapshots
-      for (const bot of this.botInstances.values()) {
-        if (bot.deployedOrderIds && bot.deployedOrderIds.length > 100) {
-          bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
-        }
-        if (bot.logs && bot.logs.length > 100) {
-          bot.logs = bot.logs.slice(0, 80);
-        }
-      }
-
-      // Bound outbox and idempotency records
-      if (this.outboxEvents.size > 1500) {
-        const entries = Array.from(this.outboxEvents.entries()).slice(-1000);
-        this.outboxEvents = new Map(entries);
-      }
-      if (this.idempotencyRecords.size > 1500) {
-        const entries = Array.from(this.idempotencyRecords.entries()).slice(-1000);
-        this.idempotencyRecords = new Map(entries);
-      }
-
-      const state: PersistedExchangeState = {
-        version: 1,
-        savedAt: Date.now(),
-        users: Array.from(this.users.entries()),
-        kyc: Array.from(this.kyc.entries()),
-        ledgerAccounts: Array.from(this.ledgerAccounts.entries()),
-        accountIndex: Array.from(this.accountIndex.entries()),
-        journalTransactions: Array.from(this.journalTransactions.entries()),
-        journalIdempotencyIndex: Array.from(this.journalIdempotencyIndex.entries()),
-        ledgerEntries: this.ledgerEntries,
-        tradingPairs: Array.from(this.tradingPairs.entries()),
-        orders: Array.from(this.orders.entries()),
-        trades: this.trades,
-        fiatTransactions: Array.from(this.fiatTransactions.entries()),
-        cryptoTransactions: Array.from(this.cryptoTransactions.entries()),
-        apiKeys: Array.from(this.apiKeys.entries()),
-        auditLogs: this.auditLogs,
-        sessions: Array.from(this.sessions.entries()),
-        botInstances: Array.from(this.botInstances.entries()),
-        riskControls: this.riskControls,
-        assets: Array.from(this.assets.entries()),
-        listingRequests: Array.from(this.listingRequests.entries()),
-        listingApprovals: Array.from(this.listingApprovals.entries()),
-        markets: Array.from(this.markets.entries()),
-        listingAuditEvents: this.listingAuditEvents,
-        outboxEvents: Array.from(this.outboxEvents.entries()),
-        idempotencyRecords: Array.from(this.idempotencyRecords.entries()),
-        portfolioRebalanceConfigs: Array.from(this.portfolioRebalanceConfigs.entries()),
-        externalWsWhitelist: Array.from(this.externalWsWhitelist.entries()),
-        priceThresholdTriggers: Array.from(this.priceThresholdTriggers.entries()),
-        priceThresholdEvents: this.priceThresholdEvents.slice(-500),
-        futuresOrders: Array.from(this.futuresOrders.entries()),
-        futuresPositions: Array.from(this.futuresPositions.entries()),
-        mediaAssets: Array.from(this.mediaAssets.entries()),
-        announcements: Array.from(this.announcements.entries()),
-        announcementVersions: this.announcementVersions,
-        cmsAuditLogs: this.cmsAuditLogs,
-        notificationCampaigns: Array.from(this.notificationCampaigns.entries()),
-        notificationOutboxJobs: Array.from(this.notificationOutboxJobs.entries()),
-        notificationDeliveries: Array.from(this.notificationDeliveries.entries()),
-        userNotifications: Array.from(this.userNotifications.entries()),
-        userNotificationPreferences: Array.from(this.userNotificationPreferences.entries()),
-        rewardTasks: Array.from(this.rewardTasks.entries()),
-        rewardVouchers: Array.from(this.rewardVouchers.entries()),
-        voucherRedemptions: Array.from(this.voucherRedemptions.entries()),
-        rewardClaims: Array.from(this.rewardClaims.entries()),
-        referralRelations: Array.from(this.referralRelations.entries()),
-        referralPayouts: Array.from(this.referralPayouts.entries()),
-        volumeExecutionV2Bots: Array.from(this.volumeExecutionV2Bots.entries()),
-        chartDrawings: Array.from(this.chartDrawings.entries()),
-        earnVaults: Array.from(this.earnVaults.entries()),
-        earnPositions: Array.from(this.earnPositions.entries()),
-        earnPayouts: this.earnPayouts.slice(-2000),
-        copyMasters: Array.from(this.copyMasters.entries()),
-        copyRelationships: Array.from(this.copyRelationships.entries()),
-        copyMirroredOrders: this.copyMirroredOrders.slice(-5000),
-        dailyPnlSnapshots: Array.from(this.dailyPnlSnapshots.entries()),
-        deletedAssetSymbols: Array.from(this.deletedAssetSymbols)
-      };
-
-      const jsonStr = JSON.stringify(state, (key, value) =>
-        typeof value === 'bigint' ? value.toString() : value
-      );
-
-      const targetFiles = [
-        path.join(dir, 'exchange_state.json')
-      ];
-
-      const bundledDir = path.resolve(process.cwd(), 'server', 'data');
-      if (dir !== bundledDir && fs.existsSync(bundledDir)) {
-        try {
-          targetFiles.push(path.join(bundledDir, 'exchange_state.json'));
-        } catch {}
-      }
+      const { jsonStr, targetFiles } = this.prepareSnapshotPayload();
 
       for (const filePath of targetFiles) {
         try {

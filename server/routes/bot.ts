@@ -79,48 +79,98 @@ const activeBots: Map<string, ActiveBot> = new Map();
 const botIntervals: Map<string, NodeJS.Timeout> = new Map();
 
 let saveBotsTimer: NodeJS.Timeout | null = null;
+let isBotsDirty = false;
+let isSavingBotsAsync = false;
+
+function fastBotStringify(obj: unknown): string {
+  try {
+    return JSON.stringify(obj);
+  } catch {
+    return JSON.stringify(obj, (_key, value) =>
+      typeof value === 'bigint' ? value.toString() : value
+    );
+  }
+}
+
+function prepareBotsSnapshotPayload(): { jsonStr: string; targetFiles: string[] } {
+  const dir = getBotDataDirectory();
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  // Clean up excessive deployedOrderIds and logs before writing to avoid huge files
+  for (const bot of activeBots.values()) {
+    if (bot.deployedOrderIds && bot.deployedOrderIds.length > 80) {
+      bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
+    }
+    if (bot.logs && bot.logs.length > 80) {
+      bot.logs = bot.logs.slice(0, 80);
+    }
+  }
+
+  const botsArray = Array.from(activeBots.values());
+  const jsonStr = fastBotStringify(botsArray);
+
+  // Save to BOTH bots_state.json AND bot_state.json so neither is ever missing
+  const targetFiles = [
+    path.join(dir, 'bots_state.json'),
+    path.join(dir, 'bot_state.json')
+  ];
+
+  // If writing to /tmp, also attempt to mirror to server/data if writable & distinct
+  const bundledDir = path.resolve(process.cwd(), 'server', 'data');
+  if (path.resolve(dir) !== path.resolve(bundledDir) && fs.existsSync(bundledDir)) {
+    targetFiles.push(path.join(bundledDir, 'bots_state.json'));
+    targetFiles.push(path.join(bundledDir, 'bot_state.json'));
+  }
+
+  return { jsonStr, targetFiles };
+}
+
 export function scheduleSaveBots() {
-  if (saveBotsTimer) clearTimeout(saveBotsTimer);
+  isBotsDirty = true;
+  if (saveBotsTimer) return;
   saveBotsTimer = setTimeout(() => {
-    saveBotsToDisk();
     saveBotsTimer = null;
-  }, 5000);
+    void saveBotsToDiskAsync();
+  }, 15_000);
+  if (typeof saveBotsTimer.unref === 'function') {
+    saveBotsTimer.unref();
+  }
+}
+
+export async function saveBotsToDiskAsync() {
+  if (isSavingBotsAsync) return;
+  isSavingBotsAsync = true;
+  isBotsDirty = false;
+  try {
+    const { jsonStr, targetFiles } = prepareBotsSnapshotPayload();
+    for (const filePath of targetFiles) {
+      try {
+        const tempFile = `${filePath}.tmp.${Date.now()}.${Math.random().toString(36).slice(2, 6)}`;
+        await fs.promises.writeFile(tempFile, jsonStr, 'utf-8');
+        try {
+          await fs.promises.rename(tempFile, filePath);
+        } catch {
+          await fs.promises.copyFile(tempFile, filePath);
+          try { await fs.promises.unlink(tempFile); } catch {}
+        }
+      } catch {
+        // Continue to other file paths
+      }
+    }
+  } catch (err) {
+    console.error('[DIMONEX Bot Engine] Gagal menyimpan bots asinkron ke disk:', err);
+  } finally {
+    isSavingBotsAsync = false;
+    if (isBotsDirty && !saveBotsTimer) {
+      scheduleSaveBots();
+    }
+  }
 }
 
 export function saveBotsToDisk() {
   try {
-    const dir = getBotDataDirectory();
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-    // Clean up excessive deployedOrderIds and logs before writing to avoid huge files
-    for (const bot of activeBots.values()) {
-      if (bot.deployedOrderIds && bot.deployedOrderIds.length > 80) {
-        bot.deployedOrderIds = bot.deployedOrderIds.slice(-80);
-      }
-      if (bot.logs && bot.logs.length > 80) {
-        bot.logs = bot.logs.slice(0, 80);
-      }
-    }
-
-    const botsArray = Array.from(activeBots.values());
-    const jsonStr = JSON.stringify(botsArray, (key, value) =>
-      typeof value === 'bigint' ? value.toString() : value
-    );
-
-    // Save to BOTH bots_state.json AND bot_state.json so neither is ever missing
-    const targetFiles = [
-      path.join(dir, 'bots_state.json'),
-      path.join(dir, 'bot_state.json')
-    ];
-
-    // If writing to /tmp, also attempt to mirror to server/data if writable
-    const bundledDir = path.resolve(process.cwd(), 'server', 'data');
-    if (dir !== bundledDir && fs.existsSync(bundledDir)) {
-      try {
-        targetFiles.push(path.join(bundledDir, 'bots_state.json'));
-        targetFiles.push(path.join(bundledDir, 'bot_state.json'));
-      } catch {}
-    }
+    isBotsDirty = false;
+    const { jsonStr, targetFiles } = prepareBotsSnapshotPayload();
 
     for (const filePath of targetFiles) {
       try {

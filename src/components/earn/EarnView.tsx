@@ -6,9 +6,11 @@
  * DIMONEX Institutional Earn & Staking Vaults — Live Ledger-Backed Implementation
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion, MotionConfig } from 'motion/react';
 import {
   ArrowDownLeft,
+  ArrowRight,
   CalendarClock,
   CheckCircle2,
   Coins,
@@ -18,6 +20,7 @@ import {
   RefreshCw,
   ShieldCheck,
   TrendingUp,
+  Unlock,
 } from 'lucide-react';
 import { Button } from '../ui/Button.js';
 import { Input } from '../ui/Input.js';
@@ -35,7 +38,7 @@ import {
   UserBalance,
   UserProfile,
 } from '../../types/index.js';
-import { StakingDashboard } from './StakingDashboard.js';
+import { ClaimBurstFeedback, StakingDashboard } from './StakingDashboard.js';
 
 interface Props {
   user?: UserProfile | null;
@@ -101,20 +104,54 @@ export const EarnView: React.FC<Props> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Subscribe Modal State
+  // Subscribe Modal State & Animation Stages
   const [selectedVault, setSelectedVault] = useState<EarnVaultItem | null>(null);
   const [stakeAmount, setStakeAmount] = useState('');
   const [autoCompound, setAutoCompound] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [stakeStage, setStakeStage] = useState<'FORM' | 'PROCESSING' | 'SUCCESS'>('FORM');
+  const [stakeSuccessInfo, setStakeSuccessInfo] = useState<{
+    vaultName: string;
+    asset: string;
+    amount: string;
+    apyPct: number;
+    autoCompound: boolean;
+    positionId?: string;
+  } | null>(null);
 
-  // Redeem Modal State
+  // Redeem Modal State & Animation Stages
   const [redeemTarget, setRedeemTarget] = useState<EarnPositionItem | null>(null);
   const [redeemAmount, setRedeemAmount] = useState('');
   const [confirmEarlyRedeem, setConfirmEarlyRedeem] = useState(false);
   const [isRedeeming, setIsRedeeming] = useState(false);
+  const [redeemStage, setRedeemStage] = useState<'FORM' | 'PROCESSING' | 'SUCCESS'>('FORM');
+  const [redeemSuccessInfo, setRedeemSuccessInfo] = useState<{
+    vaultName: string;
+    asset: string;
+    returnedDisplay: string;
+    earlyRedemption: boolean;
+    penaltyBps: number;
+  } | null>(null);
 
-  // Per-row Action Busy State
+  // Per-row Action Busy State & Visual Feedback Animations
   const [busyPositionId, setBusyPositionId] = useState<string | null>(null);
+  const [claimedBurst, setClaimedBurst] = useState<ClaimBurstFeedback | null>(null);
+  const [highlightedPositionId, setHighlightedPositionId] = useState<string | null>(null);
+  const [claimKpiPulse, setClaimKpiPulse] = useState<number>(0);
+
+  const timersRef = useRef<number[]>([]);
+  const scheduleTimeout = useCallback((fn: () => void, ms: number) => {
+    const id = window.setTimeout(fn, ms);
+    timersRef.current.push(id);
+    return id;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      timersRef.current.forEach((id) => window.clearTimeout(id));
+      timersRef.current = [];
+    };
+  }, []);
 
   const fetchEarnData = useCallback(async (silent = false) => {
     if (!silent) setIsLoading(true);
@@ -203,9 +240,25 @@ export const EarnView: React.FC<Props> = ({
       return;
     }
     setSelectedVault(vault);
+    setStakeStage('FORM');
+    setStakeSuccessInfo(null);
     setStakeAmount(formatUnitsInput(vault.minStakeUnits, vault.decimals));
     setAutoCompound(vault.autoCompoundSupported);
   };
+
+  const finalizeSubscribeSuccess = useCallback((positionId?: string) => {
+    setSelectedVault(null);
+    setStakeStage('FORM');
+    setStakeSuccessInfo(null);
+    setStakeAmount('');
+    setMainTab('POSITIONS');
+    if (positionId) {
+      setHighlightedPositionId(positionId);
+      scheduleTimeout(() => {
+        setHighlightedPositionId((cur) => (cur === positionId ? null : cur));
+      }, 2400);
+    }
+  }, [scheduleTimeout]);
 
   const handleSetMaxStake = () => {
     if (!selectedVault) return;
@@ -258,22 +311,30 @@ export const EarnView: React.FC<Props> = ({
       return;
     }
 
+    const activeVault = selectedVault;
+    const submittedAmount = stakeAmount.trim();
+    const effectiveAutoCompound = activeVault.autoCompoundSupported ? autoCompound : false;
+
     setIsSubmitting(true);
+    setStakeStage('PROCESSING');
     try {
-      const idempotencyKey = `web-${selectedVault.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const res = await fetch('/api/earn/subscribe', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          vaultId: selectedVault.id,
-          amount: stakeAmount.trim(),
-          autoCompound: selectedVault.autoCompoundSupported ? autoCompound : false,
-          idempotencyKey,
+      const idempotencyKey = `web-${activeVault.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const [res] = await Promise.all([
+        fetch('/api/earn/subscribe', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            vaultId: activeVault.id,
+            amount: submittedAmount,
+            autoCompound: effectiveAutoCompound,
+            idempotencyKey,
+          }),
         }),
-      });
+        new Promise((resolve) => setTimeout(resolve, 420)),
+      ]);
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'Gagal melakukan stake');
@@ -289,12 +350,23 @@ export const EarnView: React.FC<Props> = ({
       showToast(
         'success',
         'Stake Berhasil Ditempatkan',
-        `${stakeAmount.trim()} ${selectedVault.asset} dikunci ke ${selectedVault.name} (${selectedVault.apyPct.toFixed(2)}% APY).`
+        `${submittedAmount} ${activeVault.asset} dikunci ke ${activeVault.name} (${activeVault.apyPct.toFixed(2)}% APY).`
       );
-      setSelectedVault(null);
-      setStakeAmount('');
-      setMainTab('POSITIONS');
+      const createdPositionId: string | undefined = data.position?.id;
+      setStakeSuccessInfo({
+        vaultName: activeVault.name,
+        asset: activeVault.asset,
+        amount: submittedAmount,
+        apyPct: activeVault.apyPct,
+        autoCompound: effectiveAutoCompound,
+        positionId: createdPositionId,
+      });
+      setStakeStage('SUCCESS');
+      scheduleTimeout(() => {
+        finalizeSubscribeSuccess(createdPositionId);
+      }, 1500);
     } catch (err: any) {
+      setStakeStage('FORM');
       showToast('error', 'Gagal Stake Vault', err?.message || 'Terjadi kesalahan saat subscription.');
     } finally {
       setIsSubmitting(false);
@@ -321,10 +393,23 @@ export const EarnView: React.FC<Props> = ({
         setPlatformStats(data.summary.platformStats || null);
       }
       onRefreshBalances?.();
+      const claimedAmt = data.payout?.amountDisplay || pos.accruedYieldDisplay;
+      const burstTs = Date.now();
+      setClaimedBurst({
+        positionId: pos.id,
+        vaultId: pos.vaultId,
+        asset: pos.asset,
+        amountDisplay: claimedAmt,
+        timestamp: burstTs,
+      });
+      setClaimKpiPulse((n) => n + 1);
+      scheduleTimeout(() => {
+        setClaimedBurst((cur) => (cur?.timestamp === burstTs ? null : cur));
+      }, 2200);
       showToast(
         'success',
         'Imbal Hasil Diklaim',
-        `+${data.payout?.amountDisplay || pos.accruedYieldDisplay} ${pos.asset} dikirim ke Dompet Spot.`
+        `+${claimedAmt} ${pos.asset} dikirim ke Dompet Spot.`
       );
     } catch (err: any) {
       showToast('error', 'Klaim Yield Gagal', err?.message || 'Tidak dapat mengklaim imbal hasil.');
@@ -365,9 +450,23 @@ export const EarnView: React.FC<Props> = ({
 
   const openRedeemModal = (pos: EarnPositionItem) => {
     setRedeemTarget(pos);
+    setRedeemStage('FORM');
+    setRedeemSuccessInfo(null);
     setRedeemAmount(formatUnitsInput(pos.principalUnits, pos.decimals));
     setConfirmEarlyRedeem(false);
   };
+
+  const finalizeRedeemSuccess = useCallback((positionId?: string) => {
+    setRedeemTarget(null);
+    setRedeemStage('FORM');
+    setRedeemSuccessInfo(null);
+    if (positionId) {
+      setHighlightedPositionId(positionId);
+      scheduleTimeout(() => {
+        setHighlightedPositionId((cur) => (cur === positionId ? null : cur));
+      }, 2000);
+    }
+  }, [scheduleTimeout]);
 
   const handleRedeemSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -381,23 +480,28 @@ export const EarnView: React.FC<Props> = ({
       return;
     }
 
+    const activePos = redeemTarget;
     setIsRedeeming(true);
+    setRedeemStage('PROCESSING');
     try {
       const bodyPayload: Record<string, any> = {
         confirmEarlyRedeem: isEarly ? confirmEarlyRedeem : true,
       };
-      if (redeemTarget.durationDays === 0 && redeemAmount.trim()) {
+      if (activePos.durationDays === 0 && redeemAmount.trim()) {
         bodyPayload.amount = redeemAmount.trim();
       }
 
-      const res = await fetch(`/api/earn/positions/${encodeURIComponent(redeemTarget.id)}/redeem`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(bodyPayload),
-      });
+      const [res] = await Promise.all([
+        fetch(`/api/earn/positions/${encodeURIComponent(activePos.id)}/redeem`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(bodyPayload),
+        }),
+        new Promise((resolve) => setTimeout(resolve, 420)),
+      ]);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gagal mencairkan posisi Earn');
 
@@ -410,14 +514,25 @@ export const EarnView: React.FC<Props> = ({
       }
       onRefreshBalances?.();
 
-      const returnedDisplay = formatUnitsClient(data.returnedPrincipalUnits || '0', redeemTarget.decimals);
+      const returnedDisplay = formatUnitsClient(data.returnedPrincipalUnits || '0', activePos.decimals);
       showToast(
         'success',
         data.earlyRedemption ? 'Pencairan Dini Selesai' : 'Redemption Selesai',
-        `${returnedDisplay} ${redeemTarget.asset} telah dikembalikan ke Dompet Spot.`
+        `${returnedDisplay} ${activePos.asset} telah dikembalikan ke Dompet Spot.`
       );
-      setRedeemTarget(null);
+      setRedeemSuccessInfo({
+        vaultName: activePos.vaultName,
+        asset: activePos.asset,
+        returnedDisplay,
+        earlyRedemption: Boolean(data.earlyRedemption),
+        penaltyBps: activePos.earlyRedeemPenaltyBps,
+      });
+      setRedeemStage('SUCCESS');
+      scheduleTimeout(() => {
+        finalizeRedeemSuccess(activePos.id);
+      }, 1500);
     } catch (err: any) {
+      setRedeemStage('FORM');
       showToast('error', 'Redemption Gagal', err?.message || 'Tidak dapat mencairkan dana dari vault.');
     } finally {
       setIsRedeeming(false);
@@ -425,6 +540,7 @@ export const EarnView: React.FC<Props> = ({
   };
 
   return (
+    <MotionConfig reducedMotion="user">
     <div className="flex-1 flex flex-col p-4 lg:p-6 bg-[#090D12] overflow-y-auto">
       <div className="max-w-7xl w-full mx-auto space-y-6">
         <PageHeader
@@ -499,7 +615,13 @@ export const EarnView: React.FC<Props> = ({
             </div>
           </div>
 
-          <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4">
+          <motion.div
+            key={`kpi-claim-${claimKpiPulse}`}
+            initial={claimKpiPulse > 0 ? { scale: 0.985, borderColor: 'rgba(53, 184, 135, 0.7)' } : false}
+            animate={{ scale: 1, borderColor: '#202B34' }}
+            transition={{ duration: 0.65, ease: [0.16, 1, 0.3, 1] }}
+            className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4"
+          >
             <div className="flex items-center justify-between text-[11px] uppercase tracking-wider text-[#71818B] font-mono">
               <span>Claimable Settled Yield</span>
               <CheckCircle2 className="w-3.5 h-3.5 text-[#35B887]" />
@@ -512,7 +634,7 @@ export const EarnView: React.FC<Props> = ({
             <div className="mt-1 text-[11px] text-[#71818B] font-mono tabular-nums">
               Lifetime earned: ${user && summary ? summary.portfolio.totalYieldEarnedUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) : '0.00'}
             </div>
-          </div>
+          </motion.div>
         </div>
 
         {/* Navigation Tabs & Search */}
@@ -559,6 +681,8 @@ export const EarnView: React.FC<Props> = ({
             displayCurrency={displayCurrency}
             externalSummary={summary}
             externalVaults={vaults}
+            busyPositionId={busyPositionId}
+            claimedBurst={claimedBurst}
             onSelectVaultToStake={openSubscribeModal}
             onClaimPosition={handleClaimYield}
             onNavigateTab={setMainTab}
@@ -739,121 +863,162 @@ export const EarnView: React.FC<Props> = ({
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {filteredPositions.map(pos => {
-                      const isBusy = busyPositionId === pos.id;
-                      const isRedeemed = pos.status === 'REDEEMED';
-                      return (
-                        <div
-                          key={pos.id}
-                          className="rounded-[10px] bg-[#141C24] border border-[#202B34] p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
-                        >
-                          <div className="flex items-start gap-3 min-w-0">
-                            <AssetIcon symbol={pos.asset} size="md" />
-                            <div className="space-y-1 min-w-0">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="text-sm font-semibold text-[#E4EBEF]">{pos.vaultName}</span>
-                                <StatusBadge
-                                  tone={
-                                    pos.status === 'ACTIVE'
-                                      ? 'success'
-                                      : pos.status === 'MATURED'
-                                        ? 'info'
-                                        : 'neutral'
-                                  }
-                                >
-                                  {pos.status}
-                                </StatusBadge>
-                                <span className="text-xs font-mono text-[#16A879] font-semibold">
-                                  {pos.apyPct.toFixed(2)}% APY
-                                </span>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono text-[#71818B]">
-                                <span>ID: {pos.id}</span>
-                                <span>·</span>
-                                <span className="inline-flex items-center gap-1">
-                                  <CalendarClock className="w-3 h-3" />
-                                  {pos.durationDays === 0
-                                    ? 'Flexible Term'
-                                    : pos.maturesAt
-                                      ? `Matures ${new Date(pos.maturesAt).toLocaleDateString('id-ID')}`
-                                      : `${pos.durationDays} Days`}
-                                </span>
-                                <span>·</span>
-                                <span>Started {new Date(pos.startedAt).toLocaleDateString('id-ID')}</span>
+                    <AnimatePresence initial={false}>
+                      {filteredPositions.map(pos => {
+                        const isBusy = busyPositionId === pos.id;
+                        const isRedeemed = pos.status === 'REDEEMED';
+                        const isHighlighted = highlightedPositionId === pos.id;
+                        const isClaimBurst = claimedBurst?.positionId === pos.id;
+
+                        return (
+                          <motion.div
+                            key={pos.id}
+                            layout
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{
+                              opacity: 1,
+                              y: 0,
+                              borderColor:
+                                isHighlighted || isClaimBurst
+                                  ? 'rgba(22, 168, 121, 0.72)'
+                                  : '#202B34',
+                              backgroundColor:
+                                isHighlighted || isClaimBurst
+                                  ? 'rgba(22, 168, 121, 0.06)'
+                                  : '#141C24',
+                            }}
+                            exit={{ opacity: 0, y: -8, scale: 0.985 }}
+                            transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+                            className="relative rounded-[10px] bg-[#141C24] border border-[#202B34] p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                          >
+                            <div className="flex items-start gap-3 min-w-0">
+                              <AssetIcon symbol={pos.asset} size="md" />
+                              <div className="space-y-1 min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="text-sm font-semibold text-[#E4EBEF]">{pos.vaultName}</span>
+                                  <StatusBadge
+                                    tone={
+                                      pos.status === 'ACTIVE'
+                                        ? 'success'
+                                        : pos.status === 'MATURED'
+                                          ? 'info'
+                                          : 'neutral'
+                                    }
+                                  >
+                                    {pos.status}
+                                  </StatusBadge>
+                                  <span className="text-xs font-mono text-[#16A879] font-semibold">
+                                    {pos.apyPct.toFixed(2)}% APY
+                                  </span>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-mono text-[#71818B]">
+                                  <span>ID: {pos.id}</span>
+                                  <span>·</span>
+                                  <span className="inline-flex items-center gap-1">
+                                    <CalendarClock className="w-3 h-3" />
+                                    {pos.durationDays === 0
+                                      ? 'Flexible Term'
+                                      : pos.maturesAt
+                                        ? `Matures ${new Date(pos.maturesAt).toLocaleDateString('id-ID')}`
+                                        : `${pos.durationDays} Days`}
+                                  </span>
+                                  <span>·</span>
+                                  <span>Started {new Date(pos.startedAt).toLocaleDateString('id-ID')}</span>
+                                </div>
                               </div>
                             </div>
-                          </div>
 
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 lg:gap-6 font-mono tabular-nums text-xs">
-                            <div>
-                              <span className="text-[10px] uppercase text-[#71818B] block">Staked Principal</span>
-                              <span className="font-semibold text-[#E4EBEF]">
-                                {pos.principalDisplay} {pos.asset}
-                              </span>
-                              <span className="text-[10px] text-[#71818B] block">
-                                {formatUsdOrIdr(pos.principalUsd, pos.principalIdr, displayCurrency)}
-                              </span>
-                            </div>
-
-                            <div>
-                              <span className="text-[10px] uppercase text-[#71818B] block">Est. Daily Yield</span>
-                              <span className="text-[#A1AFB8]">
-                                +{pos.dailyEstimatedYieldDisplay} {pos.asset}
-                              </span>
-                              {!isRedeemed && BigInt(pos.liveAccruingYieldUnits || '0') > 0n && (
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 lg:gap-6 font-mono tabular-nums text-xs">
+                              <div>
+                                <span className="text-[10px] uppercase text-[#71818B] block">Staked Principal</span>
+                                <span className="font-semibold text-[#E4EBEF]">
+                                  {pos.principalDisplay} {pos.asset}
+                                </span>
                                 <span className="text-[10px] text-[#71818B] block">
-                                  Accruing: +{pos.liveAccruingYieldDisplay}
+                                  {formatUsdOrIdr(pos.principalUsd, pos.principalIdr, displayCurrency)}
                                 </span>
-                              )}
-                            </div>
+                              </div>
 
-                            <div>
-                              <span className="text-[10px] uppercase text-[#71818B] block">Claimable Yield</span>
-                              <span className="font-semibold text-[#16A879]">
-                                {pos.accruedYieldDisplay} {pos.asset}
-                              </span>
-                              <span className="text-[10px] text-[#71818B] block">
-                                Claimed: {pos.claimedYieldDisplay}
-                              </span>
-                            </div>
+                              <div>
+                                <span className="text-[10px] uppercase text-[#71818B] block">Est. Daily Yield</span>
+                                <span className="text-[#A1AFB8]">
+                                  +{pos.dailyEstimatedYieldDisplay} {pos.asset}
+                                </span>
+                                {!isRedeemed && BigInt(pos.liveAccruingYieldUnits || '0') > 0n && (
+                                  <span className="text-[10px] text-[#71818B] block">
+                                    Accruing: +{pos.liveAccruingYieldDisplay}
+                                  </span>
+                                )}
+                              </div>
 
-                            <div className="flex flex-wrap items-center justify-end gap-2 col-span-2 sm:col-span-1">
-                              {!isRedeemed && pos.autoCompoundSupported && (
-                                <Button
-                                  variant="secondary"
-                                  size="sm"
-                                  disabled={isBusy}
-                                  onClick={() => handleToggleAutoCompound(pos)}
-                                  title="Toggle daily auto-compounding into principal"
-                                >
-                                  Compound: {pos.autoCompound ? 'ON' : 'OFF'}
-                                </Button>
-                              )}
-                              {!isRedeemed && (
-                                <Button
-                                  variant="profit"
-                                  size="sm"
-                                  disabled={isBusy || !pos.canClaim}
-                                  onClick={() => handleClaimYield(pos)}
-                                >
-                                  Claim
-                                </Button>
-                              )}
-                              {!isRedeemed && pos.canRedeem && (
-                                <Button
-                                  variant="secondary"
-                                  size="sm"
-                                  disabled={isBusy}
-                                  onClick={() => openRedeemModal(pos)}
-                                >
-                                  Redeem
-                                </Button>
-                              )}
+                              <div className="relative">
+                                <span className="text-[10px] uppercase text-[#71818B] block">Claimable Yield</span>
+                                <span className="font-semibold text-[#16A879]">
+                                  {pos.accruedYieldDisplay} {pos.asset}
+                                </span>
+                                <span className="text-[10px] text-[#71818B] block">
+                                  Claimed: {pos.claimedYieldDisplay}
+                                </span>
+                                <AnimatePresence>
+                                  {isClaimBurst && claimedBurst && (
+                                    <motion.div
+                                      key={claimedBurst.timestamp}
+                                      initial={{ opacity: 0, y: 6, scale: 0.92 }}
+                                      animate={{ opacity: 1, y: -6, scale: 1 }}
+                                      exit={{ opacity: 0, y: -16 }}
+                                      transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+                                      className="mt-0.5 inline-flex items-center gap-1 rounded-[5px] bg-[#12392F] border border-[#16A879]/50 px-1.5 py-0.5 text-[10px] font-semibold text-[#35B887]"
+                                    >
+                                      <CheckCircle2 className="w-2.5 h-2.5 shrink-0" />
+                                      +{claimedBurst.amountDisplay} {claimedBurst.asset} Claimed
+                                    </motion.div>
+                                  )}
+                                </AnimatePresence>
+                              </div>
+
+                              <div className="flex flex-wrap items-center justify-end gap-2 col-span-2 sm:col-span-1">
+                                {!isRedeemed && pos.autoCompoundSupported && (
+                                  <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    disabled={isBusy}
+                                    onClick={() => handleToggleAutoCompound(pos)}
+                                    title="Toggle daily auto-compounding into principal"
+                                  >
+                                    Compound: {pos.autoCompound ? 'ON' : 'OFF'}
+                                  </Button>
+                                )}
+                                {!isRedeemed && (
+                                  <Button
+                                    variant="profit"
+                                    size="sm"
+                                    disabled={isBusy || !pos.canClaim}
+                                    onClick={() => handleClaimYield(pos)}
+                                    icon={
+                                      isBusy ? (
+                                        <RefreshCw className="w-3 h-3 animate-spin" />
+                                      ) : undefined
+                                    }
+                                  >
+                                    {isBusy ? 'Claiming...' : 'Claim'}
+                                  </Button>
+                                )}
+                                {!isRedeemed && pos.canRedeem && (
+                                  <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    disabled={isBusy}
+                                    onClick={() => openRedeemModal(pos)}
+                                  >
+                                    Redeem
+                                  </Button>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        </div>
-                      );
-                    })}
+                          </motion.div>
+                        );
+                      })}
+                    </AnimatePresence>
                   </div>
                 )}
               </>
@@ -935,201 +1100,515 @@ export const EarnView: React.FC<Props> = ({
       {/* Subscribe Vault Modal */}
       <Modal
         isOpen={Boolean(selectedVault)}
-        onClose={() => setSelectedVault(null)}
-        title={selectedVault ? `Subscribe: ${selectedVault.name}` : 'Subscribe Vault'}
+        preventClose={stakeStage === 'PROCESSING'}
+        onClose={() => {
+          if (stakeStage === 'PROCESSING') return;
+          if (stakeStage === 'SUCCESS') {
+            finalizeSubscribeSuccess(stakeSuccessInfo?.positionId);
+            return;
+          }
+          setSelectedVault(null);
+        }}
+        title={
+          stakeStage === 'SUCCESS'
+            ? 'Stake Confirmed on Ledger'
+            : selectedVault
+              ? `Subscribe: ${selectedVault.name}`
+              : 'Subscribe Vault'
+        }
         subtitle={
-          selectedVault
-            ? `${selectedVault.apyPct.toFixed(2)}% APY · ${selectedVault.durationDays === 0 ? 'Flexible Term' : `${selectedVault.durationDays}-Day Lockup`}`
-            : ''
+          stakeStage === 'SUCCESS' && stakeSuccessInfo
+            ? `${stakeSuccessInfo.amount} ${stakeSuccessInfo.asset} allocated to Earn Custody`
+            : selectedVault
+              ? `${selectedVault.apyPct.toFixed(2)}% APY · ${selectedVault.durationDays === 0 ? 'Flexible Term' : `${selectedVault.durationDays}-Day Lockup`}`
+              : ''
         }
       >
         {selectedVault && (
-          <form onSubmit={handleSubscribeSubmit} className="space-y-4">
-            <div className="flex items-center justify-between text-xs p-3 rounded-[8px] bg-[#111820] border border-[#202B34]">
-              <span className="text-[#A1AFB8]">Available Spot Balance</span>
-              <span className="font-mono tabular-nums font-semibold text-[#E4EBEF]">
-                {getAvailableSpotDisplay(selectedVault.asset, selectedVault.decimals).display} {selectedVault.asset}
-              </span>
-            </div>
-
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-medium text-[#A1AFB8]">
-                  Subscription Amount ({selectedVault.asset})
-                </label>
-                <button
-                  type="button"
-                  onClick={handleSetMaxStake}
-                  className="text-[11px] font-mono font-semibold text-[#16A879] hover:text-[#35B887] cursor-pointer"
-                >
-                  MAX AVAILABLE
-                </button>
-              </div>
-              <Input
-                type="text"
-                inputMode="decimal"
-                value={stakeAmount}
-                onChange={(e) => setStakeAmount(e.target.value)}
-                placeholder={`Min ${formatUnitsClient(selectedVault.minStakeUnits, selectedVault.decimals)}`}
-                className="font-mono"
-                required
-              />
-              <div className="flex justify-between text-[11px] text-[#71818B] font-mono tabular-nums">
-                <span>Min: {formatUnitsClient(selectedVault.minStakeUnits, selectedVault.decimals)} {selectedVault.asset}</span>
-                {BigInt(selectedVault.maxStakeUnits || '0') > 0n && (
-                  <span>Max/Tx: {formatUnitsClient(selectedVault.maxStakeUnits, selectedVault.decimals)} {selectedVault.asset}</span>
-                )}
-              </div>
-            </div>
-
-            {selectedVault.autoCompoundSupported && (
-              <label className="flex items-center justify-between p-3 rounded-[8px] bg-[#111820] border border-[#202B34] cursor-pointer">
-                <div>
-                  <span className="text-xs font-semibold text-[#E4EBEF] block">Auto-Compound Daily Yield</span>
-                  <span className="text-[11px] text-[#71818B]">
-                    Automatically reinvest 00:00 UTC daily interest back into staked principal
+          <AnimatePresence mode="wait">
+            {stakeStage === 'FORM' && (
+              <motion.form
+                key="stake-form"
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.16, ease: 'easeOut' }}
+                onSubmit={handleSubscribeSubmit}
+                className="space-y-4"
+              >
+                <div className="flex items-center justify-between text-xs p-3 rounded-[8px] bg-[#111820] border border-[#202B34]">
+                  <span className="text-[#A1AFB8]">Available Spot Balance</span>
+                  <span className="font-mono tabular-nums font-semibold text-[#E4EBEF]">
+                    {getAvailableSpotDisplay(selectedVault.asset, selectedVault.decimals).display} {selectedVault.asset}
                   </span>
                 </div>
-                <input
-                  type="checkbox"
-                  checked={autoCompound}
-                  onChange={(e) => setAutoCompound(e.target.checked)}
-                  className="w-4 h-4 accent-[#16A879]"
-                />
-              </label>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-medium text-[#A1AFB8]">
+                      Subscription Amount ({selectedVault.asset})
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleSetMaxStake}
+                      className="text-[11px] font-mono font-semibold text-[#16A879] hover:text-[#35B887] cursor-pointer"
+                    >
+                      MAX AVAILABLE
+                    </button>
+                  </div>
+                  <Input
+                    type="text"
+                    inputMode="decimal"
+                    value={stakeAmount}
+                    onChange={(e) => setStakeAmount(e.target.value)}
+                    placeholder={`Min ${formatUnitsClient(selectedVault.minStakeUnits, selectedVault.decimals)}`}
+                    className="font-mono"
+                    required
+                  />
+                  <div className="flex justify-between text-[11px] text-[#71818B] font-mono tabular-nums">
+                    <span>Min: {formatUnitsClient(selectedVault.minStakeUnits, selectedVault.decimals)} {selectedVault.asset}</span>
+                    {BigInt(selectedVault.maxStakeUnits || '0') > 0n && (
+                      <span>Max/Tx: {formatUnitsClient(selectedVault.maxStakeUnits, selectedVault.decimals)} {selectedVault.asset}</span>
+                    )}
+                  </div>
+                </div>
+
+                {selectedVault.autoCompoundSupported && (
+                  <label className="flex items-center justify-between p-3 rounded-[8px] bg-[#111820] border border-[#202B34] cursor-pointer">
+                    <div>
+                      <span className="text-xs font-semibold text-[#E4EBEF] block">Auto-Compound Daily Yield</span>
+                      <span className="text-[11px] text-[#71818B]">
+                        Automatically reinvest 00:00 UTC daily interest back into staked principal
+                      </span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={autoCompound}
+                      onChange={(e) => setAutoCompound(e.target.checked)}
+                      className="w-4 h-4 accent-[#16A879]"
+                    />
+                  </label>
+                )}
+
+                <div className="rounded-[8px] bg-[#111820] border border-[#202B34] p-3 space-y-2 text-xs font-mono tabular-nums">
+                  <div className="flex justify-between">
+                    <span className="text-[#71818B]">Estimated Daily Yield</span>
+                    <span className="text-[#16A879] font-semibold">
+                      +{estimatedReturnSummary.daily} {selectedVault.asset}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[#71818B]">
+                      Est. {selectedVault.durationDays > 0 ? `${selectedVault.durationDays}-Day Term` : '30-Day'} Yield
+                    </span>
+                    <span className="text-[#E4EBEF]">
+                      +{estimatedReturnSummary.term} {selectedVault.asset}
+                    </span>
+                  </div>
+                  <div className="flex justify-between pt-2 border-t border-[#202B34]">
+                    <span className="text-[#71818B]">Early Exit Rule</span>
+                    <span className="text-[#A1AFB8]">
+                      {selectedVault.durationDays === 0
+                        ? 'Instant · 0% Fee'
+                        : selectedVault.earlyRedeemAllowed
+                          ? `Allowed · ${(selectedVault.earlyRedeemPenaltyBps / 100).toFixed(2)}% penalty`
+                          : 'Locked until maturity'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <Button variant="secondary" type="button" onClick={() => setSelectedVault(null)}>
+                    Cancel
+                  </Button>
+                  <Button variant="profit" type="submit" disabled={isSubmitting}>
+                    Confirm Stake {selectedVault.asset}
+                  </Button>
+                </div>
+              </motion.form>
             )}
 
-            <div className="rounded-[8px] bg-[#111820] border border-[#202B34] p-3 space-y-2 text-xs font-mono tabular-nums">
-              <div className="flex justify-between">
-                <span className="text-[#71818B]">Estimated Daily Yield</span>
-                <span className="text-[#16A879] font-semibold">
-                  +{estimatedReturnSummary.daily} {selectedVault.asset}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-[#71818B]">
-                  Est. {selectedVault.durationDays > 0 ? `${selectedVault.durationDays}-Day Term` : '30-Day'} Yield
-                </span>
-                <span className="text-[#E4EBEF]">
-                  +{estimatedReturnSummary.term} {selectedVault.asset}
-                </span>
-              </div>
-              <div className="flex justify-between pt-2 border-t border-[#202B34]">
-                <span className="text-[#71818B]">Early Exit Rule</span>
-                <span className="text-[#A1AFB8]">
-                  {selectedVault.durationDays === 0
-                    ? 'Instant · 0% Fee'
-                    : selectedVault.earlyRedeemAllowed
-                      ? `Allowed · ${(selectedVault.earlyRedeemPenaltyBps / 100).toFixed(2)}% penalty`
-                      : 'Locked until maturity'}
-                </span>
-              </div>
-            </div>
+            {stakeStage === 'PROCESSING' && (
+              <motion.div
+                key="stake-processing"
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.96 }}
+                transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                className="py-7 px-3 flex flex-col items-center text-center space-y-4"
+              >
+                <div className="relative w-16 h-16 flex items-center justify-center">
+                  <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{ repeat: Infinity, duration: 1.2, ease: 'linear' }}
+                    className="absolute inset-0 rounded-full border-2 border-[#202B34] border-t-[#16A879]"
+                  />
+                  <motion.div
+                    animate={{ scale: [0.94, 1.05, 0.94] }}
+                    transition={{ repeat: Infinity, duration: 1.4, ease: 'easeInOut' }}
+                    className="w-11 h-11 rounded-full bg-[#12392F] border border-[#16A879]/40 flex items-center justify-center"
+                  >
+                    <Lock className="w-5 h-5 text-[#16A879]" />
+                  </motion.div>
+                </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <Button variant="secondary" type="button" onClick={() => setSelectedVault(null)}>
-                Cancel
-              </Button>
-              <Button variant="profit" type="submit" disabled={isSubmitting}>
-                {isSubmitting ? 'Processing Ledger Lock...' : `Confirm Stake ${selectedVault.asset}`}
-              </Button>
-            </div>
-          </form>
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-[#E4EBEF]">Confirming Ledger Lock</p>
+                  <p className="text-xs font-mono tabular-nums text-[#A1AFB8]">
+                    Securing {stakeAmount.trim()} {selectedVault.asset} into {selectedVault.name}
+                  </p>
+                </div>
+
+                <div className="w-full max-w-xs h-1.5 rounded-full bg-[#111820] border border-[#202B34] overflow-hidden">
+                  <motion.div
+                    initial={{ x: '-100%' }}
+                    animate={{ x: '100%' }}
+                    transition={{ repeat: Infinity, duration: 1.05, ease: 'easeInOut' }}
+                    className="h-full w-1/2 rounded-full bg-[#16A879]"
+                  />
+                </div>
+              </motion.div>
+            )}
+
+            {stakeStage === 'SUCCESS' && stakeSuccessInfo && (
+              <motion.div
+                key="stake-success"
+                initial={{ opacity: 0, scale: 0.94 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+                className="py-5 px-2 flex flex-col items-center text-center space-y-4"
+              >
+                <div className="relative w-16 h-16 flex items-center justify-center">
+                  <motion.div
+                    initial={{ scale: 0.75, opacity: 0.55 }}
+                    animate={{ scale: 1.65, opacity: 0 }}
+                    transition={{ duration: 0.9, ease: 'easeOut' }}
+                    className="absolute inset-0 rounded-full border border-[#16A879]"
+                  />
+                  <motion.div
+                    initial={{ scale: 0.5, rotate: -12 }}
+                    animate={{ scale: [0.5, 1.1, 1], rotate: 0 }}
+                    transition={{ duration: 0.38, ease: [0.16, 1, 0.3, 1] }}
+                    className="w-14 h-14 rounded-full bg-[#12392F] border border-[#16A879]/60 flex items-center justify-center"
+                  >
+                    <ShieldCheck className="w-7 h-7 text-[#35B887]" />
+                  </motion.div>
+                </div>
+
+                <motion.div
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.1, duration: 0.2 }}
+                  className="space-y-1"
+                >
+                  <p className="text-base font-semibold text-[#E4EBEF]">Custody Lock Active</p>
+                  <p className="text-sm font-mono tabular-nums font-semibold text-[#35B887]">
+                    {stakeSuccessInfo.amount} {stakeSuccessInfo.asset} @ {stakeSuccessInfo.apyPct.toFixed(2)}% APY
+                  </p>
+                </motion.div>
+
+                <motion.div
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.16, duration: 0.2 }}
+                  className="w-full rounded-[8px] bg-[#111820] border border-[#202B34] p-3 space-y-1.5 text-xs font-mono tabular-nums"
+                >
+                  <div className="flex justify-between">
+                    <span className="text-[#71818B]">Vault Pool</span>
+                    <span className="text-[#E4EBEF]">{stakeSuccessInfo.vaultName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[#71818B]">Auto-Compound</span>
+                    <span className={stakeSuccessInfo.autoCompound ? 'text-[#16A879]' : 'text-[#A1AFB8]'}>
+                      {stakeSuccessInfo.autoCompound ? 'ENABLED' : 'MANUAL CLAIM'}
+                    </span>
+                  </div>
+                </motion.div>
+
+                <div className="flex items-center justify-end w-full pt-1">
+                  <Button
+                    variant="profit"
+                    size="sm"
+                    onClick={() => finalizeSubscribeSuccess(stakeSuccessInfo.positionId)}
+                    icon={<ArrowRight className="w-3.5 h-3.5" />}
+                  >
+                    View Position
+                  </Button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         )}
       </Modal>
 
       {/* Redeem Position Modal */}
       <Modal
         isOpen={Boolean(redeemTarget)}
-        onClose={() => setRedeemTarget(null)}
-        title={redeemTarget ? `Redeem: ${redeemTarget.vaultName}` : 'Redeem Position'}
+        preventClose={redeemStage === 'PROCESSING'}
+        onClose={() => {
+          if (redeemStage === 'PROCESSING') return;
+          if (redeemStage === 'SUCCESS') {
+            finalizeRedeemSuccess(redeemTarget?.id);
+            return;
+          }
+          setRedeemTarget(null);
+        }}
+        title={
+          redeemStage === 'SUCCESS'
+            ? redeemSuccessInfo?.earlyRedemption
+              ? 'Early Redemption Settled'
+              : 'Custody Released to Spot'
+            : redeemTarget
+              ? `Redeem: ${redeemTarget.vaultName}`
+              : 'Redeem Position'
+        }
         subtitle={
-          redeemTarget
-            ? `Principal: ${redeemTarget.principalDisplay} ${redeemTarget.asset}`
-            : ''
+          redeemStage === 'SUCCESS' && redeemSuccessInfo
+            ? `+${redeemSuccessInfo.returnedDisplay} ${redeemSuccessInfo.asset} credited to Spot Wallet`
+            : redeemTarget
+              ? `Principal: ${redeemTarget.principalDisplay} ${redeemTarget.asset}`
+              : ''
         }
       >
         {redeemTarget && (
-          <form onSubmit={handleRedeemSubmit} className="space-y-4">
-            <div className="rounded-[8px] bg-[#111820] border border-[#202B34] p-3 space-y-2 text-xs font-mono tabular-nums">
-              <div className="flex justify-between">
-                <span className="text-[#71818B]">Custody Principal</span>
-                <span className="font-semibold text-[#E4EBEF]">
-                  {redeemTarget.principalDisplay} {redeemTarget.asset}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-[#71818B]">Settled Accrued Yield</span>
-                <span className="text-[#16A879]">
-                  +{redeemTarget.accruedYieldDisplay} {redeemTarget.asset}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-[#71818B]">Term Status</span>
-                <span className="text-[#A1AFB8]">
-                  {redeemTarget.isMatured ? 'Eligible for 0% Penalty Release' : 'Before Maturity Date'}
-                </span>
-              </div>
-            </div>
-
-            {redeemTarget.durationDays === 0 ? (
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-medium text-[#A1AFB8]">
-                    Redeem Amount ({redeemTarget.asset})
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setRedeemAmount(formatUnitsInput(redeemTarget.principalUnits, redeemTarget.decimals))}
-                    className="text-[11px] font-mono font-semibold text-[#16A879] cursor-pointer"
-                  >
-                    REDEEM FULL
-                  </button>
-                </div>
-                <Input
-                  type="text"
-                  inputMode="decimal"
-                  value={redeemAmount}
-                  onChange={(e) => setRedeemAmount(e.target.value)}
-                  className="font-mono"
-                  required
-                />
-              </div>
-            ) : !redeemTarget.isMatured ? (
-              <div className="rounded-[8px] bg-[#2C2415] border border-[#D6A85C]/40 p-3 space-y-2 text-xs text-[#E4EBEF]">
-                <p className="font-semibold text-[#D6A85C]">Early Term Exit Notice</p>
-                <p className="text-[#A1AFB8] leading-relaxed">
-                  Position matures on {redeemTarget.maturesAt ? new Date(redeemTarget.maturesAt).toLocaleString('id-ID') : '-'}.
-                  Redeeming early deducts a {(redeemTarget.earlyRedeemPenaltyBps / 100).toFixed(2)}% early exit fee on principal and forfeits unclaimed accrued yield.
-                </p>
-                <label className="flex items-center gap-2 pt-1 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={confirmEarlyRedeem}
-                    onChange={(e) => setConfirmEarlyRedeem(e.target.checked)}
-                    className="w-4 h-4 accent-[#D6A85C]"
-                  />
-                  <span className="text-xs font-medium">I accept early redemption terms and fee deduction</span>
-                </label>
-              </div>
-            ) : null}
-
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <Button variant="secondary" type="button" onClick={() => setRedeemTarget(null)}>
-                Cancel
-              </Button>
-              <Button
-                variant={!redeemTarget.isMatured && redeemTarget.durationDays > 0 ? 'danger' : 'profit'}
-                type="submit"
-                disabled={isRedeeming}
-                icon={<ArrowDownLeft className="w-3.5 h-3.5" />}
+          <AnimatePresence mode="wait">
+            {redeemStage === 'FORM' && (
+              <motion.form
+                key="redeem-form"
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.16, ease: 'easeOut' }}
+                onSubmit={handleRedeemSubmit}
+                className="space-y-4"
               >
-                {isRedeeming ? 'Releasing Custody...' : 'Confirm Redemption'}
-              </Button>
-            </div>
-          </form>
+                <div className="rounded-[8px] bg-[#111820] border border-[#202B34] p-3 space-y-2 text-xs font-mono tabular-nums">
+                  <div className="flex justify-between">
+                    <span className="text-[#71818B]">Custody Principal</span>
+                    <span className="font-semibold text-[#E4EBEF]">
+                      {redeemTarget.principalDisplay} {redeemTarget.asset}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[#71818B]">Settled Accrued Yield</span>
+                    <span className="text-[#16A879]">
+                      +{redeemTarget.accruedYieldDisplay} {redeemTarget.asset}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[#71818B]">Term Status</span>
+                    <span className="text-[#A1AFB8]">
+                      {redeemTarget.isMatured ? 'Eligible for 0% Penalty Release' : 'Before Maturity Date'}
+                    </span>
+                  </div>
+                </div>
+
+                {redeemTarget.durationDays === 0 ? (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-medium text-[#A1AFB8]">
+                        Redeem Amount ({redeemTarget.asset})
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setRedeemAmount(formatUnitsInput(redeemTarget.principalUnits, redeemTarget.decimals))}
+                        className="text-[11px] font-mono font-semibold text-[#16A879] cursor-pointer"
+                      >
+                        REDEEM FULL
+                      </button>
+                    </div>
+                    <Input
+                      type="text"
+                      inputMode="decimal"
+                      value={redeemAmount}
+                      onChange={(e) => setRedeemAmount(e.target.value)}
+                      className="font-mono"
+                      required
+                    />
+                  </div>
+                ) : !redeemTarget.isMatured ? (
+                  <div className="rounded-[8px] bg-[#2C2415] border border-[#D6A85C]/40 p-3 space-y-2 text-xs text-[#E4EBEF]">
+                    <p className="font-semibold text-[#D6A85C]">Early Term Exit Notice</p>
+                    <p className="text-[#A1AFB8] leading-relaxed">
+                      Position matures on {redeemTarget.maturesAt ? new Date(redeemTarget.maturesAt).toLocaleString('id-ID') : '-'}.
+                      Redeeming early deducts a {(redeemTarget.earlyRedeemPenaltyBps / 100).toFixed(2)}% early exit fee on principal and forfeits unclaimed accrued yield.
+                    </p>
+                    <label className="flex items-center gap-2 pt-1 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={confirmEarlyRedeem}
+                        onChange={(e) => setConfirmEarlyRedeem(e.target.checked)}
+                        className="w-4 h-4 accent-[#D6A85C]"
+                      />
+                      <span className="text-xs font-medium">I accept early redemption terms and fee deduction</span>
+                    </label>
+                  </div>
+                ) : null}
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <Button variant="secondary" type="button" onClick={() => setRedeemTarget(null)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant={!redeemTarget.isMatured && redeemTarget.durationDays > 0 ? 'danger' : 'profit'}
+                    type="submit"
+                    disabled={isRedeeming}
+                    icon={<ArrowDownLeft className="w-3.5 h-3.5" />}
+                  >
+                    Confirm Redemption
+                  </Button>
+                </div>
+              </motion.form>
+            )}
+
+            {redeemStage === 'PROCESSING' && (
+              <motion.div
+                key="redeem-processing"
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.96 }}
+                transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                className="py-7 px-3 flex flex-col items-center text-center space-y-4"
+              >
+                <div className="relative w-16 h-16 flex items-center justify-center">
+                  <motion.div
+                    animate={{ rotate: -360 }}
+                    transition={{ repeat: Infinity, duration: 1.15, ease: 'linear' }}
+                    className={`absolute inset-0 rounded-full border-2 border-[#202B34] ${
+                      !redeemTarget.isMatured && redeemTarget.durationDays > 0
+                        ? 'border-t-[#D6A85C]'
+                        : 'border-t-[#16A879]'
+                    }`}
+                  />
+                  <motion.div
+                    animate={{ y: [0, 3, 0] }}
+                    transition={{ repeat: Infinity, duration: 1.1, ease: 'easeInOut' }}
+                    className={`w-11 h-11 rounded-full flex items-center justify-center border ${
+                      !redeemTarget.isMatured && redeemTarget.durationDays > 0
+                        ? 'bg-[#2C2415] border-[#D6A85C]/40'
+                        : 'bg-[#12392F] border-[#16A879]/40'
+                    }`}
+                  >
+                    <Unlock
+                      className={`w-5 h-5 ${
+                        !redeemTarget.isMatured && redeemTarget.durationDays > 0
+                          ? 'text-[#D6A85C]'
+                          : 'text-[#16A879]'
+                      }`}
+                    />
+                  </motion.div>
+                </div>
+
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-[#E4EBEF]">Releasing Earn Custody</p>
+                  <p className="text-xs font-mono tabular-nums text-[#A1AFB8]">
+                    Returning {redeemTarget.asset} principal back to Spot Wallet
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 text-[11px] font-mono text-[#71818B]">
+                  <span>Earn Custody</span>
+                  <motion.span
+                    animate={{ x: [0, 4, 0] }}
+                    transition={{ repeat: Infinity, duration: 0.9, ease: 'easeInOut' }}
+                  >
+                    <ArrowRight className="w-3.5 h-3.5 text-[#16A879]" />
+                  </motion.span>
+                  <span className="text-[#E4EBEF]">Spot Wallet</span>
+                </div>
+              </motion.div>
+            )}
+
+            {redeemStage === 'SUCCESS' && redeemSuccessInfo && (
+              <motion.div
+                key="redeem-success"
+                initial={{ opacity: 0, scale: 0.94 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+                className="py-5 px-2 flex flex-col items-center text-center space-y-4"
+              >
+                <div className="relative w-16 h-16 flex items-center justify-center">
+                  <motion.div
+                    initial={{ scale: 0.75, opacity: 0.55 }}
+                    animate={{ scale: 1.65, opacity: 0 }}
+                    transition={{ duration: 0.9, ease: 'easeOut' }}
+                    className={`absolute inset-0 rounded-full border ${
+                      redeemSuccessInfo.earlyRedemption ? 'border-[#D6A85C]' : 'border-[#16A879]'
+                    }`}
+                  />
+                  <motion.div
+                    initial={{ scale: 0.5 }}
+                    animate={{ scale: [0.5, 1.1, 1] }}
+                    transition={{ duration: 0.38, ease: [0.16, 1, 0.3, 1] }}
+                    className={`w-14 h-14 rounded-full flex items-center justify-center border ${
+                      redeemSuccessInfo.earlyRedemption
+                        ? 'bg-[#2C2415] border-[#D6A85C]/60'
+                        : 'bg-[#12392F] border-[#16A879]/60'
+                    }`}
+                  >
+                    <ArrowDownLeft
+                      className={`w-7 h-7 ${
+                        redeemSuccessInfo.earlyRedemption ? 'text-[#D6A85C]' : 'text-[#35B887]'
+                      }`}
+                    />
+                  </motion.div>
+                </div>
+
+                <motion.div
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.1, duration: 0.2 }}
+                  className="space-y-1"
+                >
+                  <p className="text-base font-semibold text-[#E4EBEF]">
+                    {redeemSuccessInfo.earlyRedemption ? 'Early Exit Completed' : 'Spot Wallet Credited'}
+                  </p>
+                  <p
+                    className={`text-sm font-mono tabular-nums font-semibold ${
+                      redeemSuccessInfo.earlyRedemption ? 'text-[#D6A85C]' : 'text-[#35B887]'
+                    }`}
+                  >
+                    +{redeemSuccessInfo.returnedDisplay} {redeemSuccessInfo.asset}
+                  </p>
+                </motion.div>
+
+                <motion.div
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.16, duration: 0.2 }}
+                  className="w-full rounded-[8px] bg-[#111820] border border-[#202B34] p-3 space-y-1.5 text-xs font-mono tabular-nums"
+                >
+                  <div className="flex justify-between">
+                    <span className="text-[#71818B]">Source Vault</span>
+                    <span className="text-[#E4EBEF]">{redeemSuccessInfo.vaultName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[#71818B]">Settlement Type</span>
+                    <span className={redeemSuccessInfo.earlyRedemption ? 'text-[#D6A85C]' : 'text-[#16A879]'}>
+                      {redeemSuccessInfo.earlyRedemption
+                        ? `EARLY EXIT (${(redeemSuccessInfo.penaltyBps / 100).toFixed(2)}% FEE)`
+                        : 'STANDARD RELEASE (0% FEE)'}
+                    </span>
+                  </div>
+                </motion.div>
+
+                <div className="flex items-center justify-end w-full pt-1">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => finalizeRedeemSuccess(redeemTarget.id)}
+                  >
+                    Done
+                  </Button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         )}
       </Modal>
     </div>
+    </MotionConfig>
   );
 };

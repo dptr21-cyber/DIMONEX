@@ -122,7 +122,6 @@ async function main() {
       db.users.set(id, {
         id,
         email: `${tag}-${Date.now()}@dimonex.id`,
-        fullName: `Test ${tag.toUpperCase()}`,
         passwordSalt: salt,
         passwordHash: db.hashPassword('TestSuite2026!', salt),
         role,
@@ -145,8 +144,6 @@ async function main() {
         device: 'test-runner',
         ip: '127.0.0.1',
         expiresAt: Date.now() + 3600_000,
-        lastActive: Date.now(),
-        createdAt: Date.now(),
       });
       createdSessionTokens.push(tok);
       return { id, tok };
@@ -210,14 +207,15 @@ async function main() {
       quoteDecimals: 2,
       minOrderSize: '10000000',
       maxOrderSize: '10000000000000',
-      priceTickSize: '100',
-      lotSize: '1000000',
       makerFeeBps: 10,
       takerFeeBps: 20,
       lastPrice: '1000000',
+      high24h: '1000000',
+      low24h: '1000000',
+      volume24h: '0',
+      priceChange24h: '0',
       isActive: true,
       isHalted: false,
-      createdAt: Date.now(),
     });
     createdPairIds.push('ZDEL-IDR');
 
@@ -399,11 +397,18 @@ async function main() {
     const pastSnapKey = `${traderUser.id}:${pastDateKey}`;
     createdDailyKeys.push(pastSnapKey);
     db.dailyPnlSnapshots.set(pastSnapKey, {
+      id: pastSnapKey,
       userId: traderUser.id,
       date: pastDateKey,
       timestamp: pastTs,
       pnlIdr: 2500000,
       pnlUsdt: 151.98,
+      unrealizedPnlIdr: 0,
+      unrealizedPnlUsdt: 0,
+      netPnlIdr: 2500000,
+      netPnlUsdt: 151.98,
+      portfolioValueIdr: 102500000,
+      portfolioValueUsdt: 6231,
       returnPct: 2.5,
       tradesCount: 3,
       winCount: 2,
@@ -412,18 +417,25 @@ async function main() {
       volumeUsdt: 6079.03,
       feesIdr: 200000,
       feesUsdt: 12.16,
+      finalized: true,
       trades: [
         {
           id: 'hist-tx-1',
           pairId: 'BTC-IDR',
           side: 'SELL',
           source: 'SPOT',
-          qty: 0.05,
-          priceIdr: 1500000000,
+          price: '1500000000',
+          rawPrice: '150000000000',
+          quantity: '0.05',
+          rawQuantity: '5000000',
+          quoteVolume: '75000000',
+          rawQuoteVolume: '7500000000',
           pnlIdr: 2500000,
           pnlUsdt: 151.98,
           feeIdr: 200000,
-          timeStr: '10:30',
+          feeUsdt: 12.16,
+          time: '10:30',
+          timestamp: pastTs,
         },
       ],
       updatedAt: pastTs,
@@ -598,7 +610,7 @@ async function main() {
     // Verify double-entry accounting invariant on every new journal created during tests
     for (const [jId, journal] of db.journalTransactions.entries()) {
       if (journalStartKeys.has(jId)) continue;
-      const entries = db.ledgerEntries.filter(e => e.journalTransactionId === jId);
+      const entries = db.ledgerEntries.filter(e => e.journalId === jId);
       let debits = 0n;
       let credits = 0n;
       for (const e of entries) {

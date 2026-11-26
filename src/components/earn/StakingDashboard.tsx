@@ -8,6 +8,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
   BarChart,
   Bar,
@@ -37,12 +38,22 @@ import {
   UserProfile,
 } from '../../types/index.js';
 
+export interface ClaimBurstFeedback {
+  positionId: string;
+  vaultId?: string;
+  asset: string;
+  amountDisplay: string;
+  timestamp: number;
+}
+
 interface StakingDashboardProps {
   user?: UserProfile | null;
   balances?: UserBalance[];
   displayCurrency?: 'IDR' | 'USD' | 'USDT';
   externalSummary?: EarnSummaryResponse | null;
   externalVaults?: EarnVaultItem[];
+  busyPositionId?: string | null;
+  claimedBurst?: ClaimBurstFeedback | null;
   onSelectVaultToStake: (vault: EarnVaultItem) => void;
   onClaimPosition?: (pos: EarnPositionItem) => void;
   onNavigateTab?: (tab: 'DASHBOARD' | 'VAULTS' | 'POSITIONS' | 'HISTORY') => void;
@@ -77,6 +88,8 @@ export const StakingDashboard: React.FC<StakingDashboardProps> = ({
   displayCurrency = 'USD',
   externalSummary = null,
   externalVaults = [],
+  busyPositionId = null,
+  claimedBurst = null,
   onSelectVaultToStake,
   onClaimPosition,
   onNavigateTab,
@@ -501,9 +514,25 @@ export const StakingDashboard: React.FC<StakingDashboardProps> = ({
                       : '0';
                     const claimableUnits = userVaultData?.claimableUnits || 0n;
                     const capPct = Math.min(100, Math.round(vault.utilizationBps / 100));
+                    const primaryPosId = userVaultData?.primaryPosition?.id;
+                    const isClaimingRow = Boolean(primaryPosId && busyPositionId === primaryPosId);
+                    const showRowClaimBurst = Boolean(
+                      claimedBurst &&
+                        (claimedBurst.vaultId === vault.id ||
+                          (primaryPosId && claimedBurst.positionId === primaryPosId))
+                    );
 
                     return (
-                      <tr key={vault.id} className="hover:bg-[#17212B]/60 transition-colors">
+                      <motion.tr
+                        key={vault.id}
+                        animate={
+                          showRowClaimBurst
+                            ? { backgroundColor: ['rgba(22, 168, 121, 0.14)', 'rgba(20, 28, 36, 0)'] }
+                            : undefined
+                        }
+                        transition={{ duration: 1.1, ease: 'easeOut' }}
+                        className="hover:bg-[#17212B]/60 transition-colors"
+                      >
                         <td className="px-4 py-3 font-sans">
                           <div className="flex items-center gap-2.5">
                             <AssetIcon symbol={vault.asset} logoUrl={vault.assetLogoUrl} size="sm" />
@@ -548,7 +577,7 @@ export const StakingDashboard: React.FC<StakingDashboardProps> = ({
                             {formatFiatValue(vault.totalStakedUsd, vault.totalStakedIdr, displayCurrency)} · {capPct}% cap
                           </span>
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-3 relative">
                           <span className={`font-semibold block ${userVaultData && userVaultData.stakedUnits > 0n ? 'text-[#E4EBEF]' : 'text-[#71818B]'}`}>
                             {user ? `${userStakedStr} ${vault.asset}` : '—'}
                           </span>
@@ -557,6 +586,20 @@ export const StakingDashboard: React.FC<StakingDashboardProps> = ({
                               +{formatUnitsReadable(claimableUnits.toString(), vault.decimals)} claimable
                             </span>
                           )}
+                          <AnimatePresence>
+                            {showRowClaimBurst && claimedBurst && (
+                              <motion.span
+                                key={claimedBurst.timestamp}
+                                initial={{ opacity: 0, y: 6, scale: 0.9 }}
+                                animate={{ opacity: 1, y: -4, scale: 1 }}
+                                exit={{ opacity: 0, y: -14 }}
+                                transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+                                className="inline-block text-[10px] font-semibold text-[#35B887]"
+                              >
+                                +{claimedBurst.amountDisplay} {claimedBurst.asset} Credited
+                              </motion.span>
+                            )}
+                          </AnimatePresence>
                         </td>
                         <td className="px-4 py-3 text-right font-sans">
                           <div className="inline-flex items-center gap-1.5">
@@ -564,9 +607,15 @@ export const StakingDashboard: React.FC<StakingDashboardProps> = ({
                               <Button
                                 variant="secondary"
                                 size="sm"
+                                disabled={isClaimingRow}
                                 onClick={() => onClaimPosition(userVaultData.primaryPosition!)}
+                                icon={
+                                  isClaimingRow ? (
+                                    <RefreshCw className="w-3 h-3 animate-spin text-[#16A879]" />
+                                  ) : undefined
+                                }
                               >
-                                Claim
+                                {isClaimingRow ? 'Claiming...' : 'Claim'}
                               </Button>
                             )}
                             <Button
@@ -578,7 +627,7 @@ export const StakingDashboard: React.FC<StakingDashboardProps> = ({
                             </Button>
                           </div>
                         </td>
-                      </tr>
+                      </motion.tr>
                     );
                   })}
                 </tbody>

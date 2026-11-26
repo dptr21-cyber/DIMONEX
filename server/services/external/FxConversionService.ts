@@ -22,6 +22,8 @@ export class FxConversionService {
   private maxChangeWithoutConfirmPct = 10.0; // 10% max jump without explicit confirmation
   private config: FxConversionConfig;
   private backgroundTimer: NodeJS.Timeout | null = null;
+  private cmcRateLimitedUntil = 0;
+  private hasLoggedCmcQuota = false;
 
   constructor() {
     const now = Date.now();
@@ -87,7 +89,26 @@ export class FxConversionService {
           }
         }
       }
-    }, 30000); // Check every 30 seconds
+    }, 60000); // Check every 60 seconds (cache saver skips actual API calls within syncIntervalMinutes)
+  }
+
+  public isCmcQuotaExhausted(now = Date.now()): boolean {
+    return now < this.cmcRateLimitedUntil;
+  }
+
+  /**
+   * Mark CoinMarketCap API key as quota-exhausted (defaults to 12 hours backoff).
+   * Returns true only on the first transition into exhausted state so callers log once cleanly.
+   */
+  public markCmcQuotaExhausted(cooldownMs = 12 * 60 * 60 * 1000): boolean {
+    const now = Date.now();
+    const wasActive = now < this.cmcRateLimitedUntil;
+    this.cmcRateLimitedUntil = Math.max(this.cmcRateLimitedUntil, now + cooldownMs);
+    if (!wasActive && !this.hasLoggedCmcQuota) {
+      this.hasLoggedCmcQuota = true;
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -233,6 +254,7 @@ export class FxConversionService {
 
     const sourceLabel = source === 'INDODAX' ? 'Indodax Ticker' : source === 'LIVE_API' ? 'Live Forex API' : 'CoinMarketCap';
 
+    const changedMeaningfully = pctChange >= 0.01 || source !== this.currentRate.source;
     this.currentRate = {
       rate: parseFloat(liveRate.toFixed(2)),
       source,
@@ -243,30 +265,32 @@ export class FxConversionService {
       notes: customNotes || `Disinkronkan secara otomatis dari ${sourceLabel} live market API`
     };
 
-    const auditEntry: FxRateAuditEntry = {
-      id: `fx-audit-${crypto.randomUUID().slice(0, 8)}`,
-      timestamp: now,
-      actor: actorEmail,
-      previousRate: prevRate,
-      newRate: this.currentRate.rate,
-      percentChange: parseFloat(pctChange.toFixed(2)),
-      source,
-      notes: customNotes || `Sinkronisasi kurs USDT/IDR dari ${sourceLabel} live API`,
-      hash: this.computeAuditHash(actorEmail, prevRate, this.currentRate.rate, now, source)
-    };
+    if (changedMeaningfully) {
+      const auditEntry: FxRateAuditEntry = {
+        id: `fx-audit-${crypto.randomUUID().slice(0, 8)}`,
+        timestamp: now,
+        actor: actorEmail,
+        previousRate: prevRate,
+        newRate: this.currentRate.rate,
+        percentChange: parseFloat(pctChange.toFixed(2)),
+        source,
+        notes: customNotes || `Sinkronisasi kurs USDT/IDR dari ${sourceLabel} live API`,
+        hash: this.computeAuditHash(actorEmail, prevRate, this.currentRate.rate, now, source)
+      };
 
-    this.auditHistory.unshift(auditEntry);
-    if (this.auditHistory.length > 200) this.auditHistory.pop();
+      this.auditHistory.unshift(auditEntry);
+      if (this.auditHistory.length > 200) this.auditHistory.pop();
 
-    db.auditLogs.unshift({
-      id: `audit-${crypto.randomUUID().slice(0, 8)}`,
-      actorId: actorEmail,
-      action: 'FX_RATE_LIVE_SYNC',
-      resource: 'USDT-IDR',
-      details: `Kurs USDT/IDR disinkronkan dari ${sourceLabel} API: Rp ${this.currentRate.rate.toLocaleString()} (Δ ${pctChange.toFixed(2)}%)`,
-      createdAt: now
-    });
-    db.scheduleSave();
+      db.auditLogs.unshift({
+        id: `audit-${crypto.randomUUID().slice(0, 8)}`,
+        actorId: actorEmail,
+        action: 'FX_RATE_LIVE_SYNC',
+        resource: 'USDT-IDR',
+        details: `Kurs USDT/IDR disinkronkan dari ${sourceLabel} API: Rp ${this.currentRate.rate.toLocaleString()} (Δ ${pctChange.toFixed(2)}%)`,
+        createdAt: now
+      });
+      db.scheduleSave();
+    }
 
     return { success: true, rateRecord: this.getCurrentRate() };
   }
@@ -305,32 +329,37 @@ export class FxConversionService {
       };
     }
 
-    // 3. Make live API call (CoinMarketCap Pro API)
-    this.config.cmcApiCallsCount++;
+    // 3. Make live API call (CoinMarketCap Pro API) unless monthly quota cooldown is active
     this.config.lastCmcFetchTimestamp = now;
     if (this.config.syncIntervalMinutes > 0) {
       this.config.nextCmcFetchTimestamp = now + this.config.syncIntervalMinutes * 60 * 1000;
     }
 
-    try {
-      const cmcApiKey = process.env.CMC_API_KEY || 'e16a28cafc354543ab8369dedc2a58c0';
-      const res = await fetch('https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=USDT&convert=IDR', {
-        headers: {
-          'X-CMC_PRO_API_KEY': cmcApiKey,
-          'Accept': 'application/json'
-        },
-        signal: AbortSignal.timeout(6000)
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const price = data?.data?.USDT?.quote?.IDR?.price;
-        if (price && typeof price === 'number' && price > 0) {
-          const syncRes = this.syncWithCoinMarketCap(price, actorEmail, validityHours);
-          return { success: true, rateRecord: syncRes.rateRecord, source: 'COINMARKETCAP', cached: false };
+    if (!this.isCmcQuotaExhausted(now)) {
+      this.config.cmcApiCallsCount++;
+      try {
+        const cmcApiKey = process.env.CMC_API_KEY || 'e16a28cafc354543ab8369dedc2a58c0';
+        const res = await fetch('https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=USDT&convert=IDR', {
+          headers: {
+            'X-CMC_PRO_API_KEY': cmcApiKey,
+            'Accept': 'application/json'
+          },
+          signal: AbortSignal.timeout(6000)
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const price = data?.data?.USDT?.quote?.IDR?.price;
+          if (price && typeof price === 'number' && price > 0) {
+            this.hasLoggedCmcQuota = false;
+            const syncRes = this.syncWithCoinMarketCap(price, actorEmail, validityHours);
+            return { success: true, rateRecord: syncRes.rateRecord, source: 'COINMARKETCAP', cached: false };
+          }
+        } else if (res.status === 429 || res.status === 402 || res.status === 403) {
+          this.markCmcQuotaExhausted(12 * 60 * 60 * 1000);
         }
+      } catch (e: any) {
+        // CMC call failed or quota reached, proceed to CoinGecko / Forex fallback
       }
-    } catch (e: any) {
-      // CMC call failed or quota reached, proceed to CoinGecko fallback
     }
 
     // 4. Fallback: CoinGecko Public Spot Exchange FX Rate (USDT/IDR)

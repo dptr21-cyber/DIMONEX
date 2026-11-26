@@ -87,13 +87,13 @@ export class CoinMarketCapFeed implements ExternalMarketDataProvider {
       this.status = 'CONNECTED';
       this.metrics.lastHeartbeat = Date.now();
 
-      // Poll every 30 seconds for live updates (staying safely within standard CMC rate quotas)
+      // Poll every 60 seconds; when CMC quota is exhausted, fallback only hits external REST every 5m
       if (this.pollInterval) clearInterval(this.pollInterval);
       this.pollInterval = setInterval(() => {
         this.fetchQuotes().catch(err => {
           this.metrics.lastError = err.message;
         });
-      }, 30000);
+      }, 60000);
     } catch (err: any) {
       this.status = 'DEGRADED';
       this.metrics.lastError = err.message;
@@ -158,19 +158,20 @@ export class CoinMarketCapFeed implements ExternalMarketDataProvider {
 
   private isRateLimitedUntil: number = 0;
   private hasLoggedQuotaError: boolean = false;
+  private lastExternalFallbackFetchAt: number = 0;
 
   /**
    * Fetch real quotes directly from CoinMarketCap Pro API.
-   * If the API key exceeds its monthly credit limit (HTTP 429 error code 1010),
-   * smoothly backs off CMC requests for 1 hour and automatically falls back to live CoinGecko & Indodax rates,
-   * completely avoiding console log spam.
+   * If the API key exceeds its monthly credit limit (HTTP 429 error code 1008/1010),
+   * smoothly backs off CMC requests for 12 hours via shared FxConversionService cooldown
+   * and falls back to live Binance/Bybit WS feeds + throttled CoinGecko / Open Exchange Rates.
    */
   public async fetchQuotes(): Promise<void> {
     const now = Date.now();
     const startTime = now;
 
-    // Check if CoinMarketCap is currently under rate-limit cooldown
-    if (now < this.isRateLimitedUntil) {
+    // Check local or shared CoinMarketCap rate-limit cooldown
+    if (now < this.isRateLimitedUntil || fxConversionService.isCmcQuotaExhausted(now)) {
       await this.fetchFallbackQuotes();
       return;
     }
@@ -196,11 +197,11 @@ export class CoinMarketCapFeed implements ExternalMarketDataProvider {
 
       if (!resUsd.ok) {
         const errText = await resUsd.text();
-        if (resUsd.status === 429) {
-          // Exceeded monthly credit limit (error 1010) or rate limited: pause CMC calls for 1 hour
-          this.isRateLimitedUntil = Date.now() + 3600000;
-          if (!this.hasLoggedQuotaError) {
-            console.warn('[CoinMarketCapFeed] CoinMarketCap monthly credit limit reached. Automatically switching to CoinGecko & Indodax live fallback feeds.');
+        if (resUsd.status === 429 || resUsd.status === 402 || resUsd.status === 403) {
+          this.isRateLimitedUntil = Date.now() + 12 * 3600_000;
+          const shouldLog = fxConversionService.markCmcQuotaExhausted(12 * 3600_000);
+          if (shouldLog && !this.hasLoggedQuotaError) {
+            console.warn('[CoinMarketCapFeed] CoinMarketCap quota limit reached. Automatically switching to live Binance/Bybit/CoinGecko fallback feeds (12h backoff).');
             this.hasLoggedQuotaError = true;
           }
         }
@@ -209,10 +210,11 @@ export class CoinMarketCapFeed implements ExternalMarketDataProvider {
 
       if (!resIdr.ok) {
         const errText = await resIdr.text();
-        if (resIdr.status === 429) {
-          this.isRateLimitedUntil = Date.now() + 3600000;
-          if (!this.hasLoggedQuotaError) {
-            console.warn('[CoinMarketCapFeed] CoinMarketCap monthly credit limit reached. Automatically switching to CoinGecko & Indodax live fallback feeds.');
+        if (resIdr.status === 429 || resIdr.status === 402 || resIdr.status === 403) {
+          this.isRateLimitedUntil = Date.now() + 12 * 3600_000;
+          const shouldLog = fxConversionService.markCmcQuotaExhausted(12 * 3600_000);
+          if (shouldLog && !this.hasLoggedQuotaError) {
+            console.warn('[CoinMarketCapFeed] CoinMarketCap quota limit reached. Automatically switching to live Binance/Bybit/CoinGecko fallback feeds (12h backoff).');
             this.hasLoggedQuotaError = true;
           }
         }
@@ -371,12 +373,21 @@ export class CoinMarketCapFeed implements ExternalMarketDataProvider {
       }
     } catch {}
 
-    // 2. Fetch live USDT/IDR FX Rate from CoinGecko (and backup prices if Binance/Bybit were reconnecting)
-    try {
-      const cgRes = await fetch(
-        'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,tether&vs_currencies=usd,idr',
-        { signal: AbortSignal.timeout(6000) }
-      );
+    // 2. Throttle CoinGecko & Open Exchange Rates REST fallback calls to at most once every 5 minutes
+    //    so we never trigger CoinGecko 429s or waste CPU/network on 30-60s polling loops.
+    const needsExternalFx =
+      !this.ticks.get('USDTIDR')?.lastPrice ||
+      !this.ticks.get('BTCUSDT')?.lastPrice ||
+      !this.ticks.get('ETHUSDT')?.lastPrice ||
+      now - this.lastExternalFallbackFetchAt >= 5 * 60 * 1000;
+
+    if (needsExternalFx) {
+      this.lastExternalFallbackFetchAt = now;
+      try {
+        const cgRes = await fetch(
+          'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,tether&vs_currencies=usd,idr',
+          { signal: AbortSignal.timeout(6000) }
+        );
       if (cgRes.ok) {
         const cgData = await cgRes.json();
 
@@ -437,35 +448,36 @@ export class CoinMarketCapFeed implements ExternalMarketDataProvider {
           fxConversionService.syncWithLiveRate(usdtIdr, 'LIVE_API', 'coingecko-feed@dimonex.id', 6, 'Sinkronisasi kurs USDT/IDR dari CoinGecko live API');
           updatedTicks++;
         }
-      }
-    } catch {}
-
-    // 3. Fallback for USDT/IDR from Open Exchange Rates if CoinGecko is unreachable
-    if (!this.ticks.get('USDTIDR')?.lastPrice || (now - (this.ticks.get('USDTIDR')?.receivedAt || 0) > 300000)) {
-      try {
-        const forexRes = await fetch('https://open.er-api.com/v6/latest/USD', { signal: AbortSignal.timeout(5000) });
-        if (forexRes.ok) {
-          const forexData = await forexRes.json();
-          const rate = parseFloat(forexData?.rates?.IDR);
-          if (rate > 0) {
-            const spread = rate * 0.0002;
-            this.ticks.set('USDTIDR', {
-              provider: 'coinmarketcap',
-              symbol: 'USDTIDR',
-              lastPrice: parseFloat(rate.toFixed(2)),
-              bestBid: parseFloat((rate - spread).toFixed(2)),
-              bestAsk: parseFloat((rate + spread).toFixed(2)),
-              exchangeTimestamp: now,
-              receivedAt: now,
-              latencyMs: 40,
-              isFresh: true,
-              isValid: true
-            });
-            fxConversionService.syncWithLiveRate(rate, 'LIVE_API', 'forex-feed@dimonex.id', 6, 'Sinkronisasi kurs USDT/IDR dari Open Forex API');
-            updatedTicks++;
-          }
         }
       } catch {}
+
+      // 3. Fallback for USDT/IDR from Open Exchange Rates if CoinGecko is unreachable
+      if (!this.ticks.get('USDTIDR')?.lastPrice || (now - (this.ticks.get('USDTIDR')?.receivedAt || 0) > 300000)) {
+        try {
+          const forexRes = await fetch('https://open.er-api.com/v6/latest/USD', { signal: AbortSignal.timeout(5000) });
+          if (forexRes.ok) {
+            const forexData = await forexRes.json();
+            const rate = parseFloat(forexData?.rates?.IDR);
+            if (rate > 0) {
+              const spread = rate * 0.0002;
+              this.ticks.set('USDTIDR', {
+                provider: 'coinmarketcap',
+                symbol: 'USDTIDR',
+                lastPrice: parseFloat(rate.toFixed(2)),
+                bestBid: parseFloat((rate - spread).toFixed(2)),
+                bestAsk: parseFloat((rate + spread).toFixed(2)),
+                exchangeTimestamp: now,
+                receivedAt: now,
+                latencyMs: 40,
+                isFresh: true,
+                isValid: true
+              });
+              fxConversionService.syncWithLiveRate(rate, 'LIVE_API', 'forex-feed@dimonex.id', 6, 'Sinkronisasi kurs USDT/IDR dari Open Forex API');
+              updatedTicks++;
+            }
+          }
+        } catch {}
+      }
     }
 
     if (updatedTicks > 0) {

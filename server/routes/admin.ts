@@ -1623,7 +1623,7 @@ adminRouter.delete('/assets/:id', requireAdmin, (req, res) => {
     let cancelledOrdersCount = 0;
     for (const order of openOrders) {
       try {
-        matchingEngine.cancelOrder(order.id, order.pairId, order.userId);
+        matchingEngine.cancelOrder(order.id, order.userId, order.pairId, 'ADMIN');
         cancelledOrdersCount++;
       } catch (err: any) {
         console.warn(`[Admin Delete Asset] Gagal batalkan order ${order.id}:`, err?.message || err);

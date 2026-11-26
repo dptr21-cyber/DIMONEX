@@ -148,6 +148,10 @@ export interface LiveAssetBreakdownItem {
 export class PnLService {
   private schedulerInterval: NodeJS.Timeout | null = null;
   private lastKnownJakartaDate: string = getJakartaDateKey(Date.now());
+  private pendingTradeUsers: Set<string> = new Set();
+  private tradeDebounceTimer: NodeJS.Timeout | null = null;
+  private lastSnapshotSignature: string = '';
+  private lastSnapshotCompletedAt: number = 0;
 
   public startScheduler(): void {
     if (this.schedulerInterval) return;
@@ -166,12 +170,16 @@ export class PnLService {
             `[PnLService] Pergantian hari WIB terdeteksi (${this.lastKnownJakartaDate} -> ${currentDateKey}). Menyimpan & memfinalisasi kalender harian...`
           );
           this.lastKnownJakartaDate = currentDateKey;
+          this.lastSnapshotSignature = '';
         }
         this.snapshotAllActiveUsers();
       } catch (err: any) {
         console.warn('[PnLService] Scheduler error:', err?.message || err);
       }
     }, 60_000);
+    if (typeof this.schedulerInterval.unref === 'function') {
+      this.schedulerInterval.unref();
+    }
   }
 
   public stopScheduler(): void {
@@ -179,46 +187,92 @@ export class PnLService {
       clearInterval(this.schedulerInterval);
       this.schedulerInterval = null;
     }
+    if (this.tradeDebounceTimer) {
+      clearTimeout(this.tradeDebounceTimer);
+      this.tradeDebounceTimer = null;
+    }
   }
 
   public recordTradeActivity(trade: Trade): void {
-    const involvedIds = new Set<string>();
+    if (!trade) return;
     if (trade.makerUserId && !trade.makerUserId.startsWith('sys-')) {
-      involvedIds.add(trade.makerUserId);
+      this.pendingTradeUsers.add(trade.makerUserId);
     }
     if (trade.takerUserId && !trade.takerUserId.startsWith('sys-')) {
-      involvedIds.add(trade.takerUserId);
+      this.pendingTradeUsers.add(trade.takerUserId);
     }
-    for (const userId of involvedIds) {
-      try {
-        this.getUserPnLAnalytics(userId, undefined, 'IDR');
-      } catch {
-        // Ignore non-fatal background snapshot update errors
+    if (this.pendingTradeUsers.size === 0 || this.tradeDebounceTimer) return;
+
+    this.tradeDebounceTimer = setTimeout(() => {
+      this.tradeDebounceTimer = null;
+      const userIds = Array.from(this.pendingTradeUsers);
+      this.pendingTradeUsers.clear();
+      for (const userId of userIds) {
+        try {
+          this.getUserPnLAnalytics(userId, undefined, 'IDR');
+        } catch {
+          // Ignore non-fatal background snapshot update errors
+        }
       }
+    }, 3_000);
+    if (typeof this.tradeDebounceTimer.unref === 'function') {
+      this.tradeDebounceTimer.unref();
     }
   }
 
   public snapshotAllActiveUsers(): void {
-    let snapshotsUpdated = 0;
-    for (const user of db.users.values()) {
-      if (user.id.startsWith('sys-')) continue;
-      const hasActivity =
-        db.trades.some(
-          t =>
-            !t.id.startsWith('hist-seed-') &&
-            !t.id.startsWith('usr-seed-') &&
-            (t.makerUserId === user.id || t.takerUserId === user.id)
-        ) ||
-        Array.from(db.futuresPositions.values()).some(
-          p => p.userId === user.id && (p.status === 'CLOSED' || p.status === 'LIQUIDATED')
-        ) ||
-        db.copyMirroredOrders.some(m => m.followerUserId === user.id && m.status === 'FILLED');
+    const now = Date.now();
+    const todayKey = getJakartaDateKey(now);
+    const activeUserIds = new Set<string>();
 
-      if (hasActivity) {
-        this.getUserPnLAnalytics(user.id, undefined, 'IDR');
-        snapshotsUpdated++;
+    let lastRealTradeId = '';
+    for (const t of db.trades) {
+      if (!t || !t.id || t.id.startsWith('hist-seed-') || t.id.startsWith('usr-seed-')) continue;
+      lastRealTradeId = t.id;
+      if (t.makerUserId && !t.makerUserId.startsWith('sys-') && db.users.has(t.makerUserId)) {
+        activeUserIds.add(t.makerUserId);
+      }
+      if (t.takerUserId && !t.takerUserId.startsWith('sys-') && db.users.has(t.takerUserId)) {
+        activeUserIds.add(t.takerUserId);
       }
     }
+
+    let closedFuturesCount = 0;
+    for (const p of db.futuresPositions.values()) {
+      if (p.status === 'CLOSED' || p.status === 'LIQUIDATED') {
+        closedFuturesCount++;
+        if (p.userId && !p.userId.startsWith('sys-') && db.users.has(p.userId)) {
+          activeUserIds.add(p.userId);
+        }
+      }
+    }
+
+    let filledCopyCount = 0;
+    for (const m of db.copyMirroredOrders) {
+      if (m.status === 'FILLED') {
+        filledCopyCount++;
+        if (m.followerUserId && !m.followerUserId.startsWith('sys-') && db.users.has(m.followerUserId)) {
+          activeUserIds.add(m.followerUserId);
+        }
+      }
+    }
+
+    const signature = `${db.trades.length}:${lastRealTradeId}:${closedFuturesCount}:${filledCopyCount}:${todayKey}:${activeUserIds.size}`;
+    if (
+      signature === this.lastSnapshotSignature &&
+      now - this.lastSnapshotCompletedAt < 300_000
+    ) {
+      return;
+    }
+
+    let snapshotsUpdated = 0;
+    for (const userId of activeUserIds) {
+      this.getUserPnLAnalytics(userId, undefined, 'IDR');
+      snapshotsUpdated++;
+    }
+    this.lastSnapshotSignature = signature;
+    this.lastSnapshotCompletedAt = now;
+
     if (snapshotsUpdated > 0) {
       db.scheduleSave();
     }
@@ -231,7 +285,7 @@ export class PnLService {
       const rate = Number(safeBigInt(usdtPair.lastPrice)) / 10 ** qDec;
       if (Number.isFinite(rate) && rate > 0) return rate;
     }
-    const fx = fxConversionService.getLatestRate?.();
+    const fx = fxConversionService.getCurrentRate();
     if (fx && Number.isFinite(fx.rate) && fx.rate > 0) {
       return fx.rate;
     }
