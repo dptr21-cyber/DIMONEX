@@ -56,12 +56,15 @@ const requireMMOrAdmin = (req: Request, res: Response, next: Function) => {
   return res.status(401).json({ error: 'Otorisasi diperlukan: Token tidak ditemukan' });
 };
 
-// 1. Get MM Console Overview
-mmConsoleRouter.get('/overview', requireMMOrAdmin, (req, res) => {
-  const user = (req as any).user;
+// Helper: build MM Console overview + botOrderIds in one pass
+function buildMmOverviewData(user: any) {
   const isSuper = (user.role || '').toUpperCase() === 'ADMIN' || (user.role || '').toUpperCase() === 'SUPERADMIN';
-
-  const allBots = Array.from(db.botInstances.values()).filter(b => isSuper || b.ownerUserId === user.id);
+  const allBots: BotInstance[] = [];
+  for (const b of db.botInstances.values()) {
+    if (isSuper || b.ownerUserId === user.id) {
+      allBots.push(b);
+    }
+  }
 
   let activeBotsCount = 0;
   let totalSubmitted = 0;
@@ -70,58 +73,145 @@ mmConsoleRouter.get('/overview', requireMMOrAdmin, (req, res) => {
   let totalTradesCount = 0;
 
   const botOrderIds = new Set<string>();
-  allBots.forEach(b => {
+  for (const b of allBots) {
     if (b.status === 'RUNNING') activeBotsCount++;
     totalSubmitted += b.stats.ordersSubmitted;
     totalFilled += b.stats.ordersFilled;
     totalVolumeBaseUnits += BigInt(b.stats.executedVolume || '0');
     totalTradesCount += b.stats.totalTrades;
-    b.deployedOrderIds.forEach(id => botOrderIds.add(id));
-  });
+    for (const id of b.deployedOrderIds) {
+      botOrderIds.add(id);
+    }
+  }
 
-  // Calculate 24h trading volume generated specifically by bots in IDR quote units
+  // Calculate 24h trading volume generated specifically by bots in IDR quote units (reverse scan stops before dayAgo)
   const now = Date.now();
   const dayAgo = now - 24 * 60 * 60 * 1000;
   let bot24hVolumeQuoteUnits = 0n;
   let bot24hTradesCount = 0;
 
-  for (const trade of db.trades) {
-    if (trade.createdAt >= dayAgo) {
-      const isBotTrade =
-        botOrderIds.has(trade.makerOrderId) ||
-        botOrderIds.has(trade.takerOrderId) ||
-        trade.makerUserId?.startsWith('bot-') ||
-        trade.takerUserId?.startsWith('bot-') ||
-        trade.makerUserId === user.id ||
-        trade.takerUserId === user.id;
+  for (let i = db.trades.length - 1; i >= 0; i--) {
+    const trade = db.trades[i];
+    if (!trade) continue;
+    if (trade.createdAt < dayAgo) break;
+    const isBotTrade =
+      botOrderIds.has(trade.makerOrderId) ||
+      botOrderIds.has(trade.takerOrderId) ||
+      trade.makerUserId?.startsWith('bot-') ||
+      trade.takerUserId?.startsWith('bot-') ||
+      trade.makerUserId === user.id ||
+      trade.takerUserId === user.id;
 
-      if (isBotTrade) {
-        bot24hTradesCount++;
-        const pair = db.tradingPairs.get(trade.pairId);
-        const baseDec = pair ? pair.baseDecimals : 8;
-        const tradeVal = (BigInt(trade.price) * BigInt(trade.quantity)) / (10n ** BigInt(baseDec));
-        bot24hVolumeQuoteUnits += tradeVal;
-      }
+    if (isBotTrade) {
+      bot24hTradesCount++;
+      const pair = db.tradingPairs.get(trade.pairId);
+      const baseDec = pair ? pair.baseDecimals : 8;
+      const tradeVal = (BigInt(trade.price) * BigInt(trade.quantity)) / (10n ** BigInt(baseDec));
+      bot24hVolumeQuoteUnits += tradeVal;
     }
   }
 
-  // Collect balance of MM user
   const mmAccounts = db.getUserAccounts(user.id);
 
-  res.json({
-    totalBots: allBots.length,
-    activeBots: activeBotsCount,
-    ordersSubmitted: totalSubmitted,
-    ordersFilled: totalFilled,
-    executedVolumeBaseUnits: totalVolumeBaseUnits.toString(),
-    bot24hVolumeQuoteUnits: bot24hVolumeQuoteUnits.toString(),
-    bot24hVolumeFormattedIdr: PrecisionMath.formatIDRDisplay(bot24hVolumeQuoteUnits),
-    bot24hTradesCount,
-    totalTrades: totalTradesCount,
-    killSwitchActive: db.riskControls.isKillSwitchActive,
+  return {
+    allBots,
+    botOrderIds,
+    overview: {
+      totalBots: allBots.length,
+      activeBots: activeBotsCount,
+      ordersSubmitted: totalSubmitted,
+      ordersFilled: totalFilled,
+      executedVolumeBaseUnits: totalVolumeBaseUnits.toString(),
+      bot24hVolumeQuoteUnits: bot24hVolumeQuoteUnits.toString(),
+      bot24hVolumeFormattedIdr: PrecisionMath.formatIDRDisplay(bot24hVolumeQuoteUnits),
+      bot24hTradesCount,
+      totalTrades: totalTradesCount,
+      killSwitchActive: db.riskControls.isKillSwitchActive,
+      riskControls: db.riskControls,
+      balances: mmAccounts,
+    },
+  };
+}
+
+function getBotOrdersFast(botOrderIds: Set<string>, limit = 200) {
+  const botOrders = [];
+  for (const o of db.orders.values()) {
+    if (botOrderIds.has(o.id) || (o.clientOrderId && o.clientOrderId.startsWith('bot-'))) {
+      botOrders.push(o);
+    }
+  }
+  botOrders.sort((a, b) => b.createdAt - a.createdAt);
+  return botOrders.slice(0, limit);
+}
+
+function getBotTradesFast(botOrderIds: Set<string>, limit = 100) {
+  const botTrades = [];
+  for (let i = db.trades.length - 1; i >= 0; i--) {
+    const t = db.trades[i];
+    if (!t) continue;
+    if (botOrderIds.has(t.makerOrderId) || botOrderIds.has(t.takerOrderId)) {
+      botTrades.push(t);
+      if (botTrades.length >= limit) break;
+    }
+  }
+  return botTrades;
+}
+
+const mmSnapshotCache = new Map<string, { payload: any; expiresAt: number }>();
+
+// 0. Consolidated MM Dashboard Snapshot (replaces 6-7 concurrent polling requests with 1 HTTP call)
+mmConsoleRouter.get('/snapshot', requireMMOrAdmin, (req, res) => {
+  const user = (req as any).user;
+  const environment = (req.query.environment as Environment | undefined) || undefined;
+  const selectedBotId = (req.query.selectedBotId as string | undefined) || '';
+  const includeLogs = req.query.includeLogs === '1' || req.query.includeLogs === 'true';
+  const cacheKey = `${user.id}:${environment || 'ALL'}:${selectedBotId}:${includeLogs ? '1' : '0'}`;
+  const now = Date.now();
+  const cached = mmSnapshotCache.get(cacheKey);
+  if (cached && now < cached.expiresAt) {
+    return res.json(cached.payload);
+  }
+
+  const { allBots, botOrderIds, overview } = buildMmOverviewData(user);
+  const instances = (environment ? allBots.filter(b => b.environment === environment) : [...allBots])
+    .sort((a, b) => b.createdAt - a.createdAt);
+
+  const orders = getBotOrdersFast(botOrderIds, 200);
+  const trades = getBotTradesFast(botOrderIds, 100);
+  const triggers = priceThresholdService.listTriggers(environment);
+  const events = priceThresholdService.listEvents(environment, 80);
+
+  let selectedBotLogs: any[] | undefined;
+  if (includeLogs) {
+    const targetId = selectedBotId || instances[0]?.id;
+    const targetBot = targetId ? db.botInstances.get(targetId) : undefined;
+    selectedBotLogs = targetBot?.logs || [];
+  }
+
+  const payload = {
+    overview,
+    instances,
+    orders,
+    trades,
     riskControls: db.riskControls,
-    balances: mmAccounts
-  });
+    thresholds: { success: true, triggers, events },
+    ...(includeLogs ? { selectedBotLogs } : {}),
+  };
+
+  mmSnapshotCache.set(cacheKey, { payload, expiresAt: now + 1000 });
+  if (mmSnapshotCache.size > 32) {
+    for (const [k, v] of mmSnapshotCache.entries()) {
+      if (v.expiresAt <= now) mmSnapshotCache.delete(k);
+    }
+  }
+  res.json(payload);
+});
+
+// 1. Get MM Console Overview
+mmConsoleRouter.get('/overview', requireMMOrAdmin, (req, res) => {
+  const user = (req as any).user;
+  const { overview } = buildMmOverviewData(user);
+  res.json(overview);
 });
 
 // 2. List Bot Instances with optional filters
@@ -1028,34 +1118,26 @@ mmConsoleRouter.get('/activity-all', requireMMOrAdmin, (req, res) => {
 mmConsoleRouter.get('/orders', requireMMOrAdmin, (req, res) => {
   const user = (req as any).user;
   const isSuper = (user.role || '').toUpperCase() === 'ADMIN' || (user.role || '').toUpperCase() === 'SUPERADMIN';
-
-  const userBots = Array.from(db.botInstances.values()).filter(b => isSuper || b.ownerUserId === user.id);
   const botOrderIds = new Set<string>();
-  userBots.forEach(b => b.deployedOrderIds.forEach(id => botOrderIds.add(id)));
-
-  const botOrders = Array.from(db.orders.values())
-    .filter(o => botOrderIds.has(o.id) || (o.clientOrderId && o.clientOrderId.startsWith('bot-')))
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(0, 200);
-
-  res.json(botOrders);
+  for (const b of db.botInstances.values()) {
+    if (isSuper || b.ownerUserId === user.id) {
+      for (const id of b.deployedOrderIds) botOrderIds.add(id);
+    }
+  }
+  res.json(getBotOrdersFast(botOrderIds, 200));
 });
 
 // 13. Get Executed Trades from Bots
 mmConsoleRouter.get('/trades', requireMMOrAdmin, (req, res) => {
   const user = (req as any).user;
   const isSuper = (user.role || '').toUpperCase() === 'ADMIN' || (user.role || '').toUpperCase() === 'SUPERADMIN';
-
-  const userBots = Array.from(db.botInstances.values()).filter(b => isSuper || b.ownerUserId === user.id);
   const botOrderIds = new Set<string>();
-  userBots.forEach(b => b.deployedOrderIds.forEach(id => botOrderIds.add(id)));
-
-  const botTrades = db.trades
-    .filter(t => botOrderIds.has(t.makerOrderId) || botOrderIds.has(t.takerOrderId))
-    .slice(-100)
-    .reverse();
-
-  res.json(botTrades);
+  for (const b of db.botInstances.values()) {
+    if (isSuper || b.ownerUserId === user.id) {
+      for (const id of b.deployedOrderIds) botOrderIds.add(id);
+    }
+  }
+  res.json(getBotTradesFast(botOrderIds, 100));
 });
 
 // 14. Risk Controls

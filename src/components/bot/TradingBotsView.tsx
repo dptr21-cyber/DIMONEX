@@ -34,6 +34,7 @@ import {
   formatQuotePrice,
 } from '../../lib/formatters.js';
 import { BalanceDiagnosticModal } from '../wallet/BalanceDiagnosticModal.js';
+import { runSingleFlight } from '../../lib/safeFetch.js';
 import {
   isWebSocketSupported,
   reportWebSocketSuccess,
@@ -175,22 +176,24 @@ export const TradingBotsView: React.FC<Props> = ({
   const loadBots = useCallback(async () => {
     const token = localStorage.getItem('dimonex_auth_token');
     if (!token) return;
-    try {
-      setIsLoadingBots(true);
-      const res = await fetch('/api/bot/list', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          setActiveBots(data);
+    return runSingleFlight('trading-bots:list', async () => {
+      try {
+        setIsLoadingBots(true);
+        const res = await fetch('/api/bot/list', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            setActiveBots(data);
+          }
         }
+      } catch (e) {
+        console.warn('Failed to load bots:', e);
+      } finally {
+        setIsLoadingBots(false);
       }
-    } catch (e) {
-      console.warn('Failed to load bots:', e);
-    } finally {
-      setIsLoadingBots(false);
-    }
+    });
   }, []);
 
   useEffect(() => {
@@ -278,8 +281,11 @@ export const TradingBotsView: React.FC<Props> = ({
     connectWs();
     loadBots();
 
-    const pollInterval = isWebSocketSupported() ? 10000 : 3000;
-    const fallbackSync = setInterval(loadBots, pollInterval);
+    const pollInterval = isWebSocketSupported() ? 25000 : 5000;
+    const fallbackSync = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      loadBots();
+    }, pollInterval);
 
     return () => {
       isDisposed = true;

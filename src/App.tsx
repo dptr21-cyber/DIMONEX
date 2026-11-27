@@ -7,7 +7,7 @@
  * Obsidian Iridium Design System (#090D12, #141C24, #17212B, #8DA5B1, #16A879, #EA5B65)
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Navbar } from './components/layout/Navbar.js';
 import { Sidebar } from './components/layout/Sidebar.js';
 import { MobileBottomNav } from './components/layout/MobileBottomNav.js';
@@ -44,8 +44,8 @@ import { PercentageChange } from './components/ui/PriceDisplay.js';
 import { StatusBadge } from './components/ui/StatusBadge.js';
 import { SegmentedTabs } from './components/ui/Tabs.js';
 import { TradingPairItem, TradeItem, OrderItem, UserProfile, UserBalance, AppLanguage, SpotLayoutPreset } from './types/index.js';
-import { formatCrypto, formatQuotePrice, formatPairVolume } from './lib/formatters.js';
-import { safeFetchJson } from './lib/safeFetch.js';
+import { formatCrypto, formatQuotePrice, formatPairVolume, safeBigInt, formatUnitsToDecimal } from './lib/formatters.js';
+import { safeFetchJson, runSingleFlight } from './lib/safeFetch.js';
 import { loadAssetRegistry, hydrateAssetRegistryFromList } from './lib/assetRegistry.js';
 import { isWebSocketSupported, reportWebSocketSuccess, reportWebSocketFailure } from './utils/wsHelper.js';
 import { SpotPreferencesModal, SPOT_LAYOUT_LABELS } from './components/trading/SpotPreferencesModal.js';
@@ -162,6 +162,10 @@ function AppContent() {
   const [openOrders, setOpenOrders] = useState<OrderItem[]>([]);
   const [orderHistory, setOrderHistory] = useState<OrderItem[]>([]);
   const [isLoadingOrders, setIsLoadingOrders] = useState(false);
+  const wsConnectedRef = useRef(false);
+  const lastBgReconcileRef = useRef(0);
+  const wsOrderSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingOptimisticOrdersRef = useRef<Map<string, OrderItem>>(new Map());
 
   const handleSelectView = (view: ActiveViewType) => {
     setCurrentViewState(view);
@@ -266,24 +270,68 @@ function AppContent() {
     setBalances([]);
     setOpenOrders([]);
     setOrderHistory([]);
+    pendingOptimisticOrdersRef.current.clear();
     setUnreadNotificationsCount(0);
     const guestPrefs = readLocalSpotPrefs();
     setSpotLayout(guestPrefs.spotLayout);
     setHideRecentTradesInChartFocus(guestPrefs.hideRecentTradesInChartFocus);
   };
 
+  const adjustBalanceEntry = useCallback((b: UserBalance, deltaAvail: bigint, deltaLocked: bigint): UserBalance => {
+    const curAvail = safeBigInt(b.balanceAvailable);
+    const curLocked = safeBigInt(b.balanceLocked);
+    const nextAvail = curAvail + deltaAvail > 0n ? curAvail + deltaAvail : 0n;
+    const nextLocked = curLocked + deltaLocked > 0n ? curLocked + deltaLocked : 0n;
+    const nextTotal = nextAvail + nextLocked;
+    const isIdr = b.currency.toUpperCase() === 'IDR';
+    const dec = isIdr ? 2 : 8;
+    return {
+      ...b,
+      balanceAvailable: nextAvail.toString(),
+      balanceLocked: nextLocked.toString(),
+      balanceTotal: nextTotal.toString(),
+      available: formatUnitsToDecimal(nextAvail, dec, true),
+      locked: formatUnitsToDecimal(nextLocked, dec, true),
+      displayAvailable: isIdr
+        ? formatQuotePrice(nextAvail.toString(), 'IDR', 2, true)
+        : `${formatCrypto(nextAvail.toString(), dec)} ${b.currency}`,
+      displayLocked: isIdr
+        ? formatQuotePrice(nextLocked.toString(), 'IDR', 2, true)
+        : `${formatCrypto(nextLocked.toString(), dec)} ${b.currency}`,
+    };
+  }, []);
+
+  const applyPendingOptimisticLocks = useCallback((serverBalances: UserBalance[]): UserBalance[] => {
+    if (pendingOptimisticOrdersRef.current.size === 0) return serverBalances;
+    const lockedByCurrency = new Map<string, bigint>();
+    for (const opt of pendingOptimisticOrdersRef.current.values()) {
+      const amt = safeBigInt(opt.lockedAmount);
+      if (amt > 0n && opt.lockedCurrency) {
+        lockedByCurrency.set(opt.lockedCurrency, (lockedByCurrency.get(opt.lockedCurrency) || 0n) + amt);
+      }
+    }
+    if (lockedByCurrency.size === 0) return serverBalances;
+    return serverBalances.map(b => {
+      const delta = lockedByCurrency.get(b.currency);
+      if (!delta || delta <= 0n) return b;
+      return adjustBalanceEntry(b, -delta, delta);
+    });
+  }, [adjustBalanceEntry]);
+
   const refreshBalances = useCallback(async () => {
     const token = localStorage.getItem('dimonex_auth_token');
     if (!token) return;
-    try {
-      const res = await safeFetchJson<UserBalance[]>('/api/wallet/balances', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.ok && Array.isArray(res.data)) {
-        setBalances(res.data);
-      }
-    } catch (e) {}
-  }, []);
+    return runSingleFlight('app:balances', async () => {
+      try {
+        const res = await safeFetchJson<UserBalance[]>('/api/wallet/balances', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok && Array.isArray(res.data)) {
+          setBalances(applyPendingOptimisticLocks(res.data));
+        }
+      } catch (e) {}
+    });
+  }, [applyPendingOptimisticLocks]);
 
   const refreshUserOrders = useCallback(async (optimisticOrder?: OrderItem) => {
     const token = localStorage.getItem('dimonex_auth_token');
@@ -291,35 +339,58 @@ function AppContent() {
 
     if (optimisticOrder) {
       setOpenOrders(prev => {
-        if (prev.some(o => o.id === optimisticOrder.id)) return prev;
+        if (prev.some(o => o.id === optimisticOrder.id || (optimisticOrder.clientOrderId && o.clientOrderId === optimisticOrder.clientOrderId))) {
+          return prev;
+        }
         const updated = [optimisticOrder, ...prev];
         try { localStorage.setItem('dimonex_open_orders_cache', JSON.stringify(updated.slice(0, 50))); } catch {}
         return updated;
       });
     }
 
-    setIsLoadingOrders(true);
-    try {
-      const [openRes, histRes] = await Promise.all([
-        safeFetchJson<OrderItem[]>('/api/trading/orders/open', { headers: { 'Authorization': `Bearer ${token}` } }),
-        safeFetchJson<OrderItem[]>('/api/trading/orders/history', { headers: { 'Authorization': `Bearer ${token}` } })
-      ]);
-      if (openRes.ok && Array.isArray(openRes.data)) {
-        const serverOrders = openRes.data;
-        setOpenOrders(prev => {
+    return runSingleFlight('app:user-orders', async () => {
+      setIsLoadingOrders(true);
+      try {
+        const [openRes, histRes] = await Promise.all([
+          safeFetchJson<OrderItem[]>('/api/trading/orders/open', { headers: { 'Authorization': `Bearer ${token}` } }),
+          safeFetchJson<OrderItem[]>('/api/trading/orders/history', { headers: { 'Authorization': `Bearer ${token}` } })
+        ]);
+        const histOrders = histRes.ok && Array.isArray(histRes.data) ? histRes.data : [];
+        if (histRes.ok && Array.isArray(histRes.data)) setOrderHistory(histOrders);
+
+        if (openRes.ok && Array.isArray(openRes.data)) {
+          const serverOrders = openRes.data;
           const serverIds = new Set(serverOrders.map(o => o.id));
-          const recentOptimistic = prev.filter(o => !serverIds.has(o.id) && (Date.now() - o.createdAt < 60000));
-          const merged = [...recentOptimistic, ...serverOrders];
-          try { localStorage.setItem('dimonex_open_orders_cache', JSON.stringify(merged.slice(0, 50))); } catch {}
-          return merged;
-        });
+          const serverClientIds = new Set<string>();
+          for (const o of serverOrders) {
+            if (o.clientOrderId) serverClientIds.add(o.clientOrderId);
+          }
+          for (const o of histOrders) {
+            if (o.clientOrderId) serverClientIds.add(o.clientOrderId);
+          }
+
+          // Reconcile any optimistic orders already confirmed by the server
+          for (const [optId, opt] of pendingOptimisticOrdersRef.current.entries()) {
+            if (opt.clientOrderId && serverClientIds.has(opt.clientOrderId)) {
+              pendingOptimisticOrdersRef.current.delete(optId);
+            }
+          }
+
+          setOpenOrders(() => {
+            const activePending = Array.from(pendingOptimisticOrdersRef.current.values()).filter(
+              o => !serverIds.has(o.id) && (!o.clientOrderId || !serverClientIds.has(o.clientOrderId))
+            );
+            const merged = [...activePending, ...serverOrders];
+            try { localStorage.setItem('dimonex_open_orders_cache', JSON.stringify(merged.slice(0, 50))); } catch {}
+            return merged;
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to refresh orders:', e);
+      } finally {
+        setIsLoadingOrders(false);
       }
-      if (histRes.ok && Array.isArray(histRes.data)) setOrderHistory(histRes.data);
-    } catch (e) {
-      console.warn('Failed to refresh orders:', e);
-    } finally {
-      setIsLoadingOrders(false);
-    }
+    });
   }, []);
 
   const fetchInitialData = useCallback(async () => {
@@ -384,23 +455,104 @@ function AppContent() {
 
   const fetchPairMarketData = useCallback(async () => {
     if (!selectedPairId) return;
-    try {
-      const [dRes, tRes, pairsRes] = await Promise.all([
-        safeFetchJson<{ bids: [string, string, string][]; asks: [string, string, string][]; spread: string }>(`/api/trading/depth/${selectedPairId}`),
-        safeFetchJson<TradeItem[]>(`/api/trading/trades/${selectedPairId}`),
-        safeFetchJson<TradingPairItem[]>('/api/trading/pairs')
-      ]);
-      if (dRes.ok && dRes.data && Array.isArray(dRes.data.bids) && Array.isArray(dRes.data.asks)) {
-        setDepth(dRes.data);
-      }
-      if (tRes.ok && Array.isArray(tRes.data)) {
-        setRecentTrades(tRes.data);
-      }
-      if (pairsRes.ok && Array.isArray(pairsRes.data)) {
-        setPairs(pairsRes.data);
-      }
-    } catch (e) {}
+    return runSingleFlight(`app:pair-market:${selectedPairId}`, async () => {
+      try {
+        const [dRes, tRes, pairsRes] = await Promise.all([
+          safeFetchJson<{ bids: [string, string, string][]; asks: [string, string, string][]; spread: string }>(`/api/trading/depth/${selectedPairId}`),
+          safeFetchJson<TradeItem[]>(`/api/trading/trades/${selectedPairId}`),
+          safeFetchJson<TradingPairItem[]>('/api/trading/pairs')
+        ]);
+        if (dRes.ok && dRes.data && Array.isArray(dRes.data.bids) && Array.isArray(dRes.data.asks)) {
+          setDepth(dRes.data);
+        }
+        if (tRes.ok && Array.isArray(tRes.data)) {
+          setRecentTrades(tRes.data);
+        }
+        if (pairsRes.ok && Array.isArray(pairsRes.data)) {
+          setPairs(pairsRes.data);
+        }
+      } catch (e) {}
+    });
   }, [selectedPairId]);
+
+  const handleOptimisticOrderCreate = useCallback((optOrder: OrderItem) => {
+    pendingOptimisticOrdersRef.current.set(optOrder.id, optOrder);
+
+    setOpenOrders(prev => {
+      const updated = [optOrder, ...prev.filter(o => o.id !== optOrder.id)];
+      try { localStorage.setItem('dimonex_open_orders_cache', JSON.stringify(updated.slice(0, 50))); } catch {}
+      return updated;
+    });
+
+    const lockAmt = safeBigInt(optOrder.lockedAmount);
+    if (lockAmt > 0n && optOrder.lockedCurrency) {
+      setBalances(prev =>
+        prev.map(b => (b.currency === optOrder.lockedCurrency ? adjustBalanceEntry(b, -lockAmt, lockAmt) : b))
+      );
+    }
+  }, [adjustBalanceEntry]);
+
+  const handleOptimisticOrderConfirm = useCallback((
+    optimisticId: string,
+    serverOrder?: OrderItem,
+    executedTrades?: TradeItem[]
+  ) => {
+    pendingOptimisticOrdersRef.current.delete(optimisticId);
+
+    if (serverOrder) {
+      const isOpen = serverOrder.status === 'NEW' || serverOrder.status === 'PARTIALLY_FILLED';
+      setOpenOrders(prev => {
+        const filtered = prev.filter(
+          o =>
+            o.id !== optimisticId &&
+            o.id !== serverOrder.id &&
+            (!serverOrder.clientOrderId || o.clientOrderId !== serverOrder.clientOrderId)
+        );
+        const updated = isOpen ? [serverOrder, ...filtered] : filtered;
+        try { localStorage.setItem('dimonex_open_orders_cache', JSON.stringify(updated.slice(0, 50))); } catch {}
+        return updated;
+      });
+      if (!isOpen) {
+        setOrderHistory(prev => [serverOrder, ...prev.filter(o => o.id !== serverOrder.id)].slice(0, 100));
+      }
+    } else {
+      setOpenOrders(prev => prev.filter(o => o.id !== optimisticId));
+    }
+
+    if (Array.isArray(executedTrades) && executedTrades.length > 0) {
+      setRecentTrades(prev => {
+        const existingIds = new Set(prev.map(t => t.id));
+        const fresh = executedTrades.filter(t => t.pairId === selectedPairId && !existingIds.has(t.id));
+        return fresh.length > 0 ? [...fresh, ...prev].slice(0, 50) : prev;
+      });
+    }
+
+    refreshBalances();
+    refreshUserOrders();
+    fetchPairMarketData();
+  }, [selectedPairId, refreshBalances, refreshUserOrders, fetchPairMarketData]);
+
+  const handleOptimisticOrderRollback = useCallback((optimisticId: string) => {
+    const opt = pendingOptimisticOrdersRef.current.get(optimisticId);
+    pendingOptimisticOrdersRef.current.delete(optimisticId);
+
+    setOpenOrders(prev => {
+      const updated = prev.filter(o => o.id !== optimisticId);
+      try { localStorage.setItem('dimonex_open_orders_cache', JSON.stringify(updated.slice(0, 50))); } catch {}
+      return updated;
+    });
+
+    if (opt) {
+      const lockAmt = safeBigInt(opt.lockedAmount);
+      if (lockAmt > 0n && opt.lockedCurrency) {
+        setBalances(prev =>
+          prev.map(b => (b.currency === opt.lockedCurrency ? adjustBalanceEntry(b, lockAmt, -lockAmt) : b))
+        );
+      }
+    }
+
+    refreshBalances();
+  }, [adjustBalanceEntry, refreshBalances]);
 
   useEffect(() => {
     fetchInitialData();
@@ -411,12 +563,20 @@ function AppContent() {
   }, [fetchPairMarketData]);
 
   useEffect(() => {
+    // When WebSocket is connected, market depth/trades/ticker/orders update via WS push.
+    // Keep only a light 30s reconciliation poll while WS is active, or 4s fallback when WS is offline.
     const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      const now = Date.now();
+      const pollEveryMs = wsConnectedRef.current ? 30_000 : 4_000;
+      if (now - lastBgReconcileRef.current < pollEveryMs) return;
+      lastBgReconcileRef.current = now;
+
       fetchPairMarketData();
       if (localStorage.getItem('dimonex_auth_token')) {
         refreshUserOrders();
       }
-    }, 2500);
+    }, 3000);
     return () => clearInterval(interval);
   }, [fetchPairMarketData, refreshUserOrders]);
 
@@ -424,8 +584,21 @@ function AppContent() {
     let socket: WebSocket | null = null;
     let isDisposed = false;
 
+    const schedulePrivateSync = () => {
+      if (!localStorage.getItem('dimonex_auth_token')) return;
+      if (wsOrderSyncTimerRef.current) return;
+      wsOrderSyncTimerRef.current = setTimeout(() => {
+        wsOrderSyncTimerRef.current = null;
+        refreshUserOrders();
+        refreshBalances();
+      }, 400);
+    };
+
     const connectWs = () => {
-      if (isDisposed || !isWebSocketSupported()) return;
+      if (isDisposed || !isWebSocketSupported()) {
+        wsConnectedRef.current = false;
+        return;
+      }
       try {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws`;
@@ -433,6 +606,7 @@ function AppContent() {
 
         socket.onopen = () => {
           reportWebSocketSuccess();
+          wsConnectedRef.current = true;
           if (!socket || socket.readyState !== WebSocket.OPEN) return;
           socket.send(JSON.stringify({ action: 'subscribe', channel: `depth:${selectedPairId}` }));
           socket.send(JSON.stringify({ action: 'subscribe', channel: `trades:${selectedPairId}` }));
@@ -445,14 +619,24 @@ function AppContent() {
                 userId: user.id,
               })
             );
+            socket.send(
+              JSON.stringify({
+                action: 'subscribe',
+                channel: `orders:${user.id}`,
+                userId: user.id,
+              })
+            );
           }
         };
 
         socket.onerror = () => {
+          wsConnectedRef.current = false;
           reportWebSocketFailure();
         };
 
-        socket.onclose = () => {};
+        socket.onclose = () => {
+          wsConnectedRef.current = false;
+        };
 
         socket.onmessage = (event) => {
           try {
@@ -471,6 +655,8 @@ function AppContent() {
                 }
                 return Array.from(map.values());
               });
+            } else if (msg.type === 'order_update' || msg.type === 'trade_notification') {
+              schedulePrivateSync();
             } else if (msg.type === 'assets_updated' && Array.isArray(msg.data)) {
               hydrateAssetRegistryFromList(msg.data);
               safeFetchJson<TradingPairItem[]>('/api/trading/pairs').then((res) => {
@@ -484,6 +670,7 @@ function AppContent() {
           } catch {}
         };
       } catch (err) {
+        wsConnectedRef.current = false;
         reportWebSocketFailure();
       }
     };
@@ -491,9 +678,14 @@ function AppContent() {
     connectWs();
     return () => {
       isDisposed = true;
+      wsConnectedRef.current = false;
+      if (wsOrderSyncTimerRef.current) {
+        clearTimeout(wsOrderSyncTimerRef.current);
+        wsOrderSyncTimerRef.current = null;
+      }
       if (socket) socket.close();
     };
-  }, [selectedPairId, user?.id, refreshUnreadNotifications]);
+  }, [selectedPairId, user?.id, refreshUnreadNotifications, refreshUserOrders, refreshBalances]);
 
   const { showToast } = useToast();
 
@@ -573,8 +765,17 @@ function AppContent() {
       return;
     }
     const targetPairId = orderPairId || selectedPairId;
+    const cancelledSnapshot = openOrders.find(o => o.id === orderId);
+    const optimisticUnlockAmt = cancelledSnapshot ? safeBigInt(cancelledSnapshot.lockedAmount) : 0n;
+    const unlockCurr = cancelledSnapshot?.lockedCurrency;
+
     try {
       setOpenOrders(prev => prev.filter(o => o.id !== orderId));
+      if (optimisticUnlockAmt > 0n && unlockCurr) {
+        setBalances(prev =>
+          prev.map(b => (b.currency === unlockCurr ? adjustBalanceEntry(b, optimisticUnlockAmt, -optimisticUnlockAmt) : b))
+        );
+      }
 
       let res = await safeFetchJson<any>(`/api/trading/order/${orderId}?pairId=${encodeURIComponent(targetPairId)}`, {
         method: 'DELETE',
@@ -598,12 +799,25 @@ function AppContent() {
         refreshBalances();
         fetchPairMarketData();
       } else {
+        if (cancelledSnapshot) {
+          setOpenOrders(prev => (prev.some(o => o.id === orderId) ? prev : [cancelledSnapshot, ...prev]));
+          if (optimisticUnlockAmt > 0n && unlockCurr) {
+            setBalances(prev =>
+              prev.map(b => (b.currency === unlockCurr ? adjustBalanceEntry(b, -optimisticUnlockAmt, optimisticUnlockAmt) : b))
+            );
+          }
+        }
         refreshUserOrders();
+        refreshBalances();
         showToast('error', 'Gagal Membatalkan Order', res.error || 'Terjadi kesalahan saat membatalkan order');
       }
     } catch (e: any) {
       console.error('Cancel order error:', e);
+      if (cancelledSnapshot) {
+        setOpenOrders(prev => (prev.some(o => o.id === orderId) ? prev : [cancelledSnapshot, ...prev]));
+      }
       refreshUserOrders();
+      refreshBalances();
       showToast('error', 'Gagal Membatalkan Order', e.message || 'Koneksi gagal');
     }
   };
@@ -1037,6 +1251,9 @@ function AppContent() {
                     balances={balances}
                     selectedPriceUnits={selectedPriceForOrder}
                     layoutMode={spotLayout === 'CLASSIC' ? 'HORIZONTAL' : 'STACKED'}
+                    onOptimisticOrderCreate={handleOptimisticOrderCreate}
+                    onOptimisticOrderConfirm={handleOptimisticOrderConfirm}
+                    onOptimisticOrderRollback={handleOptimisticOrderRollback}
                     onOrderPlaced={(newOrder) => {
                       refreshBalances();
                       refreshUserOrders(newOrder);

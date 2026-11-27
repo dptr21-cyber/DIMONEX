@@ -443,30 +443,47 @@ export const UserOrdersTable: React.FC<Props> = ({
                       </div>
                     </td>
                     <td className="px-4 py-2.5 text-center whitespace-nowrap">
-                      <StatusBadge
-                        tone={
-                          order.status === 'FILLED'
-                            ? 'success'
-                            : order.status === 'PARTIALLY_FILLED'
-                            ? 'info'
-                            : order.status === 'CANCELLED'
-                            ? 'neutral'
-                            : 'warning'
-                        }
-                      >
-                        {order.status}
-                      </StatusBadge>
+                      {order.optimistic ? (
+                        <div className="inline-flex items-center gap-1.5">
+                          <StatusBadge tone="info">
+                            <span className="inline-flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-[#8DA5B1] animate-pulse" />
+                              SYNCING
+                            </span>
+                          </StatusBadge>
+                        </div>
+                      ) : (
+                        <StatusBadge
+                          tone={
+                            order.status === 'FILLED'
+                              ? 'success'
+                              : order.status === 'PARTIALLY_FILLED'
+                              ? 'info'
+                              : order.status === 'CANCELLED'
+                              ? 'neutral'
+                              : 'warning'
+                          }
+                        >
+                          {order.status}
+                        </StatusBadge>
+                      )}
                     </td>
                     {activeTab === 'OPEN' && (
                       <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                        <button
-                          type="button"
-                          disabled={cancellingId === order.id}
-                          onClick={() => handleCancel(order.id, order.pairId)}
-                          className="px-2.5 py-1 text-[11px] font-sans font-semibold text-[#EA5B65] hover:bg-[#401F27] rounded-[6px] transition-colors border border-[#EA5B65]/40 cursor-pointer"
-                        >
-                          {cancellingId === order.id ? 'Cancelling...' : 'Cancel'}
-                        </button>
+                        {order.optimistic ? (
+                          <span className="px-2.5 py-1 text-[11px] font-sans font-medium text-[#71818B] bg-[#111820] rounded-[6px] border border-[#202B34] inline-block">
+                            Syncing...
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={cancellingId === order.id}
+                            onClick={() => handleCancel(order.id, order.pairId)}
+                            className="px-2.5 py-1 text-[11px] font-sans font-semibold text-[#EA5B65] hover:bg-[#401F27] rounded-[6px] transition-colors border border-[#EA5B65]/40 cursor-pointer"
+                          >
+                            {cancellingId === order.id ? 'Cancelling...' : 'Cancel'}
+                          </button>
+                        )}
                       </td>
                     )}
                   </tr>

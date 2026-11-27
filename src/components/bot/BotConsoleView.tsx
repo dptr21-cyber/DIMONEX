@@ -38,6 +38,7 @@ import {
 import { UserProfile, TradingPairItem, UserBalance, OrderItem } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
 import { isWebSocketSupported, reportWebSocketSuccess, reportWebSocketFailure } from '../../utils/wsHelper.js';
+import { runSingleFlight } from '../../lib/safeFetch.js';
 import { Button } from '../ui/Button.js';
 import { StatusBadge } from '../ui/StatusBadge.js';
 import { PanelHeader } from '../ui/PanelHeader.js';
@@ -172,6 +173,17 @@ export const BotConsoleView: React.FC<Props> = ({
           );
         };
 
+        let wsSyncTimer: NodeJS.Timeout | null = null;
+        const scheduleOrderRefresh = () => {
+          if (wsSyncTimer) return;
+          wsSyncTimer = setTimeout(() => {
+            wsSyncTimer = null;
+            loadBotOpenOrders();
+            onRefreshBalances();
+            if (onRefreshOrders) onRefreshOrders();
+          }, 500);
+        };
+
         ws.onmessage = event => {
           try {
             const msg = JSON.parse(event.data);
@@ -188,19 +200,13 @@ export const BotConsoleView: React.FC<Props> = ({
                 }
                 return [updatedBot, ...prev];
               });
-              loadBotOpenOrders();
-              onRefreshBalances();
-              if (onRefreshOrders) onRefreshOrders();
+              scheduleOrderRefresh();
             } else if (msg.type === 'bot_stopped' && msg.data) {
               const stoppedBot = msg.data;
               setBots(prev => prev.map(b => (b.id === stoppedBot.id ? { ...b, status: 'STOPPED' } : b)));
-              loadBotOpenOrders();
-              onRefreshBalances();
-              if (onRefreshOrders) onRefreshOrders();
+              scheduleOrderRefresh();
             } else if (msg.type === 'order_update') {
-              loadBotOpenOrders();
-              onRefreshBalances();
-              if (onRefreshOrders) onRefreshOrders();
+              scheduleOrderRefresh();
             }
           } catch {
             // silent
@@ -209,6 +215,10 @@ export const BotConsoleView: React.FC<Props> = ({
 
         ws.onclose = () => {
           setWsConnected(false);
+          if (wsSyncTimer) {
+            clearTimeout(wsSyncTimer);
+            wsSyncTimer = null;
+          }
           if (!isDisposed && isWebSocketSupported()) {
             reconnectTimeout = setTimeout(connectWs, 5000);
           }
@@ -229,8 +239,9 @@ export const BotConsoleView: React.FC<Props> = ({
     loadActiveBots();
     loadBotOpenOrders();
 
-    const pollInterval = isWebSocketSupported() ? 10000 : 3000;
+    const pollInterval = isWebSocketSupported() ? 25000 : 5000;
     const fallbackInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       loadActiveBots();
       loadBotOpenOrders();
     }, pollInterval);
@@ -330,35 +341,39 @@ export const BotConsoleView: React.FC<Props> = ({
   };
 
   const loadActiveBots = async () => {
-    try {
-      const token = localStorage.getItem('dimonex_auth_token');
-      const res = await fetch('/api/bot/list', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
-        const data = await res.json();
-        setBots(data);
-        if (!selectedBotId && data.length > 0) {
-          setSelectedBotId(data[0].id);
+    return runSingleFlight('bot-console:list', async () => {
+      try {
+        const token = localStorage.getItem('dimonex_auth_token');
+        const res = await fetch('/api/bot/list', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+          const data = await res.json();
+          setBots(data);
+          if (!selectedBotId && data.length > 0) {
+            setSelectedBotId(data[0].id);
+          }
         }
+      } catch {
+        // silent
       }
-    } catch {
-      // silent
-    }
+    });
   };
 
   const loadBotOpenOrders = async () => {
-    try {
-      const token = localStorage.getItem('dimonex_auth_token');
-      const res = await fetch('/api/bot/open-orders', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
-        setBotOpenOrders(await res.json());
+    return runSingleFlight('bot-console:open-orders', async () => {
+      try {
+        const token = localStorage.getItem('dimonex_auth_token');
+        const res = await fetch('/api/bot/open-orders', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
+          setBotOpenOrders(await res.json());
+        }
+      } catch {
+        // silent
       }
-    } catch {
-      // silent
-    }
+    });
   };
 
   // Preset price adjustment helper using accurate quoteDecimals

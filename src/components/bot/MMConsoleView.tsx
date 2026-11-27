@@ -51,7 +51,7 @@ import {
 } from 'lucide-react';
 import { UserProfile, TradingPairItem, BotInstance, OrderItem, TradeItem, Environment, BotStatus, BotType, ExternalWsWhitelistEntry, BacktestRequest, PriceThresholdTrigger, PriceThresholdEvent } from '../../types/index.js';
 import { formatIDR, formatCrypto, formatDateTime, safeBigInt, formatQuotePrice } from '../../lib/formatters.js';
-import { safeFetchJson, runConcurrentTasks } from '../../lib/safeFetch.js';
+import { safeFetchJson, runConcurrentTasks, runSingleFlight } from '../../lib/safeFetch.js';
 import { playThresholdSound } from '../../lib/thresholdAudio.js';
 import { Button } from '../ui/Button.js';
 import { Modal } from '../ui/Modal.js';
@@ -491,57 +491,12 @@ export const MMConsoleView: React.FC<Props> = ({
     };
   };
 
-  const loadData = useCallback(async () => {
-    if (!user) return;
-    const headers = getAuthHeaders();
-    const fetchOpts: RequestInit = { headers, cache: 'no-store' };
-    const retryOpts = { retries: 1, retryDelayMs: 250 };
-    const [ovRes, instRes, ordRes, trdRes, rskRes] = await runConcurrentTasks(
-      [
-        () => safeFetchJson('/api/mm/overview', fetchOpts, retryOpts),
-        () => safeFetchJson(`/api/mm/instances?environment=${currentEnv}`, fetchOpts, retryOpts),
-        () => safeFetchJson('/api/mm/orders', fetchOpts, retryOpts),
-        () => safeFetchJson('/api/mm/trades', fetchOpts, retryOpts),
-        () => safeFetchJson('/api/mm/risk-controls', fetchOpts, retryOpts),
-      ],
-      3
-    );
+  const selectedBotIdRef = useRef<string | null>(selectedBotId);
+  useEffect(() => {
+    selectedBotIdRef.current = selectedBotId;
+  }, [selectedBotId]);
 
-    if (ovRes.ok && ovRes.data) setOverview(ovRes.data);
-    if (instRes.ok && Array.isArray(instRes.data)) {
-      const list = instRes.data;
-      // Authoritative sync: server list is the single source of truth
-      setInstances(list);
-      try {
-        if (list.length > 0) {
-          localStorage.setItem(`dimonex_mm_instances_${currentEnv}`, JSON.stringify(list));
-        } else {
-          localStorage.removeItem(`dimonex_mm_instances_${currentEnv}`);
-        }
-      } catch {}
-
-      if (list.length > 0) {
-        // If currently selected bot is no longer in the list, switch to first available bot
-        if (!selectedBotId || !list.some(b => b.id === selectedBotId)) {
-          setSelectedBotId(list[0].id);
-        }
-      } else {
-        setSelectedBotId(null);
-      }
-    }
-    if (ordRes.ok && ordRes.data) setBotOrders(ordRes.data);
-    if (trdRes.ok && trdRes.data) setBotTrades(trdRes.data);
-    if (rskRes.ok && rskRes.data) setRiskControls(rskRes.data);
-  }, [user, currentEnv, selectedBotId]);
-
-  const loadThresholds = useCallback(async () => {
-    if (!user) return;
-    const res = await safeFetchJson<{ triggers?: PriceThresholdTrigger[]; events?: PriceThresholdEvent[] }>(
-      `/api/mm/thresholds?environment=${currentEnv}`,
-      { headers: getAuthHeaders(), cache: 'no-store' }
-    );
-    if (!res.ok || !res.data) return;
-    const data = res.data;
+  const applyThresholdPayload = useCallback((data: { triggers?: PriceThresholdTrigger[]; events?: PriceThresholdEvent[] }) => {
     const triggersList: PriceThresholdTrigger[] = Array.isArray(data.triggers) ? data.triggers : [];
     const eventsList: PriceThresholdEvent[] = Array.isArray(data.events) ? data.events : [];
     setThresholdTriggers(triggersList);
@@ -564,93 +519,144 @@ export const MMConsoleView: React.FC<Props> = ({
         );
       }
     }
-  }, [user, currentEnv, thresholdSoundMuted, showToast]);
+  }, [thresholdSoundMuted, showToast]);
+
+  const loadData = useCallback(async () => {
+    if (!user) return;
+    return runSingleFlight(`mm:snapshot:${currentEnv}`, async () => {
+      const headers = getAuthHeaders();
+      const targetBotId = selectedBotIdRef.current || '';
+      const url = `/api/mm/snapshot?environment=${encodeURIComponent(currentEnv)}&selectedBotId=${encodeURIComponent(targetBotId)}&includeLogs=1`;
+      const res = await safeFetchJson<any>(url, { headers, cache: 'no-store' }, { retries: 1, retryDelayMs: 250 });
+      if (!res.ok || !res.data) return;
+
+      const snap = res.data;
+      if (snap.overview) setOverview(snap.overview);
+      if (Array.isArray(snap.instances)) {
+        const list: BotInstance[] = snap.instances;
+        setInstances(list);
+        try {
+          if (list.length > 0) {
+            localStorage.setItem(`dimonex_mm_instances_${currentEnv}`, JSON.stringify(list));
+          } else {
+            localStorage.removeItem(`dimonex_mm_instances_${currentEnv}`);
+          }
+        } catch {}
+
+        if (list.length > 0) {
+          if (!selectedBotIdRef.current || !list.some(b => b.id === selectedBotIdRef.current)) {
+            setSelectedBotId(list[0].id);
+          }
+        } else {
+          setSelectedBotId(null);
+        }
+      }
+      if (Array.isArray(snap.orders)) setBotOrders(snap.orders);
+      if (Array.isArray(snap.trades)) setBotTrades(snap.trades);
+      if (snap.riskControls) setRiskControls(snap.riskControls);
+      if (snap.thresholds) applyThresholdPayload(snap.thresholds);
+      if (Array.isArray(snap.selectedBotLogs)) setBotLogs(snap.selectedBotLogs);
+    });
+  }, [user, currentEnv, applyThresholdPayload]);
+
+  const loadThresholds = useCallback(async () => {
+    if (!user) return;
+    return runSingleFlight(`mm:thresholds:${currentEnv}`, async () => {
+      const res = await safeFetchJson<{ triggers?: PriceThresholdTrigger[]; events?: PriceThresholdEvent[] }>(
+        `/api/mm/thresholds?environment=${currentEnv}`,
+        { headers: getAuthHeaders(), cache: 'no-store' }
+      );
+      if (!res.ok || !res.data) return;
+      applyThresholdPayload(res.data);
+    });
+  }, [user, currentEnv, applyThresholdPayload]);
 
   useEffect(() => {
     loadData();
-    loadThresholds();
     const timer = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       loadData();
-      loadThresholds();
-    }, 2500);
+    }, 4000);
     return () => clearInterval(timer);
-  }, [loadData, loadThresholds]);
+  }, [loadData]);
 
-  // Load selected bot logs
+  // Fetch logs immediately when switching selectedBotId (snapshot keeps them refreshed afterward)
   useEffect(() => {
     if (!selectedBotId) return;
-    const fetchLogs = async () => {
+    runSingleFlight(`mm:logs:${selectedBotId}`, async () => {
       const res = await safeFetchJson(`/api/mm/instance/${selectedBotId}/logs`, {
         headers: getAuthHeaders(),
         cache: 'no-store',
       });
       if (res.ok && res.data) setBotLogs(res.data);
-    };
-    fetchLogs();
-    const timer = setInterval(() => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      fetchLogs();
-    }, 2000);
-    return () => clearInterval(timer);
+    });
   }, [selectedBotId]);
 
-  // Load all system & bot activity logs
+  // Load all system & bot activity logs ONLY when Activity Logs tab is open
   useEffect(() => {
-    if (!user) return;
-    const fetchAllLogs = async () => {
-      const res = await safeFetchJson('/api/mm/activity-all', {
-        headers: getAuthHeaders(),
-        cache: 'no-store',
+    if (!user || activeTab !== 'ACTIVITY_LOGS') return;
+    const fetchAllLogs = () =>
+      runSingleFlight('mm:activity-all', async () => {
+        const res = await safeFetchJson('/api/mm/activity-all', {
+          headers: getAuthHeaders(),
+          cache: 'no-store',
+        });
+        if (res.ok && res.data) setAllActivityLogs(res.data);
       });
-      if (res.ok && res.data) setAllActivityLogs(res.data);
-    };
     fetchAllLogs();
     const timer = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       fetchAllLogs();
-    }, 2500);
+    }, 4000);
     return () => clearInterval(timer);
-  }, [user]);
+  }, [user, activeTab]);
 
-  // Load external feeds, WS whitelist & FX data
+  // Load external feeds, WS whitelist & FX data (5s on active feed/FX tabs, 20s background)
   useEffect(() => {
     if (!user) return;
-    const fetchFeedsAndFx = async () => {
-      const fetchOpts: RequestInit = { headers: getAuthHeaders(), cache: 'no-store' };
-      const [feedsRes, fxRes, wlRes] = await runConcurrentTasks(
-        [
-          () => safeFetchJson('/api/mm/external-feeds', fetchOpts),
-          () => safeFetchJson('/api/mm/fx-rate', fetchOpts),
-          () => safeFetchJson('/api/mm/external-feeds/whitelist', fetchOpts),
-        ],
-        3
-      );
-      if (feedsRes.ok && feedsRes.data) setExternalFeeds(feedsRes.data);
-      if (fxRes.ok && fxRes.data) {
-        const fx = fxRes.data;
-        setFxData(fx);
-        if (fx.currentRate?.rate && (!manualFxRate || manualFxRate === '16350')) {
-          setManualFxRate(String(fx.currentRate.rate));
+    const isFeedTabActive =
+      activeTab === 'EXTERNAL_FEEDS' ||
+      activeTab === 'FX_RATES' ||
+      activeTab === 'PRICE_FOLLOWER';
+    const pollMs = isFeedTabActive ? 5000 : 20000;
+
+    const fetchFeedsAndFx = () =>
+      runSingleFlight('mm:feeds-fx', async () => {
+        const fetchOpts: RequestInit = { headers: getAuthHeaders(), cache: 'no-store' };
+        const [feedsRes, fxRes, wlRes] = await runConcurrentTasks(
+          [
+            () => safeFetchJson('/api/mm/external-feeds', fetchOpts),
+            () => safeFetchJson('/api/mm/fx-rate', fetchOpts),
+            () => safeFetchJson('/api/mm/external-feeds/whitelist', fetchOpts),
+          ],
+          3
+        );
+        if (feedsRes.ok && feedsRes.data) setExternalFeeds(feedsRes.data);
+        if (fxRes.ok && fxRes.data) {
+          const fx = fxRes.data;
+          setFxData(fx);
+          if (fx.currentRate?.rate && (!manualFxRate || manualFxRate === '16350')) {
+            setManualFxRate(String(fx.currentRate.rate));
+          }
         }
-      }
-      if (wlRes.ok && wlRes.data) {
-        const wl = wlRes.data;
-        const items: ExternalWsWhitelistEntry[] = wl.items || [];
-        setWsWhitelist(items);
-        setWsFeedConnStatus({ binance: wl.binanceStatus, bybit: wl.bybitStatus });
-        if (items.length > 0 && !items.some(i => i.symbol === mdLeaderSymbol)) {
-          setMdLeaderSymbol(items[0].symbol);
+        if (wlRes.ok && wlRes.data) {
+          const wl = wlRes.data;
+          const items: ExternalWsWhitelistEntry[] = wl.items || [];
+          setWsWhitelist(items);
+          setWsFeedConnStatus({ binance: wl.binanceStatus, bybit: wl.bybitStatus });
+          if (items.length > 0 && !items.some(i => i.symbol === mdLeaderSymbol)) {
+            setMdLeaderSymbol(items[0].symbol);
+          }
         }
-      }
-    };
+      });
+
     fetchFeedsAndFx();
     const timer = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       fetchFeedsAndFx();
-    }, 3000);
+    }, pollMs);
     return () => clearInterval(timer);
-  }, [user]);
+  }, [user, activeTab]);
 
   const handleAction = async (url: string, method: string, body?: any) => {
     setIsLoading(true);

@@ -14,6 +14,7 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
 import dns from 'node:dns';
+import zlib from 'node:zlib';
 
 try {
   dns.setDefaultResultOrder('ipv4first');
@@ -72,6 +73,37 @@ export async function startServer() {
 
   // JSON Body Parser (10mb limit supports base64-encoded 5 MB cover & asset image uploads)
   app.use(express.json({ limit: '10mb' }));
+
+  // Lightweight gzip compression for /api JSON payloads >= 1KB (reduces bandwidth & queue time)
+  app.use('/api', (req, res, next) => {
+    const acceptEnc = String(req.headers['accept-encoding'] || '');
+    if (!acceptEnc.includes('gzip')) return next();
+    const origJson = res.json.bind(res);
+    res.json = ((body: any) => {
+      try {
+        if (res.headersSent) return origJson(body);
+        const jsonStr = JSON.stringify(body);
+        if (!jsonStr || jsonStr.length < 1024) {
+          return origJson(body);
+        }
+        zlib.gzip(Buffer.from(jsonStr, 'utf-8'), (err, gz) => {
+          if (err || res.headersSent) {
+            if (!res.headersSent) origJson(body);
+            return;
+          }
+          res.setHeader('Content-Encoding', 'gzip');
+          res.setHeader('Vary', 'Accept-Encoding');
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.setHeader('Content-Length', String(gz.length));
+          res.end(gz);
+        });
+        return res;
+      } catch {
+        return origJson(body);
+      }
+    }) as any;
+    next();
+  });
 
   // WebSocket Server for High-Speed Market Data
   const wss = new WebSocketServer({ server, path: '/ws' });
