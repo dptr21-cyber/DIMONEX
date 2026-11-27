@@ -18,16 +18,8 @@ import { ChartDrawingRecord } from '../db/types.js';
 
 export const tradingRouter = Router();
 
-let cachedPairsPayload: { data: any[]; sig: string; expiresAt: number } | null = null;
-
 // Get All Active Trading Pairs
 tradingRouter.get('/pairs', (req, res) => {
-  const latestTrade = db.trades.length > 0 ? db.trades[db.trades.length - 1] : null;
-  const sig = `${db.tradingPairs.size}:${db.markets.size}:${db.listingRequests.size}:${db.assets.size}:${db.trades.length}:${latestTrade?.id || ''}`;
-  const now = Date.now();
-  if (cachedPairsPayload && cachedPairsPayload.sig === sig && now < cachedPairsPayload.expiresAt) {
-    return res.json(cachedPairsPayload.data);
-  }
   // Sync active markets from db.markets into db.tradingPairs if not already present
   for (const market of db.markets.values()) {
     if (market.status === 'ACTIVE' && !db.tradingPairs.has(market.id)) {
@@ -116,12 +108,6 @@ tradingRouter.get('/pairs', (req, res) => {
     };
   });
 
-  cachedPairsPayload = {
-    data: enrichedPairs,
-    sig,
-    expiresAt: now + 1500,
-  };
-
   res.json(enrichedPairs);
 });
 
@@ -144,17 +130,12 @@ tradingRouter.get('/depth/:pairId', (req, res) => {
   }
 });
 
-// Get Recent Trades for a pair (reverse scan for O(recent) performance)
+// Get Recent Trades for a pair
 tradingRouter.get('/trades/:pairId', (req, res) => {
-  const pairId = req.params.pairId;
-  const pairTrades = [];
-  for (let i = db.trades.length - 1; i >= 0; i--) {
-    const t = db.trades[i];
-    if (t && t.pairId === pairId) {
-      pairTrades.push(t);
-      if (pairTrades.length >= 50) break;
-    }
-  }
+  const pairTrades = db.trades
+    .filter(t => t.pairId === req.params.pairId)
+    .slice(-50)
+    .reverse();
   res.json(pairTrades);
 });
 
@@ -459,35 +440,27 @@ tradingRouter.get('/orders/open', requireAuth, (req, res) => {
   const user = (req as any).user;
   const role = (user.role || '').toUpperCase();
   const isMMOrAdmin = role === 'MM' || role === 'ADMIN' || role === 'SUPERADMIN';
-  const limit = Math.min(500, Math.max(20, parseInt(String(req.query.limit || '200'), 10) || 200));
 
-  const userOpenOrders = [];
-  for (const o of db.orders.values()) {
-    if (o.status !== 'NEW' && o.status !== 'PARTIALLY_FILLED') continue;
-    const isOwner = o.userId === user.id;
-    const isMMBotOrder = isMMOrAdmin && Boolean(o.clientOrderId && (o.clientOrderId.startsWith('bot-') || o.clientOrderId.includes('-ord-') || o.clientOrderId.includes('-vol-')));
-    if (isOwner || isMMBotOrder) {
-      userOpenOrders.push(o);
-    }
-  }
-  userOpenOrders.sort((a, b) => b.createdAt - a.createdAt);
+  const userOpenOrders = Array.from(db.orders.values())
+    .filter(o => {
+      const isOwner = o.userId === user.id;
+      const isMMBotOrder = isMMOrAdmin && (o.clientOrderId?.startsWith('bot-') || o.clientOrderId?.includes('-ord-') || o.clientOrderId?.includes('-vol-'));
+      return (isOwner || isMMBotOrder) && (o.status === 'NEW' || o.status === 'PARTIALLY_FILLED');
+    })
+    .sort((a, b) => b.createdAt - a.createdAt);
 
-  res.json(userOpenOrders.length > limit ? userOpenOrders.slice(0, limit) : userOpenOrders);
+  res.json(userOpenOrders);
 });
 
 // Get Order History for Authenticated User
 tradingRouter.get('/orders/history', requireAuth, (req, res) => {
   const user = (req as any).user;
-  const limit = Math.min(200, Math.max(10, parseInt(String(req.query.limit || '100'), 10) || 100));
-  const userOrders = [];
-  for (const o of db.orders.values()) {
-    if (o.userId === user.id) {
-      userOrders.push(o);
-    }
-  }
-  userOrders.sort((a, b) => b.createdAt - a.createdAt);
+  const userOrders = Array.from(db.orders.values())
+    .filter(o => o.userId === user.id)
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, 100);
 
-  res.json(userOrders.slice(0, limit));
+  res.json(userOrders);
 });
 
 // Get Public External Reference Price for Chart Benchmark Overlay

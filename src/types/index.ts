@@ -637,8 +637,6 @@ export interface OrderItem {
   lockedCurrency: string;
   clientOrderId?: string;
   createdAt: number;
-  optimistic?: boolean;
-  optimisticState?: 'PENDING' | 'FAILED';
 }
 
 export interface TradeItem {
