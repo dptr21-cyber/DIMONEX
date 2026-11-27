@@ -71,8 +71,6 @@ export const ChartDrawingLayer: React.FC<ChartDrawingLayerProps> = ({
 
   const drawingsRef = useRef(drawings);
   drawingsRef.current = drawings;
-  const activeToolRef = useRef(activeTool);
-  activeToolRef.current = activeTool;
 
   const triggerRepaint = useCallback(() => {
     if (chart) {
@@ -83,9 +81,7 @@ export const ChartDrawingLayer: React.FC<ChartDrawingLayerProps> = ({
         );
       } catch {}
     }
-    if (drawingsRef.current.length > 0 || activeToolRef.current !== 'NONE') {
-      setRenderTick(t => t + 1);
-    }
+    setRenderTick(t => t + 1);
   }, [chart]);
 
   useEffect(() => {
@@ -111,10 +107,8 @@ export const ChartDrawingLayer: React.FC<ChartDrawingLayerProps> = ({
   }, [chart, triggerRepaint]);
 
   useEffect(() => {
-    if (drawings.length > 0 || activeTool !== 'NONE' || selectedId !== null) {
-      triggerRepaint();
-    }
-  }, [candles, drawings, selectedId, activeTool, triggerRepaint]);
+    triggerRepaint();
+  }, [candles, drawings, selectedId, triggerRepaint]);
 
   const toXY = useCallback(
     (pt: ChartDrawingPoint): { x: number; y: number } | null => {

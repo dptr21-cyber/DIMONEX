@@ -280,38 +280,18 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
   const indicatorSeriesRef = useRef<Map<string, ISeriesApi<any>[]>>(new Map());
   const overlayPriceLinesRef = useRef<any[]>([]);
-  const srPriceLinesRef = useRef<any[]>([]);
 
   const isDisposedRef = useRef<boolean>(false);
   const loadRequestIdRef = useRef<number>(0);
   const candlesRef = useRef<CandleItem[]>([]);
-  const heikinAshiBarsRef = useRef<CandleItem[]>([]);
+  const [candlesTick, setCandlesTick] = useState(0);
   const lastBarRef = useRef<CandleItem | null>(null);
   const processedTradesRef = useRef<Set<string>>(new Set());
-  const queuedLiveTradesRef = useRef<TradeItem[]>([]);
   const isFirstLoadRef = useRef(true);
-  const hasLoadedInitialRef = useRef(false);
-  const initialFetchStartedAtRef = useRef(0);
   const hasMoreHistoryRef = useRef(true);
   const isFetchingMoreRef = useRef(false);
   const lastPaginateAttemptRef = useRef(0);
   const hasConnectedOnceRef = useRef(false);
-
-  const [, setChartInstanceTick] = useState(0);
-  const [srRefreshTick, setSrRefreshTick] = useState(0);
-  const [userTradeRefreshTick, setUserTradeRefreshTick] = useState(0);
-
-  const appliedMainPricePrecisionRef = useRef<number | null>(null);
-  const appliedIndPricePrecisionRef = useRef<number | null>(null);
-  const indicatorSeededRef = useRef<Set<string>>(new Set());
-  const indicatorLastTimeMapRef = useRef<Map<string, number>>(new Map());
-  const indicatorValueEmitTimerRef = useRef<number>(0);
-  const lastEmittedReadoutsRef = useRef<Record<string, string>>({});
-  const pendingRafFlushRef = useRef<number | null>(null);
-  const pendingNewBarAppendedRef = useRef<boolean>(false);
-  const userTradeRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastBuiltMainKeyRef = useRef<string>('');
-  const lastBuiltIndicatorKeyRef = useRef<string>('');
 
   const isUSDT = (pair.quoteCurrency || '').toUpperCase() === 'USDT';
   const quoteDec = pair.quoteDecimals !== undefined && pair.quoteDecimals !== null ? pair.quoteDecimals : isUSDT ? 6 : 2;
@@ -331,41 +311,6 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
 
   const refFloatPrice = Number(safeBigInt(pair.lastPrice)) / 10 ** Math.max(0, quoteDec);
   const displayPrecision = getPrecisionForPrice(refFloatPrice);
-
-  const pairLastPriceRef = useRef(pair.lastPrice);
-  pairLastPriceRef.current = pair.lastPrice;
-  const refFloatPriceRef = useRef(refFloatPrice);
-  refFloatPriceRef.current = refFloatPrice;
-  const displayPrecisionRef = useRef(displayPrecision);
-  displayPrecisionRef.current = displayPrecision;
-  const indicatorsRef = useRef(indicators);
-  indicatorsRef.current = indicators;
-  const overlaysRef = useRef(overlays);
-  overlaysRef.current = overlays;
-  const activeChartTypeRef = useRef(activeChartType);
-  activeChartTypeRef.current = activeChartType;
-  const userRef = useRef(user);
-  userRef.current = user;
-  const recentTradesRef = useRef(recentTrades);
-  recentTradesRef.current = recentTrades;
-  const onHoverInfoChangeRef = useRef(onHoverInfoChange);
-  onHoverInfoChangeRef.current = onHoverInfoChange;
-  const onIndicatorValuesChangeRef = useRef(onIndicatorValuesChange);
-  onIndicatorValuesChangeRef.current = onIndicatorValuesChange;
-
-  const indicatorStructureKey = useMemo(
-    () =>
-      JSON.stringify(
-        indicators.map(i => ({
-          id: i.id,
-          e: i.enabled,
-          v: i.visible !== false,
-          c: i.color,
-          p: i.params,
-        }))
-      ),
-    [indicators]
-  );
 
   // Sync external ShowRefBenchmark prop if controlled from header
   useEffect(() => {
@@ -557,23 +502,19 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     (bars: CandleItem[]) => {
       if (isDisposedRef.current || !mainSeriesRef.current || !volumeSeriesRef.current || bars.length === 0) return;
 
-      const sampleClose = bars[bars.length - 1]?.close || refFloatPriceRef.current;
+      const sampleClose = bars[bars.length - 1]?.close || refFloatPrice;
       const dynPrec = getPrecisionForPrice(sampleClose);
-      if (appliedMainPricePrecisionRef.current !== dynPrec) {
-        const dynMinMove = Number((1 / Math.pow(10, dynPrec)).toFixed(dynPrec));
-        const dynFormat = { type: 'price' as const, precision: dynPrec, minMove: dynMinMove };
-        try {
-          mainSeriesRef.current.applyOptions({ priceFormat: dynFormat });
-          appliedMainPricePrecisionRef.current = dynPrec;
-        } catch {}
-      }
+      const dynMinMove = Number((1 / Math.pow(10, dynPrec)).toFixed(dynPrec));
+      const dynFormat = { type: 'price' as const, precision: dynPrec, minMove: dynMinMove };
 
-      const ct = activeChartTypeRef.current;
-      const displayBars = ct === 'HEIKIN_ASHI' ? computeHeikinAshi(bars) : bars;
-      heikinAshiBarsRef.current = ct === 'HEIKIN_ASHI' ? displayBars : [];
+      try {
+        mainSeriesRef.current.applyOptions({ priceFormat: dynFormat });
+      } catch {}
 
-      if (ct === 'LINE' || ct === 'AREA' || ct === 'BASELINE') {
-        if (ct === 'BASELINE') {
+      const displayBars = activeChartType === 'HEIKIN_ASHI' ? computeHeikinAshi(bars) : bars;
+
+      if (activeChartType === 'LINE' || activeChartType === 'AREA' || activeChartType === 'BASELINE') {
+        if (activeChartType === 'BASELINE') {
           try {
             mainSeriesRef.current.applyOptions({
               baseValue: { type: 'price', price: displayBars[0].close },
@@ -603,57 +544,20 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
         }))
       );
     },
-    [getPrecisionForPrice]
+    [activeChartType, getPrecisionForPrice, refFloatPrice]
   );
 
-  // Sync indicator series data (supports incremental .update() on live ticks & full .setData() on load/rebuild)
+  // Sync indicator series data & compute latest legend readouts
   const syncIndicatorsData = useCallback(
-    (bars: CandleItem[], incremental = false) => {
+    (bars: CandleItem[]) => {
       if (isDisposedRef.current || !chartRef.current || bars.length === 0) return;
       const nextReadouts: Record<string, string> = {};
-      const sampleClose = bars[bars.length - 1]?.close || refFloatPriceRef.current;
+      const sampleClose = bars[bars.length - 1]?.close || refFloatPrice;
       const dynPrec = getPrecisionForPrice(sampleClose);
-      const precisionChanged = appliedIndPricePrecisionRef.current !== dynPrec;
       const dynMinMove = Number((1 / Math.pow(10, dynPrec)).toFixed(dynPrec));
       const dynFormat = { type: 'price' as const, precision: dynPrec, minMove: dynMinMove };
-      if (precisionChanged) {
-        appliedIndPricePrecisionRef.current = dynPrec;
-      }
 
-      const applySeriesPoints = (
-        key: string,
-        ser: ISeriesApi<any>,
-        pts: Array<{ time: Time; value: number; color?: string }>,
-        isPriceSeries: boolean
-      ) => {
-        if (isPriceSeries && (precisionChanged || !indicatorSeededRef.current.has(key))) {
-          ser.applyOptions({ priceFormat: dynFormat });
-        }
-        if (incremental && indicatorSeededRef.current.has(key)) {
-          if (pts.length === 0) return;
-          const lastPt = pts[pts.length - 1];
-          if (!Number.isFinite(lastPt.value)) return;
-          const lastSec = Number(lastPt.time);
-          const prevSec = indicatorLastTimeMapRef.current.get(key) ?? -Infinity;
-          if (lastSec >= prevSec) {
-            ser.update(lastPt);
-            indicatorLastTimeMapRef.current.set(key, lastSec);
-          } else {
-            ser.setData(pts);
-            indicatorLastTimeMapRef.current.set(key, lastSec);
-          }
-        } else {
-          ser.setData(pts);
-          indicatorSeededRef.current.add(key);
-          if (pts.length > 0) {
-            indicatorLastTimeMapRef.current.set(key, Number(pts[pts.length - 1].time));
-          } else {
-            indicatorLastTimeMapRef.current.delete(key);
-          }
-        }
-      };
-
-      for (const cfg of indicatorsRef.current) {
+      for (const cfg of indicators) {
         if (!cfg.enabled || cfg.visible === false) continue;
         const seriesList = indicatorSeriesRef.current.get(cfg.id);
         if (!seriesList || seriesList.length === 0) continue;
@@ -662,57 +566,31 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
           switch (cfg.id) {
             case 'SMA': {
               const pts = computeSMA(bars, cfg.params.period ?? 7);
-              applySeriesPoints(
-                `${cfg.id}:0`,
-                seriesList[0],
-                pts.map(p => ({ time: p.time as Time, value: p.value })),
-                true
-              );
+              seriesList[0].applyOptions({ priceFormat: dynFormat });
+              seriesList[0].setData(pts.map(p => ({ time: p.time as Time, value: p.value })));
               if (pts.length > 0) nextReadouts[cfg.id] = pts[pts.length - 1].value.toFixed(dynPrec);
               break;
             }
             case 'EMA': {
               const pts = computeEMA(bars, cfg.params.period ?? 25);
-              applySeriesPoints(
-                `${cfg.id}:0`,
-                seriesList[0],
-                pts.map(p => ({ time: p.time as Time, value: p.value })),
-                true
-              );
+              seriesList[0].applyOptions({ priceFormat: dynFormat });
+              seriesList[0].setData(pts.map(p => ({ time: p.time as Time, value: p.value })));
               if (pts.length > 0) nextReadouts[cfg.id] = pts[pts.length - 1].value.toFixed(dynPrec);
               break;
             }
             case 'VWAP': {
               const pts = computeVWAP(bars);
-              applySeriesPoints(
-                `${cfg.id}:0`,
-                seriesList[0],
-                pts.map(p => ({ time: p.time as Time, value: p.value })),
-                true
-              );
+              seriesList[0].applyOptions({ priceFormat: dynFormat });
+              seriesList[0].setData(pts.map(p => ({ time: p.time as Time, value: p.value })));
               if (pts.length > 0) nextReadouts[cfg.id] = pts[pts.length - 1].value.toFixed(dynPrec);
               break;
             }
             case 'BB': {
               const pts = computeBollingerBands(bars, cfg.params.period ?? 20, cfg.params.stdDev ?? 2);
-              applySeriesPoints(
-                `${cfg.id}:0`,
-                seriesList[0],
-                pts.map(p => ({ time: p.time as Time, value: p.upper })),
-                true
-              );
-              applySeriesPoints(
-                `${cfg.id}:1`,
-                seriesList[1],
-                pts.map(p => ({ time: p.time as Time, value: p.middle })),
-                true
-              );
-              applySeriesPoints(
-                `${cfg.id}:2`,
-                seriesList[2],
-                pts.map(p => ({ time: p.time as Time, value: p.lower })),
-                true
-              );
+              seriesList.forEach(s => s.applyOptions({ priceFormat: dynFormat }));
+              seriesList[0].setData(pts.map(p => ({ time: p.time as Time, value: p.upper })));
+              seriesList[1].setData(pts.map(p => ({ time: p.time as Time, value: p.middle })));
+              seriesList[2].setData(pts.map(p => ({ time: p.time as Time, value: p.lower })));
               if (pts.length > 0) {
                 const last = pts[pts.length - 1];
                 nextReadouts[cfg.id] = `${last.upper.toFixed(dynPrec)} / ${last.lower.toFixed(dynPrec)}`;
@@ -721,50 +599,27 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
             }
             case 'VOL_MA': {
               const pts = computeVolumeMA(bars, cfg.params.period ?? 20);
-              applySeriesPoints(
-                `${cfg.id}:0`,
-                seriesList[0],
-                pts.map(p => ({ time: p.time as Time, value: p.value })),
-                false
-              );
+              seriesList[0].setData(pts.map(p => ({ time: p.time as Time, value: p.value })));
               if (pts.length > 0) nextReadouts[cfg.id] = pts[pts.length - 1].value.toFixed(2);
               break;
             }
             case 'RSI': {
               const pts = computeRSI(bars, cfg.params.period ?? 14);
-              applySeriesPoints(
-                `${cfg.id}:0`,
-                seriesList[0],
-                pts.map(p => ({ time: p.time as Time, value: p.value })),
-                false
-              );
+              seriesList[0].setData(pts.map(p => ({ time: p.time as Time, value: p.value })));
               if (pts.length > 0) nextReadouts[cfg.id] = pts[pts.length - 1].value.toFixed(2);
               break;
             }
             case 'MACD': {
               const pts = computeMACD(bars, cfg.params.fast ?? 12, cfg.params.slow ?? 26, cfg.params.signal ?? 9);
-              applySeriesPoints(
-                `${cfg.id}:0`,
-                seriesList[0],
+              seriesList[0].setData(
                 pts.map(p => ({
                   time: p.time as Time,
                   value: p.histogram,
                   color: p.histogram >= 0 ? 'rgba(22, 168, 121, 0.55)' : 'rgba(234, 91, 101, 0.55)',
-                })),
-                false
+                }))
               );
-              applySeriesPoints(
-                `${cfg.id}:1`,
-                seriesList[1],
-                pts.map(p => ({ time: p.time as Time, value: p.macd })),
-                false
-              );
-              applySeriesPoints(
-                `${cfg.id}:2`,
-                seriesList[2],
-                pts.map(p => ({ time: p.time as Time, value: p.signal })),
-                false
-              );
+              seriesList[1].setData(pts.map(p => ({ time: p.time as Time, value: p.macd })));
+              seriesList[2].setData(pts.map(p => ({ time: p.time as Time, value: p.signal })));
               if (pts.length > 0) {
                 const last = pts[pts.length - 1];
                 nextReadouts[cfg.id] = `${last.macd.toFixed(dynPrec)} / ${last.signal.toFixed(dynPrec)}`;
@@ -779,18 +634,8 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
                 cfg.params.kPeriod ?? 3,
                 cfg.params.dPeriod ?? 3
               );
-              applySeriesPoints(
-                `${cfg.id}:0`,
-                seriesList[0],
-                pts.map(p => ({ time: p.time as Time, value: p.k })),
-                false
-              );
-              applySeriesPoints(
-                `${cfg.id}:1`,
-                seriesList[1],
-                pts.map(p => ({ time: p.time as Time, value: p.d })),
-                false
-              );
+              seriesList[0].setData(pts.map(p => ({ time: p.time as Time, value: p.k })));
+              seriesList[1].setData(pts.map(p => ({ time: p.time as Time, value: p.d })));
               if (pts.length > 0) {
                 const last = pts[pts.length - 1];
                 nextReadouts[cfg.id] = `K:${last.k.toFixed(1)} D:${last.d.toFixed(1)}`;
@@ -799,45 +644,26 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
             }
             case 'ATR': {
               const pts = computeATR(bars, cfg.params.period ?? 14);
-              applySeriesPoints(
-                `${cfg.id}:0`,
-                seriesList[0],
-                pts.map(p => ({ time: p.time as Time, value: p.value })),
-                true
-              );
+              seriesList[0].applyOptions({ priceFormat: dynFormat });
+              seriesList[0].setData(pts.map(p => ({ time: p.time as Time, value: p.value })));
               if (pts.length > 0) nextReadouts[cfg.id] = pts[pts.length - 1].value.toFixed(dynPrec);
               break;
             }
             case 'BBW': {
               const pts = computeBollingerBandWidth(bars, cfg.params.period ?? 20, cfg.params.stdDev ?? 2);
-              applySeriesPoints(
-                `${cfg.id}:0`,
-                seriesList[0],
-                pts.map(p => ({ time: p.time as Time, value: p.value })),
-                false
-              );
+              seriesList[0].setData(pts.map(p => ({ time: p.time as Time, value: p.value })));
               if (pts.length > 0) nextReadouts[cfg.id] = `${pts[pts.length - 1].value.toFixed(2)}%`;
               break;
             }
             case 'OBV': {
               const pts = computeOBV(bars);
-              applySeriesPoints(
-                `${cfg.id}:0`,
-                seriesList[0],
-                pts.map(p => ({ time: p.time as Time, value: p.value })),
-                false
-              );
+              seriesList[0].setData(pts.map(p => ({ time: p.time as Time, value: p.value })));
               if (pts.length > 0) nextReadouts[cfg.id] = pts[pts.length - 1].value.toFixed(2);
               break;
             }
             case 'MFI': {
               const pts = computeMFI(bars, cfg.params.period ?? 14);
-              applySeriesPoints(
-                `${cfg.id}:0`,
-                seriesList[0],
-                pts.map(p => ({ time: p.time as Time, value: p.value })),
-                false
-              );
+              seriesList[0].setData(pts.map(p => ({ time: p.time as Time, value: p.value })));
               if (pts.length > 0) nextReadouts[cfg.id] = pts[pts.length - 1].value.toFixed(2);
               break;
             }
@@ -846,45 +672,15 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
           if (err?.message?.includes('disposed')) return;
         }
       }
-
-      const now = Date.now();
-      if (!incremental || now - indicatorValueEmitTimerRef.current >= 250) {
-        const prev = lastEmittedReadoutsRef.current;
-        const keys = Object.keys(nextReadouts);
-        const prevKeys = Object.keys(prev);
-        const changed =
-          keys.length !== prevKeys.length || keys.some(k => prev[k] !== nextReadouts[k]);
-        if (changed) {
-          lastEmittedReadoutsRef.current = nextReadouts;
-          indicatorValueEmitTimerRef.current = now;
-          setIndicatorValues(nextReadouts);
-          onIndicatorValuesChangeRef.current?.(nextReadouts);
-        } else if (!incremental) {
-          indicatorValueEmitTimerRef.current = now;
-        }
-      }
+      setIndicatorValues(nextReadouts);
+      onIndicatorValuesChange?.(nextReadouts);
     },
-    [getPrecisionForPrice]
+    [indicators, getPrecisionForPrice, refFloatPrice, onIndicatorValuesChange]
   );
 
-  const syncMainAndVolumeDataRef = useRef(syncMainAndVolumeData);
-  syncMainAndVolumeDataRef.current = syncMainAndVolumeData;
-  const syncIndicatorsDataRef = useRef(syncIndicatorsData);
-  syncIndicatorsDataRef.current = syncIndicatorsData;
-
-  // Build / rebuild main series when activeChartType changes without losing bars or viewport
+  // Build / rebuild main series when activeChartType changes without losing bars
   const buildMainSeries = useCallback(
-    (chart: IChartApi, preserveRange = false) => {
-      const prevLogical = preserveRange
-        ? (() => {
-            try {
-              return chart.timeScale().getVisibleLogicalRange();
-            } catch {
-              return null;
-            }
-          })()
-        : null;
-
+    (chart: IChartApi) => {
       if (markersPluginRef.current) {
         try {
           markersPluginRef.current.detach();
@@ -897,12 +693,6 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
         } catch {}
       }
       overlayPriceLinesRef.current = [];
-      for (const pl of srPriceLinesRef.current) {
-        try {
-          mainSeriesRef.current?.removePriceLine(pl);
-        } catch {}
-      }
-      srPriceLinesRef.current = [];
 
       if (mainSeriesRef.current) {
         try {
@@ -911,11 +701,8 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
         mainSeriesRef.current = null;
       }
 
-      appliedMainPricePrecisionRef.current = null;
-      const prec = displayPrecisionRef.current;
-      const minMove = Number((1 / Math.pow(10, prec)).toFixed(prec));
-      const priceFormat = { type: 'price' as const, precision: prec, minMove };
-      appliedMainPricePrecisionRef.current = prec;
+      const minMove = Number((1 / Math.pow(10, displayPrecision)).toFixed(displayPrecision));
+      const priceFormat = { type: 'price' as const, precision: displayPrecision, minMove };
 
       let s: ISeriesApi<any>;
       switch (activeChartType) {
@@ -957,7 +744,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
           break;
         case 'BASELINE':
           s = chart.addSeries(BaselineSeries, {
-            baseValue: { type: 'price', price: refFloatPriceRef.current || 1 },
+            baseValue: { type: 'price', price: refFloatPrice || 1 },
             topLineColor: '#16A879',
             topFillColor1: 'rgba(22, 168, 121, 0.24)',
             topFillColor2: 'rgba(22, 168, 121, 0.02)',
@@ -985,31 +772,16 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       mainSeriesRef.current = s;
       markersPluginRef.current = createSeriesMarkers(s, []);
       if (candlesRef.current.length > 0) {
-        syncMainAndVolumeDataRef.current(candlesRef.current);
-        if (prevLogical) {
-          try {
-            chart.timeScale().setVisibleLogicalRange(prevLogical);
-          } catch {}
-        }
+        syncMainAndVolumeData(candlesRef.current);
       }
-      setChartInstanceTick(t => t + 1);
     },
-    [activeChartType]
+    [activeChartType, displayPrecision, refFloatPrice, syncMainAndVolumeData]
   );
 
-  // Build / rebuild indicator series & sub-panes cleanly without snapping user's viewport
+  // Build / rebuild indicator series & sub-panes cleanly
   const rebuildIndicators = useCallback(
-    (chart: IChartApi, preserveRange = false) => {
-      const prevLogical = preserveRange
-        ? (() => {
-            try {
-              return chart.timeScale().getVisibleLogicalRange();
-            } catch {
-              return null;
-            }
-          })()
-        : null;
-
+    (chart: IChartApi) => {
+      // Remove all existing indicator series
       for (const list of indicatorSeriesRef.current.values()) {
         for (const ser of list) {
           try {
@@ -1018,10 +790,8 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
         }
       }
       indicatorSeriesRef.current.clear();
-      indicatorSeededRef.current.clear();
-      indicatorLastTimeMapRef.current.clear();
-      appliedIndPricePrecisionRef.current = null;
 
+      // Remove any leftover sub-panes cleanly
       try {
         while (chart.panes().length > 1) {
           chart.removePane(chart.panes().length - 1);
@@ -1029,7 +799,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       } catch {}
 
       let nextPaneIdx = 1;
-      for (const cfg of indicatorsRef.current) {
+      for (const cfg of indicators) {
         if (!cfg.enabled || cfg.visible === false) continue;
         const created: ISeriesApi<any>[] = [];
 
@@ -1091,15 +861,10 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       } catch {}
 
       if (candlesRef.current.length > 0) {
-        syncIndicatorsDataRef.current(candlesRef.current, false);
-        if (prevLogical) {
-          try {
-            chart.timeScale().setVisibleLogicalRange(prevLogical);
-          } catch {}
-        }
+        syncIndicatorsData(candlesRef.current);
       }
     },
-    [compact]
+    [indicators, compact, syncIndicatorsData]
   );
 
   // Merge new bars (from historical pagination or reconnect delta) cleanly
@@ -1110,123 +875,15 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     const merged = Array.from(map.values()).sort((a, b) => a.time - b.time);
     candlesRef.current = merged;
     lastBarRef.current = merged[merged.length - 1] || null;
+    setCandlesTick(t => t + 1);
     return merged;
   }, []);
 
-  // Coalesced per-frame flush for live candle/volume/indicator updates (zero shake)
-  const flushLiveCandleUpdate = useCallback(() => {
-    pendingRafFlushRef.current = null;
-    if (isDisposedRef.current || !chartRef.current || !mainSeriesRef.current || !volumeSeriesRef.current) return;
-    const activeBars = candlesRef.current;
-    const latestRaw = activeBars[activeBars.length - 1];
-    if (!latestRaw) return;
-
-    const wasNewBar = pendingNewBarAppendedRef.current;
-    pendingNewBarAppendedRef.current = false;
-
-    const ts = chartRef.current.timeScale();
-    const targetOffset = ts.options().rightOffset ?? 6;
-    let shouldFollowLiveEdge = false;
-    if (wasNewBar) {
-      try {
-        shouldFollowLiveEdge = Math.abs(ts.scrollPosition() - targetOffset) < 1.5;
-      } catch {}
-    }
-
-    try {
-      const ct = activeChartTypeRef.current;
-      let latestDisplay: CandleItem = latestRaw;
-
-      if (ct === 'HEIKIN_ASHI') {
-        const haBars = heikinAshiBarsRef.current;
-        if (haBars.length === activeBars.length) {
-          const prevHa = haBars.length >= 2 ? haBars[haBars.length - 2] : null;
-          const haClose = (latestRaw.open + latestRaw.high + latestRaw.low + latestRaw.close) / 4;
-          const haOpen = prevHa ? (prevHa.open + prevHa.close) / 2 : (latestRaw.open + latestRaw.close) / 2;
-          latestDisplay = {
-            time: latestRaw.time,
-            open: haOpen,
-            high: Math.max(latestRaw.high, haOpen, haClose),
-            low: Math.min(latestRaw.low, haOpen, haClose),
-            close: haClose,
-            volume: latestRaw.volume,
-          };
-          haBars[haBars.length - 1] = latestDisplay;
-        } else if (haBars.length + 1 === activeBars.length) {
-          const prevHa = haBars.length >= 1 ? haBars[haBars.length - 1] : null;
-          const haClose = (latestRaw.open + latestRaw.high + latestRaw.low + latestRaw.close) / 4;
-          const haOpen = prevHa ? (prevHa.open + prevHa.close) / 2 : (latestRaw.open + latestRaw.close) / 2;
-          latestDisplay = {
-            time: latestRaw.time,
-            open: haOpen,
-            high: Math.max(latestRaw.high, haOpen, haClose),
-            low: Math.min(latestRaw.low, haOpen, haClose),
-            close: haClose,
-            volume: latestRaw.volume,
-          };
-          haBars.push(latestDisplay);
-        } else {
-          const fullHa = computeHeikinAshi(activeBars);
-          heikinAshiBarsRef.current = fullHa;
-          latestDisplay = fullHa[fullHa.length - 1] || latestRaw;
-        }
-      }
-
-      if (
-        Number.isFinite(latestDisplay.close) &&
-        Number.isFinite(latestDisplay.open) &&
-        Number.isFinite(latestDisplay.high) &&
-        Number.isFinite(latestDisplay.low)
-      ) {
-        if (ct === 'LINE' || ct === 'AREA' || ct === 'BASELINE') {
-          mainSeriesRef.current.update({ time: latestDisplay.time as Time, value: latestDisplay.close });
-        } else {
-          mainSeriesRef.current.update({
-            time: latestDisplay.time as Time,
-            open: latestDisplay.open,
-            high: latestDisplay.high,
-            low: latestDisplay.low,
-            close: latestDisplay.close,
-          });
-        }
-      }
-
-      if (Number.isFinite(latestRaw.volume)) {
-        volumeSeriesRef.current.update({
-          time: latestRaw.time as Time,
-          value: latestRaw.volume,
-          color: latestRaw.close >= latestRaw.open ? 'rgba(22, 168, 121, 0.42)' : 'rgba(234, 91, 101, 0.42)',
-        });
-      }
-
-      syncIndicatorsDataRef.current(activeBars, true);
-
-      if (shouldFollowLiveEdge && chartRef.current) {
-        try {
-          ts.scrollToPosition(targetOffset, false);
-        } catch {}
-      }
-
-      if (wasNewBar && overlaysRef.current.showSupportResistance) {
-        setSrRefreshTick(t => t + 1);
-      }
-    } catch (err: any) {
-      if (err?.message?.includes('disposed')) return;
-    }
-  }, []);
-
-  // Process single live trade (deduplicated by trade.id, batched per animation frame)
+  // Process single live trade (deduplicated by trade.id)
   const processSingleTrade = useCallback(
     (trade: TradeItem) => {
       if (!trade || trade.pairId !== pair.id) return;
-      if (isDisposedRef.current) return;
-      if (!hasLoadedInitialRef.current) {
-        if (queuedLiveTradesRef.current.length < 120) {
-          queuedLiveTradesRef.current.push(trade);
-        }
-        return;
-      }
-      if (!chartRef.current || !mainSeriesRef.current || !volumeSeriesRef.current) return;
+      if (isDisposedRef.current || !chartRef.current || !mainSeriesRef.current || !volumeSeriesRef.current) return;
       if (processedTradesRef.current.has(trade.id)) return;
       processedTradesRef.current.add(trade.id);
       if (processedTradesRef.current.size > 3000) {
@@ -1238,9 +895,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
         const rawPrice = safeBigInt(trade.price);
         if (rawPrice <= 0n) return;
         const tradePrice = Number(rawPrice) / Number(divisor);
-        if (!Number.isFinite(tradePrice) || tradePrice <= 0) return;
         const tradeQty = Number(safeBigInt(trade.quantity)) / 10 ** baseDec;
-        const safeQty = Number.isFinite(tradeQty) && tradeQty >= 0 ? tradeQty : 0;
         const tradeSec = Math.floor(trade.createdAt / 1000);
         const intervalSec = TF_SECONDS[timeframe] || 900;
         const currentCandleTime = Math.floor(tradeSec / intervalSec) * intervalSec;
@@ -1253,53 +908,55 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
             high: Math.max(last ? last.close : tradePrice, tradePrice),
             low: Math.min(last ? last.close : tradePrice, tradePrice),
             close: tradePrice,
-            volume: safeQty,
+            volume: tradeQty,
           };
           lastBarRef.current = newBar;
           candlesRef.current.push(newBar);
-          pendingNewBarAppendedRef.current = true;
         } else if (currentCandleTime === last.time) {
           last.high = Math.max(last.high, tradePrice);
           last.low = Math.min(last.low, tradePrice);
           last.close = tradePrice;
-          last.volume = Number((last.volume + safeQty).toFixed(6));
-        } else {
-          return;
+          last.volume = Number((last.volume + tradeQty).toFixed(6));
         }
 
-        const curUser = userRef.current;
-        if (curUser && (trade.makerUserId === curUser.id || trade.takerUserId === curUser.id)) {
-          if (userTradeRefreshTimerRef.current) clearTimeout(userTradeRefreshTimerRef.current);
-          userTradeRefreshTimerRef.current = setTimeout(() => {
-            if (!isDisposedRef.current) setUserTradeRefreshTick(t => t + 1);
-          }, 400);
+        const activeBars = candlesRef.current;
+        const displayBars = activeChartType === 'HEIKIN_ASHI' ? computeHeikinAshi(activeBars) : activeBars;
+        const latestDisplay = displayBars[displayBars.length - 1];
+        const latestRaw = activeBars[activeBars.length - 1];
+
+        if (latestDisplay && latestRaw) {
+          if (activeChartType === 'LINE' || activeChartType === 'AREA' || activeChartType === 'BASELINE') {
+            mainSeriesRef.current.update({ time: latestDisplay.time as Time, value: latestDisplay.close });
+          } else {
+            mainSeriesRef.current.update({
+              time: latestDisplay.time as Time,
+              open: latestDisplay.open,
+              high: latestDisplay.high,
+              low: latestDisplay.low,
+              close: latestDisplay.close,
+            });
+          }
+          volumeSeriesRef.current.update({
+            time: latestRaw.time as Time,
+            value: latestRaw.volume,
+            color: latestRaw.close >= latestRaw.open ? 'rgba(22, 168, 121, 0.42)' : 'rgba(234, 91, 101, 0.42)',
+          });
         }
 
-        if (pendingRafFlushRef.current === null) {
-          pendingRafFlushRef.current = window.requestAnimationFrame(flushLiveCandleUpdate);
-        }
+        syncIndicatorsData(activeBars);
+        setCandlesTick(t => t + 1);
       } catch (err: any) {
         if (err?.message?.includes('disposed')) return;
       }
     },
-    [pair.id, quoteDec, baseDec, timeframe, flushLiveCandleUpdate]
+    [pair.id, quoteDec, baseDec, timeframe, activeChartType, syncIndicatorsData]
   );
 
-  // Initial historical REST load (ONLY on pair / timeframe change; NEVER on price ticks or indicator toggles!)
+  // Initial historical REST load (only on mount / pair / timeframe change; NEVER polled!)
   const loadInitialCandles = useCallback(async () => {
     const reqId = ++loadRequestIdRef.current;
-    hasLoadedInitialRef.current = false;
-    initialFetchStartedAtRef.current = Date.now();
-    queuedLiveTradesRef.current = [];
     setIsFetching(true);
     hasMoreHistoryRef.current = true;
-
-    // Seed existing recentTrades as already included in REST historical fetch window
-    for (const rt of recentTradesRef.current) {
-      if (rt && rt.pairId === pair.id) {
-        processedTradesRef.current.add(rt.id);
-      }
-    }
 
     try {
       const res = await fetch(`/api/trading/candles/${pair.id}?timeframe=${timeframe}&limit=250`);
@@ -1308,10 +965,9 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       if (isDisposedRef.current || reqId !== loadRequestIdRef.current) return;
       if (!chartRef.current || !mainSeriesRef.current || !volumeSeriesRef.current) return;
 
-      const fallbackLastPrice = pairLastPriceRef.current;
-      if ((!data || data.length === 0) && fallbackLastPrice) {
+      if ((!data || data.length === 0) && pair.lastPrice) {
         const divisor = 10n ** BigInt(quoteDec);
-        const pNum = Number(safeBigInt(fallbackLastPrice)) / Number(divisor);
+        const pNum = Number(safeBigInt(pair.lastPrice)) / Number(divisor);
         if (pNum > 0) {
           const nowSec = Math.floor(Date.now() / 1000);
           const interval = TF_SECONDS[timeframe] || 900;
@@ -1323,13 +979,9 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       if (Array.isArray(data) && data.length > 0) {
         candlesRef.current = data;
         lastBarRef.current = data[data.length - 1];
-        hasLoadedInitialRef.current = true;
-        indicatorSeededRef.current.clear();
-        indicatorLastTimeMapRef.current.clear();
-        syncMainAndVolumeDataRef.current(data);
-        syncIndicatorsDataRef.current(data, false);
-      } else {
-        hasLoadedInitialRef.current = true;
+        setCandlesTick(t => t + 1);
+        syncMainAndVolumeData(data);
+        syncIndicatorsData(data);
       }
 
       if (isFirstLoadRef.current) {
@@ -1338,31 +990,16 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
           chartRef.current?.timeScale().fitContent();
         } catch {}
       }
-
-      // Replay any WS live trades that arrived while REST candles were in flight
-      if (queuedLiveTradesRef.current.length > 0) {
-        const queued = queuedLiveTradesRef.current.splice(0);
-        for (const qt of queued) {
-          if (qt.createdAt >= initialFetchStartedAtRef.current - 1500) {
-            processSingleTrade(qt);
-          }
-        }
-      }
-
-      if (overlaysRef.current.showSupportResistance) {
-        setSrRefreshTick(t => t + 1);
-      }
-    } catch {
+    } catch (err: any) {
       if (isDisposedRef.current || reqId !== loadRequestIdRef.current) return;
-      hasLoadedInitialRef.current = true;
     } finally {
       if (reqId === loadRequestIdRef.current && !isDisposedRef.current) {
         setIsFetching(false);
       }
     }
-  }, [pair.id, quoteDec, timeframe, processSingleTrade]);
+  }, [pair.id, pair.lastPrice, quoteDec, timeframe, syncMainAndVolumeData, syncIndicatorsData]);
 
-  // Left-scroll lazy pagination when panning towards oldest visible bar (preserves exact viewport!)
+  // Left-scroll lazy pagination when panning towards oldest visible bar
   const loadOlderCandles = useCallback(async () => {
     if (isDisposedRef.current || isFetchingMoreRef.current || !hasMoreHistoryRef.current) return;
     const oldest = candlesRef.current[0];
@@ -1385,48 +1022,23 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
         hasMoreHistoryRef.current = false;
         return;
       }
-
-      const prevLogical = (() => {
-        try {
-          return chartRef.current?.timeScale().getVisibleLogicalRange() || null;
-        } catch {
-          return null;
-        }
-      })();
       const prevLen = candlesRef.current.length;
       const merged = mergeCandles(older);
-      const addedCount = merged.length - prevLen;
-      if (addedCount <= 0) {
+      if (merged.length === prevLen) {
         hasMoreHistoryRef.current = false;
         return;
       }
-
-      indicatorSeededRef.current.clear();
-      indicatorLastTimeMapRef.current.clear();
-      syncMainAndVolumeDataRef.current(merged);
-      syncIndicatorsDataRef.current(merged, false);
-
-      if (prevLogical && chartRef.current) {
-        try {
-          chartRef.current.timeScale().setVisibleLogicalRange({
-            from: prevLogical.from + addedCount,
-            to: prevLogical.to + addedCount,
-          });
-        } catch {}
-      }
-
-      if (overlaysRef.current.showSupportResistance) {
-        setSrRefreshTick(t => t + 1);
-      }
+      syncMainAndVolumeData(merged);
+      syncIndicatorsData(merged);
     } catch {
       // quiet
     } finally {
       isFetchingMoreRef.current = false;
       if (!isDisposedRef.current) setIsFetchingMore(false);
     }
-  }, [pair.id, timeframe, mergeCandles]);
+  }, [pair.id, timeframe, mergeCandles, syncMainAndVolumeData, syncIndicatorsData]);
 
-  // Delta resync on WebSocket reconnect (preserves user's scroll position if panned back)
+  // Delta resync on WebSocket reconnect
   const resyncReconnectDelta = useCallback(async () => {
     if (isDisposedRef.current || !lastBarRef.current) return;
     try {
@@ -1438,60 +1050,36 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       if (!res.ok || isDisposedRef.current) return;
       const delta: CandleItem[] = await res.json();
       if (Array.isArray(delta) && delta.length > 0) {
-        const ts = chartRef.current?.timeScale();
-        const prevLogical = (() => {
-          try {
-            return ts?.getVisibleLogicalRange() || null;
-          } catch {
-            return null;
-          }
-        })();
-        const prevScrollPos = ts?.scrollPosition() ?? 0;
-        const targetOffset = ts?.options().rightOffset ?? 6;
-        const wasScrolledBack = prevScrollPos < targetOffset - 1.5;
-
         const merged = mergeCandles(delta);
-        indicatorSeededRef.current.clear();
-        indicatorLastTimeMapRef.current.clear();
-        syncMainAndVolumeDataRef.current(merged);
-        syncIndicatorsDataRef.current(merged, false);
-
-        if (wasScrolledBack && prevLogical && ts) {
-          try {
-            ts.setVisibleLogicalRange(prevLogical);
-          } catch {}
-        }
-
-        if (overlaysRef.current.showSupportResistance) {
-          setSrRefreshTick(t => t + 1);
-        }
+        syncMainAndVolumeData(merged);
+        syncIndicatorsData(merged);
       }
     } catch {}
-  }, [pair.id, timeframe, mergeCandles]);
+  }, [pair.id, timeframe, mergeCandles, syncMainAndVolumeData, syncIndicatorsData]);
 
-  // Apply external recentTrades prop cleanly (never before initial load, and deduplicated)
+  // Reset per-pair tracking
   useEffect(() => {
-    if (!recentTrades || recentTrades.length === 0 || isDisposedRef.current || !hasLoadedInitialRef.current) return;
+    processedTradesRef.current.clear();
+    isFirstLoadRef.current = true;
+    hasMoreHistoryRef.current = true;
+    candlesRef.current = [];
+    lastBarRef.current = null;
+  }, [pair.id]);
+
+  // Apply external recentTrades prop cleanly (no polling needed)
+  useEffect(() => {
+    if (!recentTrades || recentTrades.length === 0 || isDisposedRef.current) return;
     const sorted = [...recentTrades].sort((a, b) => a.createdAt - b.createdAt);
     for (const trade of sorted) {
-      if (trade.pairId === pair.id && !processedTradesRef.current.has(trade.id)) {
-        processSingleTrade(trade);
-      }
+      if (trade.pairId === pair.id) processSingleTrade(trade);
     }
   }, [recentTrades, pair.id, processSingleTrade]);
 
-  // Load candles strictly when pair.id or timeframe changes (NEVER on price ticks or indicator toggles)
+  // Reload candles when timeframe changes
   useEffect(() => {
-    processedTradesRef.current.clear();
-    queuedLiveTradesRef.current = [];
     isFirstLoadRef.current = true;
-    hasLoadedInitialRef.current = false;
-    hasMoreHistoryRef.current = true;
-    candlesRef.current = [];
-    heikinAshiBarsRef.current = [];
-    lastBarRef.current = null;
     loadInitialCandles();
-  }, [pair.id, timeframe, loadInitialCandles]);
+  }, [timeframe, loadInitialCandles]);
 
   // Create & manage Lightweight Charts v5 instance on pair change
   useEffect(() => {
@@ -1538,22 +1126,6 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
         rightOffset: 6,
         barSpacing: 9,
         minBarSpacing: 3,
-        fixLeftEdge: false,
-        fixRightEdge: false,
-        lockVisibleTimeRangeOnResize: true,
-        rightBarStaysOnScroll: true,
-        shiftVisibleRangeOnNewBar: false,
-      },
-      handleScroll: {
-        mouseWheel: true,
-        pressedMouseMove: true,
-        horzTouchDrag: true,
-        vertTouchDrag: true,
-      },
-      handleScale: {
-        axisPressedMouseMove: true,
-        mouseWheel: true,
-        pinch: true,
       },
       rightPriceScale: {
         borderColor: '#202B34',
@@ -1581,14 +1153,12 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     chartRef.current = chart;
     volumeSeriesRef.current = volumeSeries;
 
-    lastBuiltMainKeyRef.current = `${pair.id}:${activeChartTypeRef.current}`;
-    buildMainSeries(chart, false);
-    lastBuiltIndicatorKeyRef.current = `${pair.id}:${indicatorStructureKey}:${compact}`;
-    rebuildIndicators(chart, false);
+    buildMainSeries(chart);
+    rebuildIndicators(chart);
 
     const rangeSub = (logicalRange: any) => {
       if (isDisposedRef.current || !logicalRange) return;
-      if (logicalRange.from < 8 && candlesRef.current.length > 0 && hasLoadedInitialRef.current) {
+      if (logicalRange.from < 8 && candlesRef.current.length > 0) {
         loadOlderCandles();
       }
     };
@@ -1606,7 +1176,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
         param.point.y > chartContainerRef.current.clientHeight
       ) {
         setHoverInfo(null);
-        onHoverInfoChangeRef.current?.(null);
+        onHoverInfoChange?.(null);
       } else if (mainSeriesRef.current) {
         const sData = param.seriesData.get(mainSeriesRef.current) as any;
         const vData = volumeSeriesRef.current ? (param.seriesData.get(volumeSeriesRef.current) as any) : null;
@@ -1635,7 +1205,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
             volume,
           };
           setHoverInfo(info);
-          onHoverInfoChangeRef.current?.(info);
+          onHoverInfoChange?.(info);
         }
       }
     });
@@ -1658,17 +1228,11 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       resizeObserver.observe(chartContainerRef.current);
     }
 
+    loadInitialCandles();
+
     return () => {
       isDisposedRef.current = true;
       loadRequestIdRef.current++;
-      if (pendingRafFlushRef.current !== null) {
-        window.cancelAnimationFrame(pendingRafFlushRef.current);
-        pendingRafFlushRef.current = null;
-      }
-      if (userTradeRefreshTimerRef.current) {
-        clearTimeout(userTradeRefreshTimerRef.current);
-        userTradeRefreshTimerRef.current = null;
-      }
       window.removeEventListener('resize', handleResize);
       if (resizeObserver) {
         resizeObserver.disconnect();
@@ -1692,32 +1256,23 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       mainSeriesRef.current = null;
       volumeSeriesRef.current = null;
       indicatorSeriesRef.current.clear();
-      indicatorSeededRef.current.clear();
-      indicatorLastTimeMapRef.current.clear();
       overlayPriceLinesRef.current = [];
-      srPriceLinesRef.current = [];
     };
   }, [pair.id]);
 
-  // Rebuild main series dynamically when chartType changes (preserves user scroll/zoom)
+  // Rebuild main series dynamically when chartType changes
   useEffect(() => {
-    const key = `${pair.id}:${activeChartType}`;
-    if (lastBuiltMainKeyRef.current === key) return;
-    lastBuiltMainKeyRef.current = key;
     if (!isDisposedRef.current && chartRef.current) {
-      buildMainSeries(chartRef.current, true);
+      buildMainSeries(chartRef.current);
     }
-  }, [pair.id, activeChartType, buildMainSeries]);
+  }, [activeChartType, buildMainSeries]);
 
-  // Rebuild indicators cleanly when config toggles/params change (preserves user scroll/zoom)
+  // Rebuild indicators cleanly when config toggles/params change
   useEffect(() => {
-    const key = `${pair.id}:${indicatorStructureKey}:${compact}`;
-    if (lastBuiltIndicatorKeyRef.current === key) return;
-    lastBuiltIndicatorKeyRef.current = key;
     if (!isDisposedRef.current && chartRef.current) {
-      rebuildIndicators(chartRef.current, true);
+      rebuildIndicators(chartRef.current);
     }
-  }, [pair.id, indicatorStructureKey, compact, rebuildIndicators]);
+  }, [indicators, rebuildIndicators]);
 
   // Apply price scale & crosshair options cleanly
   useEffect(() => {
@@ -1735,16 +1290,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     } catch {}
   }, [autoScale, logScale, crosshairMode]);
 
-  // Fetch user's real trade fills & avg entry when authenticated & overlay active (only when user trades or orders change)
-  const openOrdersSignature = useMemo(
-    () =>
-      openOrders
-        .filter(o => o.pairId === pair.id)
-        .map(o => `${o.id}:${o.status}:${o.filledQuantity}`)
-        .join('|'),
-    [openOrders, pair.id]
-  );
-
+  // Fetch user's real trade fills & avg entry when authenticated & overlay active
   useEffect(() => {
     const needUserTrades =
       Boolean(user) && (overlays.showUserTrades || overlays.showAvgEntry || overlays.showPositionPrice);
@@ -1768,15 +1314,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     return () => {
       active = false;
     };
-  }, [
-    pair.id,
-    user?.id,
-    overlays.showUserTrades,
-    overlays.showAvgEntry,
-    overlays.showPositionPrice,
-    openOrdersSignature,
-    userTradeRefreshTick,
-  ]);
+  }, [pair.id, user, overlays.showUserTrades, overlays.showAvgEntry, overlays.showPositionPrice, candlesTick]);
 
   // Fetch user's real Price Alerts
   const fetchPriceAlerts = useCallback(() => {
@@ -1799,38 +1337,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     fetchPriceAlerts();
   }, [fetchPriceAlerts]);
 
-  // Render Support & Resistance PriceLines (only updated on candle load or new bar close/open)
-  useEffect(() => {
-    if (isDisposedRef.current || !mainSeriesRef.current) return;
-    const series = mainSeriesRef.current;
-
-    for (const pl of srPriceLinesRef.current) {
-      try {
-        series.removePriceLine(pl);
-      } catch {}
-    }
-    srPriceLinesRef.current = [];
-
-    if (overlays.showSupportResistance && candlesRef.current.length >= 15) {
-      const srLevels = detectSupportResistanceLevels(candlesRef.current, 5, 2);
-      for (const lvl of srLevels) {
-        try {
-          srPriceLinesRef.current.push(
-            series.createPriceLine({
-              price: lvl.price,
-              color: lvl.kind === 'SUPPORT' ? 'rgba(22, 168, 121, 0.75)' : 'rgba(234, 91, 101, 0.75)',
-              lineWidth: 1,
-              lineStyle: 1,
-              axisLabelVisible: true,
-              title: `${lvl.kind === 'SUPPORT' ? 'SUP' : 'RES'} (${lvl.touches})`,
-            })
-          );
-        } catch {}
-      }
-    }
-  }, [pair.id, activeChartType, overlays.showSupportResistance, srRefreshTick]);
-
-  // Render Market Overlays (Open Orders, Trade Markers, Avg Entry, Position, Ext Ref, Price Alerts)
+  // Render Market Overlays (Open Orders, Trade Markers, Avg Entry, Position, Ext Ref, Support/Resistance, Price Alerts)
   useEffect(() => {
     if (isDisposedRef.current || !mainSeriesRef.current) return;
     const series = mainSeriesRef.current;
@@ -1921,7 +1428,26 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       }
     }
 
-    // 4. Real Price Alerts
+    // 4. Support & Resistance (Real OHLCV Pivot Levels)
+    if (overlays.showSupportResistance && candlesRef.current.length >= 15) {
+      const srLevels = detectSupportResistanceLevels(candlesRef.current, 5, 2);
+      for (const lvl of srLevels) {
+        try {
+          overlayPriceLinesRef.current.push(
+            series.createPriceLine({
+              price: lvl.price,
+              color: lvl.kind === 'SUPPORT' ? 'rgba(22, 168, 121, 0.75)' : 'rgba(234, 91, 101, 0.75)',
+              lineWidth: 1,
+              lineStyle: 1,
+              axisLabelVisible: true,
+              title: `${lvl.kind === 'SUPPORT' ? 'SUP' : 'RES'} (${lvl.touches})`,
+            })
+          );
+        } catch {}
+      }
+    }
+
+    // 5. Real Price Alerts
     if (overlays.showPriceAlerts && priceAlerts.length > 0) {
       for (const al of priceAlerts) {
         const pVal = Number(safeBigInt(al.thresholdPrice)) / quoteDivisor;
@@ -1941,7 +1467,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
       }
     }
 
-    // 5. User Trade Execution Markers
+    // 6. User Trade Execution Markers
     if (markersPluginRef.current) {
       if (overlays.showUserTrades && userTradesData && userTradesData.trades.length > 0) {
         const markers: SeriesMarker<Time>[] = userTradesData.trades
@@ -1973,23 +1499,18 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
     isUSDT,
     timeframe,
     activeChartType,
-    overlays.showOpenOrders,
-    overlays.showUserTrades,
-    overlays.showAvgEntry,
-    overlays.showPositionPrice,
-    overlays.showRefBenchmark,
-    overlays.showPriceAlerts,
+    overlays,
     openOrders,
     userTradesData,
     refPriceData,
     priceAlerts,
+    candlesTick,
   ]);
 
   // WebSocket-only Real-Time Subscription + Reconnect Delta Resync
   useEffect(() => {
     if (!isWebSocketSupported()) return;
     let ws: WebSocket | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let isDisposed = false;
     hasConnectedOnceRef.current = false;
 
@@ -2029,7 +1550,7 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
         ws.onclose = () => {
           if (!isDisposed) setWsConnected(false);
           if (!isDisposed && !isDisposedRef.current && isWebSocketSupported()) {
-            reconnectTimer = setTimeout(connectWs, 3000);
+            setTimeout(connectWs, 3000);
           }
         };
       } catch {}
@@ -2039,7 +1560,6 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
 
     return () => {
       isDisposed = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
       setWsConnected(false);
       if (ws) ws.close();
     };
@@ -2595,9 +2115,9 @@ export const DimonexChart: React.FC<DimonexChartProps> = ({
           )}
         </div>
 
-        <div className="flex items-center gap-1.5 text-[#71818B] text-[10px] whitespace-nowrap shrink-0">
+        <div className="flex items-center gap-1.5 text-[#71818B] text-[10px] whitespace-nowrap">
           <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? 'bg-[#16A879]' : 'bg-[#D6A85C]'}`} />
-          <span>{isFetchingMore ? 'History...' : wsConnected ? 'WS Live' : 'Reconnecting'}</span>
+          <span>{isFetchingMore ? 'Loading history...' : wsConnected ? 'WS Live' : 'Reconnecting'}</span>
         </div>
       </div>
 
