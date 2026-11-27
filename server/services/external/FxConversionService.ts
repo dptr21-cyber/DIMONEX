@@ -13,18 +13,8 @@
  */
 
 import crypto from 'crypto';
-import dns from 'node:dns';
 import { db } from '../../db/database.js';
 import { FxRateRecord, FxRateAuditEntry, FxConversionConfig } from './ExternalFeedTypes.js';
-
-try {
-  dns.setDefaultResultOrder('ipv4first');
-} catch {}
-
-const FX_FETCH_HEADERS = {
-  Accept: 'application/json',
-  'User-Agent': 'DIMONEX-FX-Engine/1.0',
-};
 
 export class FxConversionService {
   private currentRate: FxRateRecord;
@@ -34,20 +24,10 @@ export class FxConversionService {
   private backgroundTimer: NodeJS.Timeout | null = null;
   private cmcRateLimitedUntil = 0;
   private hasLoggedCmcQuota = false;
-  private providerCooldownUntil: Map<string, number> = new Map();
-  private providerCooldownLogged: Set<string> = new Set();
-  private inFlightSyncPromise: Promise<{
-    success: boolean;
-    rateRecord?: FxRateRecord;
-    error?: string;
-    source?: string;
-    cached?: boolean;
-    message?: string;
-  }> | null = null;
 
   constructor() {
     const now = Date.now();
-    // Default initial baseline rate before first live fetch resolves
+    // Default initial rate: 16,350 IDR per USDT, valid for 48 hours
     this.currentRate = {
       rate: 16350.00,
       source: 'SYSTEM_DEFAULT',
@@ -58,14 +38,13 @@ export class FxConversionService {
       notes: 'Initial production baseline USDT/IDR rate.'
     };
 
-    // Default configuration: 15 minutes sync interval to conserve CoinMarketCap API quota.
-    // nextCmcFetchTimestamp starts at 0 so the initial boot sync immediately fetches a real live rate.
+    // Default configuration: 15 minutes sync interval to conserve CoinMarketCap API quota
     this.config = {
       syncIntervalMinutes: 15, // 15 mins (saves API calls: ~96 calls/day instead of 86,400)
       isManualLocked: false,
-      lastCmcFetchTimestamp: 0,
-      nextCmcFetchTimestamp: 0,
-      cmcApiCallsCount: 0,
+      lastCmcFetchTimestamp: now,
+      nextCmcFetchTimestamp: now + 15 * 60 * 1000,
+      cmcApiCallsCount: 1,
       quotaSavedCount: 0
     };
 
@@ -111,7 +90,6 @@ export class FxConversionService {
         }
       }
     }, 60000); // Check every 60 seconds (cache saver skips actual API calls within syncIntervalMinutes)
-    this.backgroundTimer.unref?.();
   }
 
   public isCmcQuotaExhausted(now = Date.now()): boolean {
@@ -317,30 +295,8 @@ export class FxConversionService {
     return { success: true, rateRecord: this.getCurrentRate() };
   }
 
-  private isValidIdrRate(rate: number): boolean {
-    return Number.isFinite(rate) && rate >= 1000 && rate <= 100000;
-  }
-
-  private isProviderInCooldown(providerKey: string, now = Date.now()): boolean {
-    return now < (this.providerCooldownUntil.get(providerKey) || 0);
-  }
-
-  private markProviderFailure(providerKey: string, errMsg: string, cooldownMs = 30 * 60 * 1000) {
-    const now = Date.now();
-    this.providerCooldownUntil.set(providerKey, now + cooldownMs);
-    if (!this.providerCooldownLogged.has(providerKey)) {
-      this.providerCooldownLogged.add(providerKey);
-      console.log(`[FxConversionService] ${providerKey} unavailable (${errMsg}); backing off for ${Math.round(cooldownMs / 60000)}m and using alternate FX feeds.`);
-    }
-  }
-
-  private markProviderHealthy(providerKey: string) {
-    this.providerCooldownUntil.delete(providerKey);
-    this.providerCooldownLogged.delete(providerKey);
-  }
-
   /**
-   * Fetch live USDT/IDR FX rate directly from external APIs with intelligent cache, single-flight lock & interval control.
+   * Fetch live USDT/IDR FX rate directly from external APIs with intelligent cache & interval control.
    * If called within the configured sync interval and force is false: returns cached rate, saving API credits.
    */
   public async fetchAndSyncLiveRate(
@@ -361,14 +317,8 @@ export class FxConversionService {
       };
     }
 
-    // 2. Check sync interval cooldown to conserve external API calls (only when a live sync has already run)
-    if (
-      !force &&
-      this.config.syncIntervalMinutes > 0 &&
-      this.config.lastCmcFetchTimestamp > 0 &&
-      this.currentRate.source !== 'SYSTEM_DEFAULT' &&
-      now < this.config.nextCmcFetchTimestamp
-    ) {
+    // 2. Check sync interval cooldown to conserve CoinMarketCap API calls
+    if (!force && this.config.syncIntervalMinutes > 0 && now < this.config.nextCmcFetchTimestamp) {
       this.config.quotaSavedCount++;
       return {
         success: true,
@@ -379,29 +329,12 @@ export class FxConversionService {
       };
     }
 
-    if (this.inFlightSyncPromise) {
-      return this.inFlightSyncPromise;
-    }
-
-    this.inFlightSyncPromise = this.executeLiveRateFetch(actorEmail, validityHours, force).finally(() => {
-      this.inFlightSyncPromise = null;
-    });
-
-    return this.inFlightSyncPromise;
-  }
-
-  private async executeLiveRateFetch(
-    actorEmail: string,
-    validityHours: number,
-    force: boolean
-  ): Promise<{ success: boolean; rateRecord?: FxRateRecord; error?: string; source?: string; cached?: boolean; message?: string }> {
-    const now = Date.now();
+    // 3. Make live API call (CoinMarketCap Pro API) unless monthly quota cooldown is active
     this.config.lastCmcFetchTimestamp = now;
     if (this.config.syncIntervalMinutes > 0) {
       this.config.nextCmcFetchTimestamp = now + this.config.syncIntervalMinutes * 60 * 1000;
     }
 
-    // 3. CoinMarketCap Pro API (unless monthly quota cooldown is active)
     if (!this.isCmcQuotaExhausted(now)) {
       this.config.cmcApiCallsCount++;
       try {
@@ -409,14 +342,14 @@ export class FxConversionService {
         const res = await fetch('https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=USDT&convert=IDR', {
           headers: {
             'X-CMC_PRO_API_KEY': cmcApiKey,
-            ...FX_FETCH_HEADERS,
+            'Accept': 'application/json'
           },
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(6000)
         });
         if (res.ok) {
           const data = await res.json();
-          const price = Number(data?.data?.USDT?.quote?.IDR?.price);
-          if (this.isValidIdrRate(price)) {
+          const price = data?.data?.USDT?.quote?.IDR?.price;
+          if (price && typeof price === 'number' && price > 0) {
             this.hasLoggedCmcQuota = false;
             const syncRes = this.syncWithCoinMarketCap(price, actorEmail, validityHours);
             return { success: true, rateRecord: syncRes.rateRecord, source: 'COINMARKETCAP', cached: false };
@@ -424,105 +357,45 @@ export class FxConversionService {
         } else if (res.status === 429 || res.status === 402 || res.status === 403) {
           this.markCmcQuotaExhausted(12 * 60 * 60 * 1000);
         }
-      } catch {
-        // Proceed to public fallback feeds
-      }
-    }
-
-    // 4. Multi-provider public live feeds with per-provider circuit breakers (zero timeout spam)
-    const providers: Array<{
-      key: string;
-      sourceName: string;
-      note: string;
-      fetchRate: () => Promise<number>;
-    }> = [
-      {
-        key: 'CoinGecko',
-        sourceName: 'COINGECKO',
-        note: 'Disinkronkan dari CoinGecko Public Live Ticker API',
-        fetchRate: async () => {
-          const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=idr', {
-            headers: FX_FETCH_HEADERS,
-            signal: AbortSignal.timeout(8000),
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
-          return parseFloat(data?.tether?.idr);
-        },
-      },
-      {
-        key: 'OpenExchangeRates',
-        sourceName: 'OPEN_EXCHANGE_RATES',
-        note: 'Disinkronkan dari Open Exchange Rates live USD/IDR forex API',
-        fetchRate: async () => {
-          const res = await fetch('https://open.er-api.com/v6/latest/USD', {
-            headers: FX_FETCH_HEADERS,
-            signal: AbortSignal.timeout(8000),
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
-          return Number(data?.rates?.IDR);
-        },
-      },
-      {
-        key: 'CurrencyApiCDN',
-        sourceName: 'CURRENCY_API_CDN',
-        note: 'Disinkronkan dari Currency API CDN live USD/IDR feed',
-        fetchRate: async () => {
-          const res = await fetch('https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json', {
-            headers: FX_FETCH_HEADERS,
-            signal: AbortSignal.timeout(8000),
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
-          return Number(data?.usd?.idr);
-        },
-      },
-      {
-        key: 'FrankfurterECB',
-        sourceName: 'FRANKFURTER_ECB',
-        note: 'Disinkronkan dari Frankfurter ECB live USD/IDR forex API',
-        fetchRate: async () => {
-          const res = await fetch('https://api.frankfurter.app/latest?from=USD&to=IDR', {
-            headers: FX_FETCH_HEADERS,
-            signal: AbortSignal.timeout(8000),
-          });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
-          return Number(data?.rates?.IDR);
-        },
-      },
-    ];
-
-    // First pass: try providers not currently in cooldown
-    // Second pass (only if force=true and all healthy providers failed): try cooled-down providers too
-    const orderedCandidates = [
-      ...providers.filter(p => !this.isProviderInCooldown(p.key, now)),
-      ...(force ? providers.filter(p => this.isProviderInCooldown(p.key, now)) : []),
-    ];
-    // If all providers are in cooldown on a scheduled tick, reset cooldowns so we can recover
-    const candidates = orderedCandidates.length > 0 ? orderedCandidates : providers;
-
-    for (const provider of candidates) {
-      try {
-        const price = await provider.fetchRate();
-        if (this.isValidIdrRate(price)) {
-          this.markProviderHealthy(provider.key);
-          const syncRes = this.syncWithLiveRate(price, 'LIVE_API', actorEmail, validityHours, provider.note);
-          return { success: true, rateRecord: syncRes.rateRecord, source: provider.sourceName, cached: false };
-        }
-        this.markProviderFailure(provider.key, 'Invalid IDR rate payload');
       } catch (e: any) {
-        this.markProviderFailure(provider.key, e?.message || 'Fetch error');
+        // CMC call failed or quota reached, proceed to CoinGecko / Forex fallback
       }
     }
 
-    // Short retry backoff (2m) when all external providers failed so boot recovers quickly
-    if (this.config.syncIntervalMinutes > 0) {
-      this.config.nextCmcFetchTimestamp = Date.now() + 2 * 60 * 1000;
+    // 4. Fallback: CoinGecko Public Spot Exchange FX Rate (USDT/IDR)
+    try {
+      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=idr', {
+        signal: AbortSignal.timeout(6000)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const price = parseFloat(data?.tether?.idr);
+        if (price && !isNaN(price) && price > 0) {
+          const syncRes = this.syncWithLiveRate(price, 'LIVE_API', actorEmail, validityHours, 'Disinkronkan dari CoinGecko Public Live Ticker API');
+          return { success: true, rateRecord: syncRes.rateRecord, source: 'LIVE_API', cached: false };
+        }
+      }
+    } catch (e: any) {
+      console.warn('[FxConversionService] CoinGecko live rate fetch failed, trying Open Exchange Rates:', e.message);
     }
 
-    console.warn('[FxConversionService] All external FX providers failed on this cycle; retaining current rate Rp', this.currentRate.rate);
+    // 5. Fallback: Open Exchange Rates
+    try {
+      const res = await fetch('https://open.er-api.com/v6/latest/USD', {
+        signal: AbortSignal.timeout(6000)
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const price = data?.rates?.IDR;
+        if (price && typeof price === 'number' && price > 0) {
+          const syncRes = this.syncWithLiveRate(price, 'LIVE_API', actorEmail, validityHours, 'Disinkronkan dari Open Exchange Rates live USD/IDR forex API');
+          return { success: true, rateRecord: syncRes.rateRecord, source: 'LIVE_API', cached: false };
+        }
+      }
+    } catch (e: any) {
+      console.warn('[FxConversionService] Open Exchange Rate API fetch failed:', e.message);
+    }
+
     return { success: false, error: 'Gagal mengambil kurs real live USDT/IDR dari API eksternal.' };
   }
 

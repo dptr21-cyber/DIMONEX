@@ -13,11 +13,6 @@ import { WebSocketServer } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
-import dns from 'node:dns';
-
-try {
-  dns.setDefaultResultOrder('ipv4first');
-} catch {}
 
 import { authRouter } from './routes/auth.js';
 import { kycRouter } from './routes/kyc.js';
@@ -211,32 +206,12 @@ export async function startServer() {
     copyTradingService.start();
     pnlService.startScheduler();
     modularBotOrchestrator.startRecovery();
-  });
 
-  // Clean graceful shutdown for PM2 / Cloud Run SIGTERM & SIGINT
-  let isShuttingDown = false;
-  const gracefulShutdown = (signal: string) => {
-    if (isShuttingDown) return;
-    isShuttingDown = true;
-    console.log(`[DIMONEX] Received ${signal}, flushing state and shutting down cleanly...`);
-    try {
-      db.flushSync();
-    } catch {}
-    try {
-      wss.close();
-    } catch {}
-    try {
-      server.close(() => {
-        process.exit(0);
-      });
-    } catch {
-      process.exit(0);
-    }
-    const forceExitTimer = setTimeout(() => process.exit(0), 1500);
-    forceExitTimer.unref?.();
-  };
-  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+    // Background periodic live rate sync every 120 seconds (respects syncIntervalMinutes cache & CMC cooldown)
+    setInterval(() => {
+      fxConversionService.fetchAndSyncLiveRate('system@dimonex.id', 12).catch(() => {});
+    }, 120_000);
+  });
 }
 
 // Auto-start if executed directly

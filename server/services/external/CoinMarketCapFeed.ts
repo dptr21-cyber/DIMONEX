@@ -94,7 +94,6 @@ export class CoinMarketCapFeed implements ExternalMarketDataProvider {
           this.metrics.lastError = err.message;
         });
       }, 60000);
-      this.pollInterval.unref?.();
     } catch (err: any) {
       this.status = 'DEGRADED';
       this.metrics.lastError = err.message;
@@ -374,83 +373,111 @@ export class CoinMarketCapFeed implements ExternalMarketDataProvider {
       }
     } catch {}
 
-    // 2. Delegate USDT/IDR FX sync to shared FxConversionService (uses single-flight lock, interval cache & circuit breakers)
-    try {
-      const fxResult = await fxConversionService.fetchAndSyncLiveRate('cmc-fallback@dimonex.id', 6, false);
-      const fxRate = fxResult.rateRecord?.rate || fxConversionService.getCurrentRate().rate;
-      if (fxRate > 0 && fxConversionService.getCurrentRate().source !== 'SYSTEM_DEFAULT') {
-        const spread = fxRate * 0.0002;
-        this.ticks.set('USDTIDR', {
-          provider: 'coinmarketcap',
-          symbol: 'USDTIDR',
-          lastPrice: parseFloat(fxRate.toFixed(2)),
-          bestBid: parseFloat((fxRate - spread).toFixed(2)),
-          bestAsk: parseFloat((fxRate + spread).toFixed(2)),
-          exchangeTimestamp: now,
-          receivedAt: now,
-          latencyMs: 40,
-          isFresh: true,
-          isValid: true
-        });
-        updatedTicks++;
-      }
-    } catch {}
+    // 2. Throttle CoinGecko & Open Exchange Rates REST fallback calls to at most once every 5 minutes
+    //    so we never trigger CoinGecko 429s or waste CPU/network on 30-60s polling loops.
+    const needsExternalFx =
+      !this.ticks.get('USDTIDR')?.lastPrice ||
+      !this.ticks.get('BTCUSDT')?.lastPrice ||
+      !this.ticks.get('ETHUSDT')?.lastPrice ||
+      now - this.lastExternalFallbackFetchAt >= 5 * 60 * 1000;
 
-    // 3. Only query CoinGecko for BTC/ETH if both Binance and Bybit WS feeds failed to supply them
-    const needsSpotCryptoFallback =
-      (!this.ticks.get('BTCUSDT')?.lastPrice || !this.ticks.get('ETHUSDT')?.lastPrice) &&
-      now - this.lastExternalFallbackFetchAt >= 15 * 60 * 1000;
-
-    if (needsSpotCryptoFallback) {
+    if (needsExternalFx) {
       this.lastExternalFallbackFetchAt = now;
       try {
         const cgRes = await fetch(
-          'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd',
-          {
-            headers: { Accept: 'application/json', 'User-Agent': 'DIMONEX-FX-Engine/1.0' },
-            signal: AbortSignal.timeout(8000)
-          }
+          'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,tether&vs_currencies=usd,idr',
+          { signal: AbortSignal.timeout(6000) }
         );
-        if (cgRes.ok) {
-          const cgData = await cgRes.json();
+      if (cgRes.ok) {
+        const cgData = await cgRes.json();
 
-          if (!this.ticks.get('BTCUSDT')?.lastPrice && cgData.bitcoin?.usd) {
-            const btcPrice = parseFloat(cgData.bitcoin.usd);
-            const spread = btcPrice * 0.0001;
-            this.ticks.set('BTCUSDT', {
-              provider: 'coinmarketcap',
-              symbol: 'BTCUSDT',
-              lastPrice: parseFloat(btcPrice.toFixed(2)),
-              bestBid: parseFloat((btcPrice - spread).toFixed(2)),
-              bestAsk: parseFloat((btcPrice + spread).toFixed(2)),
-              exchangeTimestamp: now,
-              receivedAt: now,
-              latencyMs: 45,
-              isFresh: true,
-              isValid: true
-            });
-            updatedTicks++;
-          }
+        // If BTC wasn't updated yet from Binance/Bybit
+        if (!this.ticks.get('BTCUSDT')?.lastPrice && cgData.bitcoin?.usd) {
+          const btcPrice = parseFloat(cgData.bitcoin.usd);
+          const spread = btcPrice * 0.0001;
+          this.ticks.set('BTCUSDT', {
+            provider: 'coinmarketcap',
+            symbol: 'BTCUSDT',
+            lastPrice: parseFloat(btcPrice.toFixed(2)),
+            bestBid: parseFloat((btcPrice - spread).toFixed(2)),
+            bestAsk: parseFloat((btcPrice + spread).toFixed(2)),
+            exchangeTimestamp: now,
+            receivedAt: now,
+            latencyMs: 45,
+            isFresh: true,
+            isValid: true
+          });
+          updatedTicks++;
+        }
 
-          if (!this.ticks.get('ETHUSDT')?.lastPrice && cgData.ethereum?.usd) {
-            const ethPrice = parseFloat(cgData.ethereum.usd);
-            const spread = ethPrice * 0.0001;
-            this.ticks.set('ETHUSDT', {
-              provider: 'coinmarketcap',
-              symbol: 'ETHUSDT',
-              lastPrice: parseFloat(ethPrice.toFixed(2)),
-              bestBid: parseFloat((ethPrice - spread).toFixed(2)),
-              bestAsk: parseFloat((ethPrice + spread).toFixed(2)),
-              exchangeTimestamp: now,
-              receivedAt: now,
-              latencyMs: 45,
-              isFresh: true,
-              isValid: true
-            });
-            updatedTicks++;
-          }
+        // If ETH wasn't updated yet from Binance/Bybit
+        if (!this.ticks.get('ETHUSDT')?.lastPrice && cgData.ethereum?.usd) {
+          const ethPrice = parseFloat(cgData.ethereum.usd);
+          const spread = ethPrice * 0.0001;
+          this.ticks.set('ETHUSDT', {
+            provider: 'coinmarketcap',
+            symbol: 'ETHUSDT',
+            lastPrice: parseFloat(ethPrice.toFixed(2)),
+            bestBid: parseFloat((ethPrice - spread).toFixed(2)),
+            bestAsk: parseFloat((ethPrice + spread).toFixed(2)),
+            exchangeTimestamp: now,
+            receivedAt: now,
+            latencyMs: 45,
+            isFresh: true,
+            isValid: true
+          });
+          updatedTicks++;
+        }
+
+        // USDT/IDR Rate from CoinGecko
+        if (cgData.tether?.idr) {
+          const usdtIdr = parseFloat(cgData.tether.idr);
+          const spread = usdtIdr * 0.0002;
+          this.ticks.set('USDTIDR', {
+            provider: 'coinmarketcap',
+            symbol: 'USDTIDR',
+            lastPrice: parseFloat(usdtIdr.toFixed(2)),
+            bestBid: parseFloat((usdtIdr - spread).toFixed(2)),
+            bestAsk: parseFloat((usdtIdr + spread).toFixed(2)),
+            exchangeTimestamp: now,
+            receivedAt: now,
+            latencyMs: 45,
+            isFresh: true,
+            isValid: true
+          });
+          fxConversionService.syncWithLiveRate(usdtIdr, 'LIVE_API', 'coingecko-feed@dimonex.id', 6, 'Sinkronisasi kurs USDT/IDR dari CoinGecko live API');
+          updatedTicks++;
+        }
         }
       } catch {}
+
+      // 3. Fallback for USDT/IDR from Open Exchange Rates if CoinGecko is unreachable
+      if (!this.ticks.get('USDTIDR')?.lastPrice || (now - (this.ticks.get('USDTIDR')?.receivedAt || 0) > 300000)) {
+        try {
+          const forexRes = await fetch('https://open.er-api.com/v6/latest/USD', { signal: AbortSignal.timeout(5000) });
+          if (forexRes.ok) {
+            const forexData = await forexRes.json();
+            const rate = parseFloat(forexData?.rates?.IDR);
+            if (rate > 0) {
+              const spread = rate * 0.0002;
+              this.ticks.set('USDTIDR', {
+                provider: 'coinmarketcap',
+                symbol: 'USDTIDR',
+                lastPrice: parseFloat(rate.toFixed(2)),
+                bestBid: parseFloat((rate - spread).toFixed(2)),
+                bestAsk: parseFloat((rate + spread).toFixed(2)),
+                exchangeTimestamp: now,
+                receivedAt: now,
+                latencyMs: 40,
+                isFresh: true,
+                isValid: true
+              });
+              fxConversionService.syncWithLiveRate(rate, 'LIVE_API', 'forex-feed@dimonex.id', 6, 'Sinkronisasi kurs USDT/IDR dari Open Forex API');
+              updatedTicks++;
+            }
+          }
+        } catch {}
+      }
     }
 
     if (updatedTicks > 0) {
