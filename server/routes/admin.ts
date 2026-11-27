@@ -21,7 +21,7 @@ import {
   executeDelistMarket,
   relistMarket
 } from '../services/MarketLifecycleScheduler.js';
-import { earnService } from '../services/earn/EarnService.js';
+import { earnService, EarnVaultConflictError } from '../services/earn/EarnService.js';
 import { copyTradingService } from '../services/copy/CopyTradingService.js';
 import { matchingEngine } from '../engine/MatchingEngine.js';
 
@@ -791,6 +791,103 @@ adminRouter.post('/earn/pools/update', requireAdmin, (req, res) => {
     });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// DELETE /api/admin/earn/pools/:id - Delete a specific Earn/Staking Vault (with 409 conflict guard & ?force=1 custody refund)
+adminRouter.delete('/earn/pools/:id', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const vaultId = String(req.params.id || '').trim();
+    if (!/^[a-zA-Z0-9_-]{3,64}$/.test(vaultId)) {
+      return res.status(400).json({ error: 'ID vault tidak valid' });
+    }
+    const force =
+      req.query.force === '1' ||
+      req.query.force === 'true' ||
+      Boolean(req.body?.force);
+
+    const result = earnService.deleteVault(vaultId, adminUser.id, { force });
+    res.json({
+      success: true,
+      message: `Vault ${result.name} (${result.asset}) berhasil dihapus${result.refundedPositionsCount > 0 ? ` dan ${result.refundedPositionsCount} posisi (${result.refundedPrincipalDisplay} ${result.asset}) dikembalikan ke dompet Spot pengguna` : ''}.`,
+      ...result,
+    });
+  } catch (err: any) {
+    if (err instanceof EarnVaultConflictError) {
+      return res.status(409).json({
+        error: err.message,
+        requiresForce: true,
+        dependencies: err.dependencies,
+      });
+    }
+    const status = String(err?.message || '').includes('tidak ditemukan') ? 404 : 400;
+    res.status(status).json({ error: err?.message || 'Gagal menghapus Earn Vault' });
+  }
+});
+
+// DELETE /api/admin/earn/tokens/:symbol - Delete all Earn/Staking Vaults for a token symbol
+adminRouter.delete('/earn/tokens/:symbol', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const symbol = String(req.params.symbol || '').trim().toUpperCase();
+    if (!/^[A-Z0-9]{1,20}$/.test(symbol)) {
+      return res.status(400).json({ error: 'Simbol token tidak valid' });
+    }
+    const force =
+      req.query.force === '1' ||
+      req.query.force === 'true' ||
+      Boolean(req.body?.force);
+
+    const result = earnService.deleteVaultsByAsset(symbol, adminUser.id, {
+      force,
+      throwIfEmpty: true,
+    });
+    res.json({
+      success: true,
+      message: `${result.deletedCount} vault token ${result.asset} berhasil dihapus${result.refundedPositionsCount > 0 ? ` (${result.refundedPositionsCount} posisi senilai ${result.refundedPrincipalDisplay} ${result.asset} dikembalikan ke dompet Spot)` : ''}.`,
+      ...result,
+    });
+  } catch (err: any) {
+    if (err instanceof EarnVaultConflictError) {
+      return res.status(409).json({
+        error: err.message,
+        requiresForce: true,
+        dependencies: err.dependencies,
+      });
+    }
+    const status = String(err?.message || '').includes('Tidak ditemukan') ? 404 : 400;
+    res.status(status).json({ error: err?.message || 'Gagal menghapus vault token' });
+  }
+});
+
+// POST /api/admin/earn/pools/cleanup-delisted - Purge all Earn vaults tied to deleted or delisted assets
+adminRouter.post('/earn/pools/cleanup-delisted', requireAdmin, (req, res) => {
+  try {
+    const adminUser = (req as any).user;
+    const force =
+      req.query.force === '1' ||
+      req.query.force === 'true' ||
+      Boolean(req.body?.force);
+
+    const result = earnService.cleanupOrphanedVaults(adminUser.id, { force });
+    res.json({
+      success: true,
+      message:
+        result.deletedCount > 0
+          ? `${result.deletedCount} vault aset terhapus/delisted (${result.affectedAssets.join(', ')}) berhasil dibersihkan${result.refundedPositionsCount > 0 ? ` (${result.refundedPositionsCount} posisi direfund ke dompet Spot)` : ''}.`
+          : 'Tidak ada vault aset terhapus atau delisted yang perlu dibersihkan.',
+      ...result,
+    });
+  } catch (err: any) {
+    if (err instanceof EarnVaultConflictError) {
+      return res.status(409).json({
+        error: err.message,
+        requiresForce: true,
+        dependencies: err.dependencies,
+      });
+    }
+    res.status(400).json({ error: err?.message || 'Gagal membersihkan vault aset delisted' });
   }
 });
 
@@ -1653,14 +1750,12 @@ adminRouter.delete('/assets/:id', requireAdmin, (req, res) => {
       }
     }
 
-    // Pause any Earn vaults tied to the deleted token
-    for (const vault of db.earnVaults.values()) {
-      if (vault.asset.toUpperCase() === sym && vault.status === 'ACTIVE') {
-        vault.status = 'PAUSED';
-        vault.updatedAt = now;
-        db.earnVaults.set(vault.id, vault);
-      }
-    }
+    // Purge any Earn vaults tied to the deleted token (force-refunding active positions when force=true)
+    const purgedEarn = earnService.deleteVaultsByAsset(sym, adminUser?.id || 'ADMIN', {
+      force,
+      throwIfEmpty: false,
+      reason: `Aset ${sym} dihapus permanen melalui Asset Management`,
+    });
 
     db.deletedAssetSymbols.add(sym);
     db.assets.delete(asset.id);
@@ -1670,7 +1765,7 @@ adminRouter.delete('/assets/:id', requireAdmin, (req, res) => {
       actorId: adminUser?.id || 'ADMIN',
       action: 'ASSET_DELETED',
       resource: `asset:${sym}`,
-      details: `Token/Aset ${sym} (${asset.name}) dihapus permanen oleh ${adminUser?.email} (force=${force}, removedPairs=${removedPairsCount}, cancelledOrders=${cancelledOrdersCount}, stoppedBots=${stoppedBotsCount}).`,
+      details: `Token/Aset ${sym} (${asset.name}) dihapus permanen oleh ${adminUser?.email} (force=${force}, removedPairs=${removedPairsCount}, cancelledOrders=${cancelledOrdersCount}, stoppedBots=${stoppedBotsCount}, removedEarnVaults=${purgedEarn.deletedCount}, refundedEarnPositions=${purgedEarn.refundedPositionsCount}).`,
       createdAt: now,
     });
     db.saveToDisk();
@@ -1681,11 +1776,13 @@ adminRouter.delete('/assets/:id', requireAdmin, (req, res) => {
 
     res.json({
       success: true,
-      message: `Token ${sym} (${asset.name}) berhasil dihapus permanen${removedPairsCount > 0 ? ` beserta ${removedPairsCount} pair pasar terkait` : ''}.`,
+      message: `Token ${sym} (${asset.name}) berhasil dihapus permanen${removedPairsCount > 0 ? ` beserta ${removedPairsCount} pair pasar` : ''}${purgedEarn.deletedCount > 0 ? ` dan ${purgedEarn.deletedCount} vault Earn` : ''}.`,
       deletedSymbol: sym,
       removedPairsCount,
       cancelledOrdersCount,
       stoppedBotsCount,
+      removedEarnVaultsCount: purgedEarn.deletedCount,
+      refundedEarnPositionsCount: purgedEarn.refundedPositionsCount,
     });
   } catch (err: any) {
     res.status(400).json({ error: err?.message || 'Gagal menghapus aset token' });

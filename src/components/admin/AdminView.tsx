@@ -149,6 +149,19 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
   const [isSweepingFees, setIsSweepingFees] = useState(false);
   const [showCreateEarnModal, setShowCreateEarnModal] = useState(false);
   const [isSettlingYield, setIsSettlingYield] = useState(false);
+  const [deleteEarnTarget, setDeleteEarnTarget] = useState<EarnVaultItem | null>(null);
+  const [deleteEarnScope, setDeleteEarnScope] = useState<'VAULT' | 'TOKEN' | 'ORPHANED'>('VAULT');
+  const [deleteEarnModalOpen, setDeleteEarnModalOpen] = useState(false);
+  const [deleteEarnForce, setDeleteEarnForce] = useState(false);
+  const [deleteEarnError, setDeleteEarnError] = useState<string | null>(null);
+  const [deleteEarnDeps, setDeleteEarnDeps] = useState<{
+    activePositionsCount: number;
+    activeStakersCount: number;
+    totalStakedDisplay: string;
+    accruedYieldDisplay: string;
+    asset: string;
+  } | null>(null);
+  const [isDeletingEarn, setIsDeletingEarn] = useState(false);
   const [newEarnVaultForm, setNewEarnVaultForm] = useState({
     asset: 'USDT',
     name: '',
@@ -1118,6 +1131,79 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
         }
       }
     });
+  };
+
+  const openDeleteEarnModal = (pool: EarnVaultItem, scope: 'VAULT' | 'TOKEN' = 'VAULT') => {
+    setDeleteEarnTarget(pool);
+    setDeleteEarnScope(scope);
+    setDeleteEarnForce(false);
+    setDeleteEarnError(null);
+    setDeleteEarnDeps(null);
+    setDeleteEarnModalOpen(true);
+  };
+
+  const openCleanupOrphanedEarnModal = () => {
+    setDeleteEarnTarget(null);
+    setDeleteEarnScope('ORPHANED');
+    setDeleteEarnForce(false);
+    setDeleteEarnError(null);
+    setDeleteEarnDeps(null);
+    setDeleteEarnModalOpen(true);
+  };
+
+  const handleConfirmDeleteEarnVault = async () => {
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!token) {
+      showToast('error', 'Sesi admin tidak ditemukan.');
+      return;
+    }
+    setIsDeletingEarn(true);
+    setDeleteEarnError(null);
+    try {
+      const forceQuery = deleteEarnForce ? '?force=1' : '';
+      let url = '';
+      let method: 'DELETE' | 'POST' = 'DELETE';
+      if (deleteEarnScope === 'ORPHANED') {
+        url = `/api/admin/earn/pools/cleanup-delisted${forceQuery}`;
+        method = 'POST';
+      } else if (deleteEarnScope === 'TOKEN' && deleteEarnTarget) {
+        url = `/api/admin/earn/tokens/${encodeURIComponent(deleteEarnTarget.asset)}${forceQuery}`;
+        method = 'DELETE';
+      } else if (deleteEarnTarget) {
+        url = `/api/admin/earn/pools/${encodeURIComponent(deleteEarnTarget.id)}${forceQuery}`;
+        method = 'DELETE';
+      } else {
+        return;
+      }
+
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ force: deleteEarnForce }),
+      });
+      const data = await res.json();
+      if (res.status === 409 && data.requiresForce) {
+        setDeleteEarnDeps(data.dependencies || null);
+        setDeleteEarnError(data.error || 'Masih terdapat posisi staker aktif.');
+        return;
+      }
+      if (!res.ok) {
+        setDeleteEarnError(data.error || 'Gagal menghapus vault Earn');
+        showToast('error', data.error || 'Gagal menghapus vault Earn');
+        return;
+      }
+      showToast('success', data.message || 'Vault Earn berhasil dihapus.');
+      setDeleteEarnModalOpen(false);
+      setDeleteEarnTarget(null);
+      setDeleteEarnDeps(null);
+      loadAllData();
+    } catch (err: any) {
+      const msg = err?.message || 'Gagal menghapus vault Earn';
+      setDeleteEarnError(msg);
+      showToast('error', msg);
+    } finally {
+      setIsDeletingEarn(false);
+    }
   };
 
   const handleCreateEarnVault = async (e: React.FormEvent) => {
@@ -3182,6 +3268,16 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                 <p className="text-xs text-[#71818B]">Seluruh TVL dan posisi diverifikasi langsung terhadap akun Custody Earn di Double-Entry Ledger.</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                {earnpools.some(p => p.isAssetDeleted || p.isDelisted || p.assetStatus === 'RETIRED') && (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={openCleanupOrphanedEarnModal}
+                    icon={<Trash2 className="w-3.5 h-3.5" />}
+                  >
+                    Bersihkan Vault Delisted / Terhapus
+                  </Button>
+                )}
                 <Button
                   variant="secondary"
                   size="sm"
@@ -3237,7 +3333,9 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
             )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-              {earnpools.map(pool => (
+              {earnpools.map(pool => {
+                const isOrphaned = Boolean(pool.isAssetDeleted || pool.isDelisted || pool.assetStatus === 'RETIRED');
+                return (
                 <div key={pool.id} className="p-4 rounded-[10px] bg-[#141C24] border border-[#202B34] space-y-2.5">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -3246,9 +3344,16 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                         {pool.asset} · {pool.type} · {pool.durationDays === 0 ? 'Fleksibel' : `${pool.durationDays} Hari`}
                       </span>
                     </div>
-                    <StatusBadge tone={pool.status === 'ACTIVE' ? 'success' : pool.status === 'PAUSED' ? 'warning' : 'danger'}>
-                      {pool.status}
-                    </StatusBadge>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <StatusBadge tone={pool.status === 'ACTIVE' ? 'success' : pool.status === 'PAUSED' ? 'warning' : 'danger'}>
+                        {pool.status}
+                      </StatusBadge>
+                      {isOrphaned && (
+                        <StatusBadge tone="danger">
+                          {pool.isAssetDeleted ? 'ASET DIHAPUS' : 'DELISTED'}
+                        </StatusBadge>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-baseline justify-between p-2.5 rounded-[7px] bg-[#111820] border border-[#202B34] font-mono tabular-nums">
                     <span className="text-lg font-bold text-[#35B887]">{(pool.apyPct ?? (pool.apyBps / 100)).toFixed(2)}% APY</span>
@@ -3264,16 +3369,28 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
                       <span className="text-[#A1AFB8]">${(pool.totalStakedUsd || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
                   </div>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => handleUpdateStakingPool(pool)}
-                    className="w-full"
-                  >
-                    Ubah APY & Status
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => handleUpdateStakingPool(pool)}
+                      className="flex-1"
+                    >
+                      Ubah APY & Status
+                    </Button>
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      onClick={() => openDeleteEarnModal(pool, 'VAULT')}
+                      icon={<Trash2 className="w-3.5 h-3.5" />}
+                      title={`Hapus vault atau token ${pool.asset}`}
+                    >
+                      Hapus
+                    </Button>
+                  </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             {earnPositions.length > 0 && (
@@ -4520,6 +4637,154 @@ export const AdminView: React.FC<Props> = ({ user, tradingPairs, onRefreshPairs,
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* DELETE EARN VAULT / TOKEN / ORPHANED CLEANUP MODAL */}
+      <Modal
+        isOpen={deleteEarnModalOpen}
+        onClose={() => {
+          if (!isDeletingEarn) {
+            setDeleteEarnModalOpen(false);
+            setDeleteEarnTarget(null);
+            setDeleteEarnDeps(null);
+            setDeleteEarnError(null);
+          }
+        }}
+        title={
+          deleteEarnScope === 'ORPHANED'
+            ? 'Bersihkan Vault Token Terhapus / Delisted'
+            : deleteEarnTarget
+              ? deleteEarnScope === 'TOKEN'
+                ? `Hapus Seluruh Vault Token — ${deleteEarnTarget.asset}`
+                : `Hapus Vault Earn — ${deleteEarnTarget.name}`
+              : 'Hapus Vault Earn'
+        }
+        subtitle={
+          deleteEarnScope === 'ORPHANED'
+            ? 'Menghapus vault Earn/Staking yang tokennya sudah dihapus atau di-delisting.'
+            : deleteEarnTarget
+              ? `${deleteEarnTarget.asset} · ${deleteEarnTarget.id}`
+              : undefined
+        }
+        maxWidth="max-w-lg"
+      >
+        <div className="space-y-4 text-xs">
+          {deleteEarnTarget && deleteEarnScope !== 'ORPHANED' && (() => {
+            const sameTokenCount = earnpools.filter(
+              item => item.asset.toUpperCase() === deleteEarnTarget.asset.toUpperCase()
+            ).length;
+            return (
+              <>
+                <div className="p-3.5 rounded-[10px] bg-[#111820] border border-[#202B34] flex items-center justify-between gap-3">
+                  <div>
+                    <div className="font-mono font-bold text-[#E4EBEF]">
+                      {deleteEarnTarget.asset} · {deleteEarnTarget.name}
+                    </div>
+                    <div className="text-[11px] font-mono text-[#71818B]">
+                      TVL: {deleteEarnTarget.totalStakedDisplay} {deleteEarnTarget.asset} · {deleteEarnTarget.activePositionsCount} posisi aktif
+                    </div>
+                  </div>
+                  {(deleteEarnTarget.isAssetDeleted || deleteEarnTarget.isDelisted) && (
+                    <StatusBadge tone="danger">
+                      {deleteEarnTarget.isAssetDeleted ? 'ASET DIHAPUS' : 'DELISTED'}
+                    </StatusBadge>
+                  )}
+                </div>
+
+                {sameTokenCount > 1 && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteEarnScope('VAULT');
+                        setDeleteEarnDeps(null);
+                        setDeleteEarnError(null);
+                        setDeleteEarnForce(false);
+                      }}
+                      className={`p-2.5 rounded-[7px] border text-left cursor-pointer ${
+                        deleteEarnScope === 'VAULT'
+                          ? 'bg-[#1D2832] border-[#8DA5B1] text-[#E4EBEF]'
+                          : 'bg-[#141C24] border-[#202B34] text-[#71818B]'
+                      }`}
+                    >
+                      <div className="font-semibold">Hanya Vault Ini</div>
+                      <div className="text-[11px] font-mono truncate">{deleteEarnTarget.id}</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteEarnScope('TOKEN');
+                        setDeleteEarnDeps(null);
+                        setDeleteEarnError(null);
+                        setDeleteEarnForce(false);
+                      }}
+                      className={`p-2.5 rounded-[7px] border text-left cursor-pointer ${
+                        deleteEarnScope === 'TOKEN'
+                          ? 'bg-[#401F27]/70 border-[#EA5B65]/60 text-[#E4EBEF]'
+                          : 'bg-[#141C24] border-[#202B34] text-[#71818B]'
+                      }`}
+                    >
+                      <div className="font-semibold">Hapus Token {deleteEarnTarget.asset}</div>
+                      <div className="text-[11px] font-mono">Seluruh {sameTokenCount} vault</div>
+                    </button>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+
+          {deleteEarnError && (
+            <div className="p-3 rounded-[8px] bg-[#401F27]/70 border border-[#EA5B65]/50 text-xs text-[#E4EBEF] flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-[#EA5B65] shrink-0 mt-0.5" />
+              <span>{deleteEarnError}</span>
+            </div>
+          )}
+
+          {deleteEarnDeps && (
+            <div className="p-3.5 rounded-[10px] bg-[#2C2415]/60 border border-[#D6A85C]/40 space-y-2">
+              <div className="font-semibold text-[#D6A85C]">Posisi Staker Aktif Terdeteksi:</div>
+              <ul className="space-y-1 text-[11px] font-mono text-[#E4EBEF]">
+                <li>• Posisi Aktif: {deleteEarnDeps.activePositionsCount} posisi ({deleteEarnDeps.activeStakersCount} pengguna)</li>
+                <li>• Total Principal: {deleteEarnDeps.totalStakedDisplay} {deleteEarnDeps.asset}</li>
+                <li>• Accrued Yield: {deleteEarnDeps.accruedYieldDisplay} {deleteEarnDeps.asset}</li>
+              </ul>
+              <label className="pt-2 border-t border-[#D6A85C]/25 flex items-start gap-2 text-xs font-semibold text-[#E4EBEF] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={deleteEarnForce}
+                  onChange={e => setDeleteEarnForce(e.target.checked)}
+                  className="mt-0.5 rounded border-[#40515D] bg-[#141C24] accent-[#EA5B65]"
+                />
+                <span>
+                  Aktifkan Hapus Paksa (Force Delete): cairkan &amp; kembalikan 100% pokok + yield ke dompet Spot pengguna tanpa penalti.
+                </span>
+              </label>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-[#202B34]">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={isDeletingEarn}
+              onClick={() => setDeleteEarnModalOpen(false)}
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              isLoading={isDeletingEarn}
+              disabled={isDeletingEarn || (Boolean(deleteEarnDeps) && !deleteEarnForce)}
+              onClick={handleConfirmDeleteEarnVault}
+              icon={<Trash2 className="w-3.5 h-3.5" />}
+            >
+              {deleteEarnDeps ? 'Konfirmasi Hapus Paksa & Refund' : 'Konfirmasi Hapus'}
+            </Button>
+          </div>
+        </div>
       </Modal>
 
       {/* UNIFIED CONFIRMATION / PROMPT DIALOG */}

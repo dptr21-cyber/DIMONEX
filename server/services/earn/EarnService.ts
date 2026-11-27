@@ -34,6 +34,9 @@ export interface EnrichedEarnVault extends EarnVault {
   decimals: number;
   assetName: string;
   assetLogoUrl?: string;
+  assetStatus?: string;
+  isAssetDeleted?: boolean;
+  isDelisted?: boolean;
   apyPct: number;
   totalStakedUnits: string;
   totalStakedDisplay: string;
@@ -43,6 +46,31 @@ export interface EnrichedEarnVault extends EarnVault {
   utilizationBps: number;
   activeStakersCount: number;
   activePositionsCount: number;
+}
+
+export interface EarnVaultDeletionDependencies {
+  vaultIds: string[];
+  vaultNames: string[];
+  asset: string;
+  decimals: number;
+  activePositionsCount: number;
+  activeStakersCount: number;
+  totalStakedUnits: string;
+  totalStakedDisplay: string;
+  accruedYieldUnits: string;
+  accruedYieldDisplay: string;
+}
+
+export class EarnVaultConflictError extends Error {
+  public readonly statusCode = 409;
+  public readonly requiresForce = true;
+  public readonly dependencies: EarnVaultDeletionDependencies;
+
+  constructor(message: string, dependencies: EarnVaultDeletionDependencies) {
+    super(message);
+    this.name = 'EarnVaultConflictError';
+    this.dependencies = dependencies;
+  }
 }
 
 export interface EnrichedEarnPosition extends EarnPosition {
@@ -123,10 +151,42 @@ export class EarnService {
   }
 
   /**
-   * Resolves exact asset metadata from db.assets. Rejects unlisted/unknown assets.
+   * Checks whether all trading pairs where `symbol` is the base currency have been delisted
+   * (or the asset has been explicitly deleted/retired).
    */
-  private resolveAssetInfo(symbol: string): { symbol: string; name: string; decimals: number; logoUrl?: string; status: string } {
+  private isSymbolDelisted(symbol: string): boolean {
     const clean = symbol.trim().toUpperCase();
+    if (db.deletedAssetSymbols.has(clean)) return true;
+
+    const basePairs = Array.from(db.tradingPairs.values()).filter(
+      p => p.baseCurrency.toUpperCase() === clean
+    );
+    if (basePairs.length > 0 && basePairs.every(p => Boolean(p.isDelisted))) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Resolves exact asset metadata from db.assets.
+   * When allowDeletedFallback is true, safely resolves deleted/delisted assets so admin & solvency
+   * views never crash on orphaned vaults.
+   */
+  private resolveAssetInfo(
+    symbol: string,
+    allowDeletedFallback = false
+  ): {
+    symbol: string;
+    name: string;
+    decimals: number;
+    logoUrl?: string;
+    status: string;
+    isAssetDeleted: boolean;
+    isDelisted: boolean;
+  } {
+    const clean = symbol.trim().toUpperCase();
+    const isDelisted = this.isSymbolDelisted(clean);
+
     for (const ast of db.assets.values()) {
       if (ast.symbol.toUpperCase() === clean) {
         return {
@@ -135,10 +195,33 @@ export class EarnService {
           decimals: ast.decimals,
           logoUrl: ast.logoUrl,
           status: ast.status,
+          isAssetDeleted: false,
+          isDelisted: isDelisted || ast.status === 'RETIRED',
         };
       }
     }
-    throw new Error(`Asset ${clean} tidak terdaftar di registry aset DIMONEX`);
+
+    if (!allowDeletedFallback) {
+      throw new Error(`Asset ${clean} tidak terdaftar di registry aset DIMONEX`);
+    }
+
+    let inferredDecimals = this.resolveCurrencyDecimals(clean);
+    for (const pos of db.earnPositions.values()) {
+      if (pos.asset.toUpperCase() === clean && Number.isInteger(pos.decimals)) {
+        inferredDecimals = pos.decimals;
+        break;
+      }
+    }
+
+    return {
+      symbol: clean,
+      name: `${clean} (Asset Terhapus)`,
+      decimals: inferredDecimals,
+      logoUrl: undefined,
+      status: 'DELETED',
+      isAssetDeleted: true,
+      isDelisted: true,
+    };
   }
 
   /**
@@ -194,6 +277,17 @@ export class EarnService {
    */
   public ensureDefaultVaults(): void {
     if (db.earnVaults.size > 0) return;
+    // Do not auto-reseed default vaults if an admin has explicitly purged/deleted vaults
+    if (
+      db.auditLogs.some(
+        l =>
+          l.action === 'EARN_VAULT_DELETED' ||
+          l.action === 'EARN_TOKEN_VAULTS_DELETED' ||
+          l.action === 'EARN_ORPHANED_VAULTS_CLEANED'
+      )
+    ) {
+      return;
+    }
     const now = Date.now();
 
     const activeAssetSymbols = new Set<string>();
@@ -365,7 +459,7 @@ export class EarnService {
   }
 
   private enrichVault(vault: EarnVault): EnrichedEarnVault {
-    const assetInfo = this.resolveAssetInfo(vault.asset);
+    const assetInfo = this.resolveAssetInfo(vault.asset, true);
     const stats = this.getVaultLiveStats(vault.id);
     const capUnits = BigInt(vault.totalCapUnits || '0');
     const remainingCapUnits = capUnits > 0n
@@ -385,6 +479,9 @@ export class EarnService {
       decimals: assetInfo.decimals,
       assetName: assetInfo.name,
       assetLogoUrl: assetInfo.logoUrl,
+      assetStatus: assetInfo.status,
+      isAssetDeleted: assetInfo.isAssetDeleted,
+      isDelisted: assetInfo.isDelisted,
       apyPct: vault.apyBps / 100,
       totalStakedUnits: stats.totalStakedUnits.toString(),
       totalStakedDisplay: PrecisionMath.formatFromUnits(stats.totalStakedUnits, assetInfo.decimals, true),
@@ -410,8 +507,14 @@ export class EarnService {
   } {
     this.ensureDefaultVaults();
     const vaults = Array.from(db.earnVaults.values())
-      .filter(v => v.status !== 'CLOSED')
       .map(v => this.enrichVault(v))
+      .filter(
+        v =>
+          v.status !== 'CLOSED' &&
+          !v.isAssetDeleted &&
+          !v.isDelisted &&
+          v.assetStatus !== 'RETIRED'
+      )
       .sort((a, b) => Number(b.isFeatured) - Number(a.isFeatured) || b.apyBps - a.apyBps);
 
     const uniqueStakers = new Set<string>();
@@ -603,7 +706,10 @@ export class EarnService {
       throw new Error(`Vault ${vault.name} sedang tidak aktif (${vault.status})`);
     }
 
-    const assetInfo = this.resolveAssetInfo(vault.asset);
+    const assetInfo = this.resolveAssetInfo(vault.asset, false);
+    if (assetInfo.isDelisted) {
+      throw new Error(`Aset ${vault.asset} telah di-delisting sehingga staking baru tidak diperbolehkan.`);
+    }
     if (assetInfo.status !== 'ACTIVE') {
       throw new Error(`Aset ${vault.asset} tidak berstatus ACTIVE untuk staking`);
     }
@@ -1230,7 +1336,7 @@ export class EarnService {
     const vault = db.earnVaults.get(vaultId);
     if (!vault) throw new Error('Staking pool / Earn vault tidak ditemukan');
 
-    const assetInfo = this.resolveAssetInfo(vault.asset);
+    const assetInfo = this.resolveAssetInfo(vault.asset, true);
     const apyVal = patch.apyPct !== undefined ? patch.apyPct : patch.apy;
     if (apyVal !== undefined) {
       const nextApyBps = Math.round(Number(apyVal) * 100);
@@ -1243,6 +1349,9 @@ export class EarnService {
     if (patch.status !== undefined) {
       if (!['ACTIVE', 'PAUSED', 'CLOSED'].includes(patch.status)) {
         throw new Error('Status vault tidak valid');
+      }
+      if (patch.status === 'ACTIVE' && (assetInfo.isAssetDeleted || assetInfo.isDelisted || assetInfo.status !== 'ACTIVE')) {
+        throw new Error(`Vault ${vault.asset} tidak dapat diaktifkan karena aset sudah dihapus/delisted atau tidak berstatus ACTIVE.`);
       }
       vault.status = patch.status;
     }
@@ -1292,6 +1401,383 @@ export class EarnService {
     return this.enrichVault(vault);
   }
 
+  /**
+   * Safely refunds principal (from Earn Custody) and accrued yield (from Fee Pool / Treasury)
+   * back to user's Spot ledger account with 0% penalty when an admin force-deletes a vault/token.
+   */
+  private forceRedeemPositionForVaultRemoval(
+    pos: EarnPosition,
+    vault: EarnVault,
+    now: number,
+    reason: string
+  ): { principalUnits: bigint; settledYieldUnits: bigint } {
+    const principalUnits = BigInt(pos.principalUnits || '0');
+    const accruedYieldUnits = BigInt(pos.accruedYieldUnits || '0');
+    const custodyAcc = db.createOrGetAccount(SYSTEM_EARN_CUSTODY_ID, pos.asset);
+    const userAcc = db.createOrGetAccount(pos.userId, pos.asset);
+
+    let redeemJournalId = pos.redeemJournalId;
+    if (principalUnits > 0n) {
+      const { journal } = LedgerService.executeJournal({
+        idempotencyKey: `earn-vault-force-redeem:${vault.id}:${pos.id}:${now}`,
+        txType: 'EARN_REDEEM',
+        referenceId: pos.id,
+        description: `Force Close Refund ${PrecisionMath.formatFromUnits(principalUnits, pos.decimals, true)} ${pos.asset} (${reason})`,
+        entries: [
+          { accountId: custodyAcc.id, entryType: 'DEBIT', amount: principalUnits },
+          { accountId: userAcc.id, entryType: 'CREDIT', amount: principalUnits },
+        ],
+      });
+      redeemJournalId = journal.id;
+    }
+
+    let settledYieldUnits = 0n;
+    if (accruedYieldUnits > 0n) {
+      settledYieldUnits = accruedYieldUnits;
+      const yieldFunding = this.buildYieldFundingDebits(pos.asset, settledYieldUnits);
+      const { journal: yieldJournal } = LedgerService.executeJournal({
+        idempotencyKey: `earn-vault-force-yield:${vault.id}:${pos.id}:${now}`,
+        txType: 'EARN_YIELD',
+        referenceId: pos.id,
+        description: `Force Close Final Yield ${PrecisionMath.formatFromUnits(settledYieldUnits, pos.decimals, true)} ${pos.asset} [${yieldFunding.fundingSource}]`,
+        entries: [
+          ...yieldFunding.entries,
+          { accountId: userAcc.id, entryType: 'CREDIT', amount: settledYieldUnits },
+        ],
+      });
+      pos.claimedYieldUnits = (BigInt(pos.claimedYieldUnits || '0') + settledYieldUnits).toString();
+      db.earnPayouts.push({
+        id: `earn-pay-${crypto.randomUUID().slice(0, 12)}`,
+        userId: pos.userId,
+        positionId: pos.id,
+        vaultId: pos.vaultId,
+        asset: pos.asset,
+        decimals: pos.decimals,
+        payoutType: 'REDEMPTION_SETTLEMENT',
+        amountUnits: settledYieldUnits.toString(),
+        apyBps: vault.durationDays === 0 ? vault.apyBps : pos.apyBps,
+        journalId: yieldJournal.id,
+        fundingSource: yieldFunding.fundingSource,
+        feeFundedUnits: yieldFunding.feeFundedUnits.toString(),
+        treasuryFundedUnits: yieldFunding.treasuryFundedUnits.toString(),
+        createdAt: now,
+      });
+    }
+
+    pos.principalUnits = '0';
+    pos.accruedYieldUnits = '0';
+    pos.status = 'REDEEMED';
+    pos.redeemedAt = now;
+    if (redeemJournalId) pos.redeemJournalId = redeemJournalId;
+    pos.updatedAt = now;
+    db.earnPositions.set(pos.id, pos);
+
+    return { principalUnits, settledYieldUnits };
+  }
+
+  private buildVaultSetDependencies(targetVaults: EarnVault[]): {
+    activePositions: EarnPosition[];
+    dependencies: EarnVaultDeletionDependencies;
+  } {
+    const vaultIds = targetVaults.map(v => v.id);
+    const vaultIdSet = new Set(vaultIds);
+    const asset = targetVaults[0]?.asset || '';
+    const decimals = asset ? this.resolveAssetInfo(asset, true).decimals : 8;
+
+    const activePositions: EarnPosition[] = [];
+    const stakerUsers = new Set<string>();
+    let totalStakedUnits = 0n;
+    let accruedYieldUnits = 0n;
+
+    for (const pos of db.earnPositions.values()) {
+      if (!vaultIdSet.has(pos.vaultId) || pos.status === 'REDEEMED') continue;
+      activePositions.push(pos);
+      stakerUsers.add(pos.userId);
+      totalStakedUnits += BigInt(pos.principalUnits || '0');
+      accruedYieldUnits += BigInt(pos.accruedYieldUnits || '0');
+    }
+
+    return {
+      activePositions,
+      dependencies: {
+        vaultIds,
+        vaultNames: targetVaults.map(v => v.name),
+        asset,
+        decimals,
+        activePositionsCount: activePositions.length,
+        activeStakersCount: stakerUsers.size,
+        totalStakedUnits: totalStakedUnits.toString(),
+        totalStakedDisplay: PrecisionMath.formatFromUnits(totalStakedUnits, decimals, true),
+        accruedYieldUnits: accruedYieldUnits.toString(),
+        accruedYieldDisplay: PrecisionMath.formatFromUnits(accruedYieldUnits, decimals, true),
+      },
+    };
+  }
+
+  /**
+   * Deletes a single Staking/Earn Vault. If active positions exist, rejects with 409 EarnVaultConflictError
+   * unless `force` is true (which atomically refunds 100% principal + accrued yield before deleting).
+   */
+  public deleteVault(
+    vaultId: string,
+    adminId: string,
+    options?: { force?: boolean; reason?: string }
+  ): {
+    deletedVaultId: string;
+    asset: string;
+    name: string;
+    refundedPositionsCount: number;
+    refundedPrincipalDisplay: string;
+  } {
+    const vault = db.earnVaults.get(vaultId);
+    if (!vault) {
+      throw new Error(`Vault Earn ${vaultId} tidak ditemukan`);
+    }
+
+    const force = Boolean(options?.force);
+    const reason = String(options?.reason || 'Dihapus melalui Admin Console').trim();
+    const { activePositions, dependencies } = this.buildVaultSetDependencies([vault]);
+
+    if (activePositions.length > 0 && !force) {
+      throw new EarnVaultConflictError(
+        `Vault ${vault.name} (${vault.asset}) masih memiliki ${activePositions.length} posisi staker aktif (${dependencies.totalStakedDisplay} ${vault.asset}). Aktifkan Hapus Paksa untuk mencairkan & mengembalikan saldo pengguna secara otomatis.`,
+        dependencies
+      );
+    }
+
+    const now = Date.now();
+    let refundedPositionsCount = 0;
+    let totalRefundedPrincipal = 0n;
+
+    if (activePositions.length > 0 && force) {
+      for (const pos of activePositions) {
+        const res = this.forceRedeemPositionForVaultRemoval(pos, vault, now, reason);
+        totalRefundedPrincipal += res.principalUnits;
+        refundedPositionsCount += 1;
+      }
+    }
+
+    db.earnVaults.delete(vault.id);
+    const refundedDisplay = PrecisionMath.formatFromUnits(totalRefundedPrincipal, dependencies.decimals, true);
+
+    db.auditLogs.push({
+      id: crypto.randomUUID(),
+      actorId: adminId,
+      action: 'EARN_VAULT_DELETED',
+      resource: `earn_vault:${vault.id}`,
+      details: `Deleted Earn Vault ${vault.id} (${vault.name} / ${vault.asset}) [force=${force}, refundedPositions=${refundedPositionsCount}, refundedPrincipal=${refundedDisplay} ${vault.asset}]. Reason: ${reason}`,
+      createdAt: now,
+    });
+    db.saveToDisk();
+
+    return {
+      deletedVaultId: vault.id,
+      asset: vault.asset,
+      name: vault.name,
+      refundedPositionsCount,
+      refundedPrincipalDisplay: refundedDisplay,
+    };
+  }
+
+  /**
+   * Deletes all Earn/Staking Vaults belonging to a specific token symbol.
+   * Used both from StakingAdminConsole (delete token vaults) and Asset Management delete synchronization.
+   */
+  public deleteVaultsByAsset(
+    symbol: string,
+    adminId: string,
+    options?: { force?: boolean; throwIfEmpty?: boolean; reason?: string }
+  ): {
+    asset: string;
+    deletedCount: number;
+    deletedVaultIds: string[];
+    refundedPositionsCount: number;
+    refundedPrincipalDisplay: string;
+  } {
+    const clean = symbol.trim().toUpperCase();
+    const matchingVaults = Array.from(db.earnVaults.values()).filter(
+      v => v.asset.toUpperCase() === clean
+    );
+
+    if (matchingVaults.length === 0) {
+      if (options?.throwIfEmpty) {
+        throw new Error(`Tidak ditemukan vault Earn/Staking untuk token ${clean}.`);
+      }
+      return {
+        asset: clean,
+        deletedCount: 0,
+        deletedVaultIds: [],
+        refundedPositionsCount: 0,
+        refundedPrincipalDisplay: '0',
+      };
+    }
+
+    const force = Boolean(options?.force);
+    const reason = String(options?.reason || `Penghapusan token ${clean} dari Manajemen Vault Earn & Staking`).trim();
+    const { activePositions, dependencies } = this.buildVaultSetDependencies(matchingVaults);
+
+    if (activePositions.length > 0 && !force) {
+      throw new EarnVaultConflictError(
+        `Token ${clean} masih memiliki ${activePositions.length} posisi staker aktif pada ${matchingVaults.length} vault (${dependencies.totalStakedDisplay} ${clean}). Aktifkan Hapus Paksa untuk mencairkan & mengembalikan saldo pengguna secara otomatis.`,
+        dependencies
+      );
+    }
+
+    const vaultMap = new Map(matchingVaults.map(v => [v.id, v]));
+    const now = Date.now();
+    let refundedPositionsCount = 0;
+    let totalRefundedPrincipal = 0n;
+
+    if (activePositions.length > 0 && force) {
+      for (const pos of activePositions) {
+        const v = vaultMap.get(pos.vaultId)!;
+        const res = this.forceRedeemPositionForVaultRemoval(pos, v, now, reason);
+        totalRefundedPrincipal += res.principalUnits;
+        refundedPositionsCount += 1;
+      }
+    }
+
+    const deletedVaultIds: string[] = [];
+    for (const v of matchingVaults) {
+      db.earnVaults.delete(v.id);
+      deletedVaultIds.push(v.id);
+    }
+
+    const refundedDisplay = PrecisionMath.formatFromUnits(totalRefundedPrincipal, dependencies.decimals, true);
+
+    db.auditLogs.push({
+      id: crypto.randomUUID(),
+      actorId: adminId,
+      action: 'EARN_TOKEN_VAULTS_DELETED',
+      resource: `earn_token:${clean}`,
+      details: `Purged ${deletedVaultIds.length} Earn vault(s) for token ${clean} [${deletedVaultIds.join(', ')}] (force=${force}, refundedPositions=${refundedPositionsCount}, refundedPrincipal=${refundedDisplay} ${clean}). Reason: ${reason}`,
+      createdAt: now,
+    });
+    db.saveToDisk();
+
+    return {
+      asset: clean,
+      deletedCount: deletedVaultIds.length,
+      deletedVaultIds,
+      refundedPositionsCount,
+      refundedPrincipalDisplay: refundedDisplay,
+    };
+  }
+
+  /**
+   * Pauses all ACTIVE Earn vaults for a token when its market pair is delisted.
+   */
+  public pauseVaultsForAsset(symbol: string, adminId: string, reason: string): number {
+    const clean = symbol.trim().toUpperCase();
+    const now = Date.now();
+    let pausedCount = 0;
+
+    for (const vault of db.earnVaults.values()) {
+      if (vault.asset.toUpperCase() === clean && vault.status === 'ACTIVE') {
+        vault.status = 'PAUSED';
+        vault.updatedAt = now;
+        db.earnVaults.set(vault.id, vault);
+        pausedCount += 1;
+      }
+    }
+
+    if (pausedCount > 0) {
+      db.auditLogs.push({
+        id: crypto.randomUUID(),
+        actorId: adminId,
+        action: 'EARN_VAULTS_AUTO_PAUSED',
+        resource: `earn_token:${clean}`,
+        details: `Auto-paused ${pausedCount} Earn vault(s) for ${clean}. Reason: ${reason}`,
+        createdAt: now,
+      });
+      db.saveToDisk();
+    }
+
+    return pausedCount;
+  }
+
+  /**
+   * Removes all Earn vaults whose underlying token has been deleted from Asset Management or delisted.
+   */
+  public cleanupOrphanedVaults(
+    adminId: string,
+    options?: { force?: boolean }
+  ): {
+    deletedCount: number;
+    deletedVaultIds: string[];
+    affectedAssets: string[];
+    refundedPositionsCount: number;
+  } {
+    const orphanedVaults = Array.from(db.earnVaults.values()).filter(v => {
+      const info = this.resolveAssetInfo(v.asset, true);
+      return info.isAssetDeleted || info.isDelisted || info.status === 'RETIRED';
+    });
+
+    if (orphanedVaults.length === 0) {
+      return {
+        deletedCount: 0,
+        deletedVaultIds: [],
+        affectedAssets: [],
+        refundedPositionsCount: 0,
+      };
+    }
+
+    const force = Boolean(options?.force);
+    const { activePositions, dependencies } = this.buildVaultSetDependencies(orphanedVaults);
+
+    if (activePositions.length > 0 && !force) {
+      throw new EarnVaultConflictError(
+        `Terdapat ${activePositions.length} posisi staker aktif pada vault aset terhapus/delisted. Aktifkan Hapus Paksa untuk mencairkan saldo staker sebelum menghapus vault.`,
+        {
+          ...dependencies,
+          asset: Array.from(new Set(orphanedVaults.map(v => v.asset))).join(', '),
+        }
+      );
+    }
+
+    const vaultMap = new Map(orphanedVaults.map(v => [v.id, v]));
+    const now = Date.now();
+    let refundedPositionsCount = 0;
+
+    if (activePositions.length > 0 && force) {
+      for (const pos of activePositions) {
+        const v = vaultMap.get(pos.vaultId)!;
+        this.forceRedeemPositionForVaultRemoval(
+          pos,
+          v,
+          now,
+          `Pembersihan vault token terhapus/delisted (${v.asset})`
+        );
+        refundedPositionsCount += 1;
+      }
+    }
+
+    const deletedVaultIds: string[] = [];
+    const affectedAssets = new Set<string>();
+    for (const v of orphanedVaults) {
+      db.earnVaults.delete(v.id);
+      deletedVaultIds.push(v.id);
+      affectedAssets.add(v.asset);
+    }
+
+    db.auditLogs.push({
+      id: crypto.randomUUID(),
+      actorId: adminId,
+      action: 'EARN_ORPHANED_VAULTS_CLEANED',
+      resource: 'earn:cleanup-orphaned',
+      details: `Cleaned up ${deletedVaultIds.length} orphaned/delisted Earn vault(s) across [${Array.from(affectedAssets).join(', ')}] (force=${force}, refundedPositions=${refundedPositionsCount}).`,
+      createdAt: now,
+    });
+    db.saveToDisk();
+
+    return {
+      deletedCount: deletedVaultIds.length,
+      deletedVaultIds,
+      affectedAssets: Array.from(affectedAssets),
+      refundedPositionsCount,
+    };
+  }
+
   public listActiveAssetsForEarn(): Array<{
     symbol: string;
     name: string;
@@ -1300,7 +1786,7 @@ export class EarnService {
     logoUrl?: string;
   }> {
     return Array.from(db.assets.values())
-      .filter(a => a.status === 'ACTIVE')
+      .filter(a => a.status === 'ACTIVE' && !this.isSymbolDelisted(a.symbol))
       .sort((a, b) => a.symbol.localeCompare(b.symbol))
       .map(a => ({
         symbol: a.symbol,
@@ -1411,7 +1897,7 @@ export class EarnService {
     let isFullySolvent = true;
 
     for (const sym of Array.from(assetsSet).sort()) {
-      const assetInfo = this.resolveAssetInfo(sym);
+      const assetInfo = this.resolveAssetInfo(sym, true);
       const custodyAcc = db.getAccount(SYSTEM_EARN_CUSTODY_ID, sym);
       const custodyUnits = custodyAcc ? BigInt(custodyAcc.balanceAvailable) + BigInt(custodyAcc.balanceLocked) : 0n;
 

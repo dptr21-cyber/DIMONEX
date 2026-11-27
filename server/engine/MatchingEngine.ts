@@ -155,7 +155,24 @@ export class MatchingEngineManager {
 
     // Dispatch to single-threaded OrderBook
     const book = this.getOrderBook(input.pairId);
-    const result = book.processOrder(order);
+    let result: MatchResult;
+    try {
+      result = book.processOrder(order);
+    } catch (err) {
+      const remLock = BigInt(order.lockedAmount || '0');
+      if (order.status === 'NEW' && order.filledQuantity === '0') {
+        order.status = 'CANCELLED';
+        order.lockedAmount = '0';
+        order.updatedAt = Date.now();
+        db.orders.set(order.id, order);
+        if (remLock > 0n) {
+          try {
+            LedgerService.unlockBalanceUpToLocked(input.userId, lockedCurrency, remLock);
+          } catch {}
+        }
+      }
+      throw err;
+    }
 
     const elapsedMs = performance.now() - startMs;
     engineTelemetry.recordOrderPlaced(input.pairId, elapsedMs);

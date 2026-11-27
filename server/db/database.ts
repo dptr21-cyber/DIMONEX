@@ -27,6 +27,7 @@ import {
   EarnVault, EarnPosition, EarnPayoutRecord,
   CopyMasterTrader, CopyRelationship, CopyMirroredOrder, DailyPnlSnapshot
 } from './types.js';
+import type { ModularBotRecord, BacktestReport } from '../services/modularBot/types.js';
 import { PrecisionMath } from '../ledger/PrecisionMath.js';
 
 export const SYSTEM_TREASURY_ID = 'sys-treasury-0000-0000-000000000000';
@@ -140,6 +141,23 @@ export interface PersistedExchangeState {
   copyMirroredOrders?: CopyMirroredOrder[];
   dailyPnlSnapshots?: [string, DailyPnlSnapshot][];
   deletedAssetSymbols?: string[];
+  modularBots?: [string, ModularBotRecord][];
+  modularBacktests?: BacktestReport[];
+}
+
+function safeBigInt(val: string | number | bigint | undefined | null): bigint {
+  if (typeof val === 'bigint') return val;
+  if (typeof val === 'number') return Number.isFinite(val) ? BigInt(Math.trunc(val)) : 0n;
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (!trimmed) return 0n;
+    try {
+      return BigInt(trimmed);
+    } catch {
+      return 0n;
+    }
+  }
+  return 0n;
 }
 
 class DatabaseStore {
@@ -198,6 +216,8 @@ class DatabaseStore {
   copyMirroredOrders: CopyMirroredOrder[] = [];
   dailyPnlSnapshots: Map<string, DailyPnlSnapshot> = new Map(); // key: `${userId}:${date}`
   deletedAssetSymbols: Set<string> = new Set();
+  modularBots: Map<string, ModularBotRecord> = new Map();
+  modularBacktests: BacktestReport[] = [];
   
   private saveTimer: NodeJS.Timeout | null = null;
   private isSaving = false;
@@ -618,12 +638,12 @@ class DatabaseStore {
 
     // Update trader1 locked IDR and trader2 locked BTC
     const trader1IdrAcc = this.createOrGetAccount(trader1Id, 'IDR');
-    const t1Avail = BigInt(trader1IdrAcc.balanceAvailable);
+    const t1Avail = safeBigInt(trader1IdrAcc.balanceAvailable);
     trader1IdrAcc.balanceAvailable = (t1Avail - totalBidsLockedIdr).toString();
     trader1IdrAcc.balanceLocked = totalBidsLockedIdr.toString();
 
     const trader2BtcAcc = this.createOrGetAccount(trader2Id, 'BTC');
-    const t2Avail = BigInt(trader2BtcAcc.balanceAvailable);
+    const t2Avail = safeBigInt(trader2BtcAcc.balanceAvailable);
     trader2BtcAcc.balanceAvailable = (t2Avail - totalAsksLockedBtc).toString();
     trader2BtcAcc.balanceLocked = totalAsksLockedBtc.toString();
 
@@ -693,12 +713,12 @@ class DatabaseStore {
       });
     });
 
-    const t1IdrAvail = BigInt(trader1IdrAcc.balanceAvailable);
+    const t1IdrAvail = safeBigInt(trader1IdrAcc.balanceAvailable);
     trader1IdrAcc.balanceAvailable = (t1IdrAvail - totalUsdtBidsLockedIdr).toString();
-    trader1IdrAcc.balanceLocked = (BigInt(trader1IdrAcc.balanceLocked) + totalUsdtBidsLockedIdr).toString();
+    trader1IdrAcc.balanceLocked = (safeBigInt(trader1IdrAcc.balanceLocked) + totalUsdtBidsLockedIdr).toString();
 
     const trader2UsdtAcc = this.createOrGetAccount(trader2Id, 'USDT');
-    const t2UsdtAvail = BigInt(trader2UsdtAcc.balanceAvailable);
+    const t2UsdtAvail = safeBigInt(trader2UsdtAcc.balanceAvailable);
     trader2UsdtAcc.balanceAvailable = (t2UsdtAvail - totalUsdtAsksLockedUsdt).toString();
     trader2UsdtAcc.balanceLocked = totalUsdtAsksLockedUsdt.toString();
 
@@ -848,31 +868,36 @@ class DatabaseStore {
       }
 
       // Trades executed within the rolling 24-hour window
-      const trades24h = pairTrades.filter(t => t.createdAt >= window24hStart);
+      const trades24h = pairTrades.filter(t => t && t.createdAt >= window24hStart);
       const latestTrade = pairTrades[pairTrades.length - 1];
-      pair.lastPrice = latestTrade.price;
-      const lastPriceBig = BigInt(latestTrade.price);
+      if (latestTrade && latestTrade.price) {
+        pair.lastPrice = latestTrade.price;
+      }
+      const lastPriceBig = safeBigInt(latestTrade?.price);
 
       if (trades24h.length === 0) {
         // Trades exist historically but none in the last 24h
-        pair.high24h = latestTrade.price;
-        pair.low24h = latestTrade.price;
+        if (latestTrade?.price) {
+          pair.high24h = latestTrade.price;
+          pair.low24h = latestTrade.price;
+        }
         pair.volume24h = '0';
         pair.quoteVolume24h = '0';
         pair.priceChange24h = '+0.00';
         pair.priceChangePercent24h = '0.00';
       } else {
-        let highBig = BigInt(trades24h[0].price);
-        let lowBig = BigInt(trades24h[0].price);
+        let highBig = safeBigInt(trades24h[0]?.price);
+        let lowBig = safeBigInt(trades24h[0]?.price);
         let volBaseBig = 0n;
         let volQuoteBig = 0n;
 
         for (const t of trades24h) {
-          const p = BigInt(t.price);
+          if (!t) continue;
+          const p = safeBigInt(t.price);
           if (p > highBig) highBig = p;
           if (p < lowBig) lowBig = p;
-          volBaseBig += BigInt(t.quantity);
-          volQuoteBig += BigInt(t.quoteVolume || '0');
+          volBaseBig += safeBigInt(t.quantity);
+          volQuoteBig += safeBigInt(t.quoteVolume || '0');
         }
 
         pair.high24h = highBig.toString();
@@ -882,10 +907,10 @@ class DatabaseStore {
 
         // Determine 24h Open Price
         // If trades exist before the 24h window, the latest trade prior to window start is the open price
-        const priorTrades = pairTrades.filter(t => t.createdAt < window24hStart);
+        const priorTrades = pairTrades.filter(t => t && t.createdAt < window24hStart);
         const openPriceBig = priorTrades.length > 0
-          ? BigInt(priorTrades[priorTrades.length - 1].price)
-          : BigInt(trades24h[0].price);
+          ? safeBigInt(priorTrades[priorTrades.length - 1]?.price)
+          : safeBigInt(trades24h[0]?.price);
 
         if (openPriceBig > 0n) {
           const diff = lastPriceBig - openPriceBig;
@@ -974,10 +999,10 @@ class DatabaseStore {
         pair.quoteDecimals = 6;
       }
       const dec = pair.baseDecimals || 8;
-      const oneToken = 10n ** BigInt(dec);
+      const oneToken = 10n ** safeBigInt(dec);
       // If maxOrderSize is less than 50 tokens on non-BTC/ETH, increase to at least 1,000,000 tokens
       if (pair.baseCurrency !== 'BTC' && pair.baseCurrency !== 'ETH') {
-        const currentCapTokens = BigInt(pair.maxOrderSize) / (oneToken > 0n ? oneToken : 1n);
+        const currentCapTokens = safeBigInt(pair.maxOrderSize) / (oneToken > 0n ? oneToken : 1n);
         if (currentCapTokens < 1000n) {
           pair.maxOrderSize = (10000000n * oneToken).toString(); // 10,000,000 tokens
         }
@@ -1118,7 +1143,7 @@ class DatabaseStore {
       for (const [curr, minBal] of Object.entries(acc.balances)) {
         if (this.deletedAssetSymbols.has(curr)) continue;
         const ledgerAcc = this.createOrGetAccount(user.id, curr);
-        if (BigInt(ledgerAcc.balanceAvailable) < BigInt(minBal)) {
+        if (safeBigInt(ledgerAcc.balanceAvailable) < safeBigInt(minBal)) {
           ledgerAcc.balanceAvailable = minBal;
         }
       }
@@ -1360,7 +1385,9 @@ class DatabaseStore {
       copyRelationships: Array.from(this.copyRelationships.entries()),
       copyMirroredOrders: this.copyMirroredOrders.slice(-5000),
       dailyPnlSnapshots: Array.from(this.dailyPnlSnapshots.entries()),
-      deletedAssetSymbols: Array.from(this.deletedAssetSymbols)
+      deletedAssetSymbols: Array.from(this.deletedAssetSymbols),
+      modularBots: Array.from(this.modularBots.entries()),
+      modularBacktests: this.modularBacktests.slice(-100)
     };
 
     const jsonStr = this.fastJsonStringify(state);
@@ -1554,6 +1581,8 @@ class DatabaseStore {
             if (data.copyMirroredOrders) this.copyMirroredOrders = data.copyMirroredOrders;
             if (data.dailyPnlSnapshots) this.dailyPnlSnapshots = new Map(data.dailyPnlSnapshots);
             if (data.deletedAssetSymbols) this.deletedAssetSymbols = new Set(data.deletedAssetSymbols);
+            if (data.modularBots) this.modularBots = new Map(data.modularBots);
+            if (data.modularBacktests) this.modularBacktests = data.modularBacktests;
 
             this.lastLoadedMtime = fs.statSync(p).mtimeMs;
             console.log(`[DIMONEX Database] Berhasil memuat snapshot disk (${p}): ${this.users.size} pengguna, ${this.orders.size} order, ${this.trades.length} transaksi, ${this.sessions.size} sesi login aktif.`);

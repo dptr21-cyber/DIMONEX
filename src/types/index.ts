@@ -1359,6 +1359,9 @@ export interface EarnVaultItem {
   name: string;
   assetName: string;
   assetLogoUrl?: string;
+  assetStatus?: string;
+  isAssetDeleted?: boolean;
+  isDelisted?: boolean;
   decimals: number;
   type: EarnVaultType;
   durationDays: number;
@@ -1587,3 +1590,334 @@ export interface AdminTreasuryFeeOverview {
     createdAt: number;
   }>;
 }
+
+// ==========================================
+// MODULAR STRATEGY BOT TYPES (FRONTEND)
+// ==========================================
+
+export type ModularBotCategory = 'DIRECTIONAL' | 'MARKET_MAKING' | 'HYBRID';
+export type ModularBotMode = 'BACKTEST' | 'PAPER' | 'LIVE';
+export type ModularBotStatus = 'DRAFT' | 'READY' | 'RUNNING' | 'PAUSED' | 'STOPPED' | 'ERROR' | 'RISK_HALTED';
+export type ModularOrderType = 'POST_ONLY' | 'LIMIT' | 'IOC' | 'FOK' | 'MARKET';
+export type ModularTimeInForce = 'GTC' | 'IOC' | 'FOK';
+
+export type SupportedIndicatorId =
+  | 'SMA'
+  | 'EMA'
+  | 'RSI'
+  | 'MACD'
+  | 'BOLLINGER_BANDS'
+  | 'ATR'
+  | 'ADX'
+  | 'STOCHASTIC'
+  | 'STOCHASTIC_RSI'
+  | 'VWAP'
+  | 'VOLUME_MA'
+  | 'OBV'
+  | 'MFI';
+
+export type RuleLogicalOperator = 'AND' | 'OR' | 'NOT';
+export type RuleComparisonOperator =
+  | 'GREATER_THAN'
+  | 'LESS_THAN'
+  | 'CROSS_ABOVE'
+  | 'CROSS_BELOW'
+  | 'EQUAL'
+  | 'BETWEEN';
+
+export interface IndicatorOperand {
+  kind: 'INDICATOR' | 'PRICE' | 'CONSTANT';
+  indicator?: SupportedIndicatorId;
+  field?: string;
+  params?: Record<string, number>;
+  priceField?: 'close' | 'open' | 'high' | 'low' | 'volume';
+  value?: number;
+}
+
+export interface RuleConditionNode {
+  type: 'CONDITION';
+  left: IndicatorOperand;
+  operator: RuleComparisonOperator;
+  right: IndicatorOperand;
+  rightUpper?: IndicatorOperand;
+}
+
+export interface RuleGroupNode {
+  type: 'GROUP';
+  operator: RuleLogicalOperator;
+  children: RuleNode[];
+}
+
+export type RuleNode = RuleConditionNode | RuleGroupNode;
+
+export interface ConfigParameterSpec {
+  key: string;
+  label: string;
+  type: 'number' | 'boolean' | 'string' | 'select';
+  defaultValue: number | boolean | string;
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: string[];
+  description: string;
+}
+
+export interface ModularStrategyMetadata {
+  strategyId: string;
+  name: string;
+  version: string;
+  category: ModularBotCategory;
+  description: string;
+  supportedMarketTypes: ('SPOT')[];
+  supportedTimeframes: string[];
+  requiredIndicators: SupportedIndicatorId[];
+  configurationSchema: ConfigParameterSpec[];
+  riskCompatibility: {
+    supportsTripleBarrier: boolean;
+    supportsTrailingStop: boolean;
+    requiresQuoteLevelRisk: boolean;
+  };
+  status: 'ACTIVE' | 'BETA' | 'DEPRECATED';
+}
+
+export interface ModularBotConfigV1 {
+  schemaVersion: '1.0';
+  bot: {
+    name: string;
+    category: ModularBotCategory;
+    strategyId: string;
+    strategyVersion: string;
+    tradingPair: string;
+    mode: ModularBotMode;
+  };
+  market: {
+    timeframe: string;
+    dataSource: 'DIMONEX';
+    priceReference: 'LAST_TRADE' | 'MIDPOINT' | 'BEST_BID' | 'BEST_ASK';
+    maxDataAgeMs?: number;
+  };
+  strategy: {
+    indicators: Record<string, number | boolean | string>;
+    entryRules: RuleNode[];
+    exitRules: RuleNode[];
+  };
+  execution: {
+    orderType: ModularOrderType;
+    timeInForce: ModularTimeInForce;
+    postOnly: boolean;
+    maxSlippageBps: number;
+    orderTimeoutSeconds: number;
+    retryCount?: number;
+    tickIntervalMs?: number;
+  };
+  risk: {
+    positionSizing: {
+      method: 'FIXED_QTY' | 'FIXED_QUOTE' | 'PERCENT_BALANCE' | 'RISK_PER_TRADE';
+      value: string;
+      riskPctPerTrade?: string;
+    };
+    tripleBarrier: {
+      enabled: boolean;
+      takeProfitBps: number;
+      stopLossBps: number;
+      takeProfitAbsPrice?: string;
+      stopLossAbsPrice?: string;
+      maxHoldingSeconds: number;
+      exitExecutionPolicy?: 'MARKET_PROTECTED' | 'IOC' | 'LIMIT_TOP_BOOK';
+    };
+    trailingStop: {
+      enabled: boolean;
+      activationBps: number;
+      distanceBps: number;
+      stepBps?: number;
+      breakEvenActivationBps?: number;
+      breakEvenOffsetBps?: number;
+    };
+    limits: {
+      maxOpenOrders: number;
+      maxPositionBase?: string;
+      maxNotional: string;
+      maxDailyLoss: string;
+      maxDrawdownPct?: number;
+      maxOrdersPerMinute?: number;
+      emergencyStop?: boolean;
+    };
+  };
+  paperConfig?: {
+    initialQuoteBalance: string;
+    initialBaseBalance: string;
+    simulatedLatencyMs: number;
+    simulatedSlippageBps: number;
+    partialFillProbabilityPct: number;
+    makerFeeBps?: number;
+    takerFeeBps?: number;
+  };
+}
+
+export interface ModularBotExecution {
+  executionId: string;
+  orderId: string;
+  clientOrderId: string;
+  botId: string;
+  mode: ModularBotMode;
+  pairId: string;
+  side: 'BUY' | 'SELL';
+  orderType: ModularOrderType;
+  priceUnits: string;
+  quantityUnits: string;
+  quoteVolumeUnits: string;
+  feeUnits: string;
+  feeCurrency: string;
+  realizedPnlQuoteUnits: string;
+  isPartial: boolean;
+  timestamp: number;
+  tradeId?: string;
+}
+
+export interface ModularBotSignal {
+  signalId: string;
+  strategyId: string;
+  botInstanceId: string;
+  tradingPair: string;
+  signalTimestamp: number;
+  signalExpiration: number;
+  category: ModularBotCategory;
+  signalType: string;
+  confidenceScore: number;
+  indicatorValues: Record<string, number | string | boolean>;
+  referenceMarketPriceUnits: string;
+  referenceMarketPrice: number;
+  strategyExplanation: string;
+}
+
+export interface ModularBotInstance {
+  id: string;
+  botType: 'MODULAR_STRATEGY_BOT';
+  ownerUserId: string;
+  pairId: string;
+  status: ModularBotStatus;
+  config: ModularBotConfigV1;
+  livePromotionConfirmed: boolean;
+  livePromotionConfirmedAt?: number;
+  position: {
+    botId: string;
+    pairId: string;
+    side: 'LONG' | 'FLAT';
+    baseQtyUnits: string;
+    quoteCostBasisUnits: string;
+    avgEntryPriceUnits: string;
+    openedAt: number | null;
+    highWaterMarkPriceUnits: string;
+    breakEvenArmed: boolean;
+    trailingStopActive: boolean;
+    activeStopLossPriceUnits: string | null;
+    activeTakeProfitPriceUnits: string | null;
+    unrealizedPnlQuoteUnits: string;
+    realizedPnlQuoteUnits: string;
+  };
+  paperWallet?: {
+    baseCurrency: string;
+    quoteCurrency: string;
+    baseAvailableUnits: string;
+    baseLockedUnits: string;
+    quoteAvailableUnits: string;
+    quoteLockedUnits: string;
+  };
+  openOrders: Array<{
+    orderId: string;
+    clientOrderId: string;
+    side: 'BUY' | 'SELL';
+    orderType: ModularOrderType;
+    timeInForce: ModularTimeInForce;
+    priceUnits: string;
+    quantityUnits: string;
+    filledQuantityUnits: string;
+    status: string;
+    createdAt: number;
+  }>;
+  executions: ModularBotExecution[];
+  recentSignals: ModularBotSignal[];
+  logs: Array<{ timestamp: number; type: string; message: string }>;
+  metrics: {
+    ordersSubmitted: number;
+    ordersCancelled: number;
+    ordersFilled: number;
+    totalTrades: number;
+    totalVolumeBaseUnits: string;
+    totalVolumeQuoteUnits: string;
+    totalFeesQuoteUnits: string;
+    realizedPnlQuoteUnits: string;
+    unrealizedPnlQuoteUnits: string;
+    peakEquityQuoteUnits: string;
+    maxDrawdownPct: number;
+    dailyLossQuoteUnits: string;
+    dailyLossDateWib: string;
+    lastRegime: string;
+    lastReferencePrice: number;
+  };
+  errorInfo?: string;
+  lastTickAt?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AccountPortfolioRiskSnapshot {
+  userId: string;
+  activeLiveBotsCount: number;
+  activePaperBotsCount: number;
+  totalLiveOpenOrders: number;
+  totalLiveExposureQuoteUnits: string;
+  maxAllowedAccountExposureQuoteUnits: string;
+  totalLiveDailyPnlQuoteUnits: string;
+  maxAllowedAccountDailyLossQuoteUnits: string;
+  isRiskLocked: boolean;
+  lockReason?: string;
+}
+
+export interface ModularBacktestReport {
+  runId: string;
+  ownerUserId: string;
+  pairId: string;
+  strategyId: string;
+  timeframe: string;
+  candleCount: number;
+  lookAheadBiasGuardVerified: true;
+  createdAt: number;
+  configSnapshot: ModularBotConfigV1;
+  metrics: {
+    totalReturnPct: number;
+    netProfitQuote: number;
+    winRatePct: number;
+    profitFactor: number;
+    maxDrawdownPct: number;
+    maxDrawdownQuote: number;
+    sharpeRatio: number;
+    sortinoRatio: number;
+    averageTradeQuote: number;
+    totalFeesQuote: number;
+    exposureDurationMs: number;
+    exposureDurationPct: number;
+    numberOfTrades: number;
+    initialEquityQuote: number;
+    finalEquityQuote: number;
+  };
+  equityCurve: Array<{
+    time: number;
+    price: number;
+    equityQuote: number;
+    drawdownPct: number;
+    baseQty: number;
+    quoteBalance: number;
+  }>;
+  trades: ModularBotExecution[];
+  optimizationResults?: Array<{
+    params: Record<string, number | string>;
+    totalReturnPct: number;
+    netProfitQuote: number;
+    winRatePct: number;
+    maxDrawdownPct: number;
+    sharpeRatio: number;
+    numberOfTrades: number;
+  }>;
+}
+

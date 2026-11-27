@@ -94,7 +94,8 @@ export type BotType =
   | 'QUANT_HFT_MM'
   | 'SMART_HFT_LADDER'
   | 'ADVANCED_MM'
-  | 'MOVEMENT_DEPTH_LIQUIDITY';
+  | 'MOVEMENT_DEPTH_LIQUIDITY'
+  | 'MODULAR_STRATEGY_BOT';
 
 export type JournalTxType = 
   | 'DEPOSIT' 

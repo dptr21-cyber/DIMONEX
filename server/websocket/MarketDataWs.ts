@@ -28,9 +28,14 @@ export class MarketDataWebSocketService {
   private depthInterval: NodeJS.Timeout | null = null;
   private lastBroadcastDepthSeq: Map<string, number> = new Map();
   private botProvider?: (userId: string) => any[];
+  private modularBotsProvider?: (userId: string) => any[];
 
   setBotProvider(fn: (userId: string) => any[]) {
     this.botProvider = fn;
+  }
+
+  setModularBotsProvider(fn: (userId: string) => any[]) {
+    this.modularBotsProvider = fn;
   }
 
   initialize(wss: WebSocketServer) {
@@ -78,6 +83,19 @@ export class MarketDataWebSocketService {
                   type: 'bot_snapshot',
                   channel: payload.channel,
                   data: userBots
+                }));
+              }
+            }
+
+            if (payload.channel.startsWith('modular_bots')) {
+              const targetUserId = payload.channel.includes(':')
+                ? payload.channel.split(':')[1]
+                : (sub.userId || payload.userId);
+              if (targetUserId && this.modularBotsProvider) {
+                ws.send(JSON.stringify({
+                  type: 'modular_bot_snapshot',
+                  channel: payload.channel,
+                  data: this.modularBotsProvider(targetUserId)
                 }));
               }
             }
@@ -288,6 +306,62 @@ export class MarketDataWebSocketService {
     });
     for (const client of this.clients) {
       if (client.ws.readyState === WebSocket.OPEN && client.ws.bufferedAmount < 1024 * 1024) {
+        client.ws.send(message);
+      }
+    }
+  }
+
+  broadcastModularBotUpdate(bot: any) {
+    const channel = `modular_bots:${bot.ownerUserId}`;
+    const message = JSON.stringify({
+      type: 'modular_bot_updated',
+      channel,
+      data: bot,
+    });
+    for (const client of this.clients) {
+      if (
+        (client.userId === bot.ownerUserId ||
+          client.channels.has(channel) ||
+          client.channels.has('modular_bots')) &&
+        client.ws.readyState === WebSocket.OPEN &&
+        client.ws.bufferedAmount < 1024 * 1024
+      ) {
+        client.ws.send(message);
+      }
+    }
+  }
+
+  broadcastModularSignal(userId: string, signal: any) {
+    const channel = `modular_bots:${userId}`;
+    const message = JSON.stringify({
+      type: 'modular_bot_signal',
+      channel,
+      data: signal,
+    });
+    for (const client of this.clients) {
+      if (
+        (client.userId === userId || client.channels.has(channel) || client.channels.has('modular_bots')) &&
+        client.ws.readyState === WebSocket.OPEN &&
+        client.ws.bufferedAmount < 1024 * 1024
+      ) {
+        client.ws.send(message);
+      }
+    }
+  }
+
+  broadcastModularExecution(userId: string, execution: any) {
+    const channel = `modular_bots:${userId}`;
+    const message = JSON.stringify({
+      type: 'modular_bot_execution',
+      channel,
+      data: execution,
+    });
+    for (const client of this.clients) {
+      if (
+        (client.userId === userId || client.channels.has(channel) || client.channels.has('modular_bots')) &&
+        client.ws.readyState === WebSocket.OPEN &&
+        client.ws.bufferedAmount < 1024 * 1024
+      ) {
         client.ws.send(message);
       }
     }

@@ -48,6 +48,8 @@ import { earnService } from './services/earn/EarnService.js';
 import { copyTradingRouter } from './routes/copyTrading.js';
 import { copyTradingService } from './services/copy/CopyTradingService.js';
 import { pnlService } from './services/pnl/PnLService.js';
+import { modularBotRouter } from './routes/modularBot.js';
+import { modularBotOrchestrator } from './services/modularBot/ModularBotOrchestrator.js';
 
 export async function startServer() {
   const app = express();
@@ -92,6 +94,7 @@ export async function startServer() {
   app.use('/api/copy-trading', copyTradingRouter);
   app.use('/api/risk', riskRouter);
   app.use('/api/bot/volume-v2', volumeExecutionV2Router);
+  app.use('/api/modular-bots', modularBotRouter);
   app.use('/api/bot', botRouter);
   app.use('/api/mm', mmConsoleRouter);
   app.use('/api/bot/mm', mmConsoleRouter);
@@ -202,6 +205,7 @@ export async function startServer() {
     earnService.startScheduler();
     copyTradingService.start();
     pnlService.startScheduler();
+    modularBotOrchestrator.startRecovery();
 
     // Background periodic live rate sync every 120 seconds (respects syncIntervalMinutes cache & CMC cooldown)
     setInterval(() => {

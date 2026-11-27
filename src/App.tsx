@@ -30,6 +30,7 @@ import { AdminView } from './components/admin/AdminView.js';
 import { BotConsoleView } from './components/bot/BotConsoleView.js';
 import { MMConsoleView } from './components/bot/MMConsoleView.js';
 import { TradingBotsView } from './components/bot/TradingBotsView.js';
+import { ModularStrategyDashboard } from './components/bot/modular/ModularStrategyDashboard.js';
 import { CopyTradingView } from './components/copy/CopyTradingView.js';
 import { ConvertView } from './components/convert/ConvertView.js';
 import { RewardsVipView } from './components/rewards/RewardsVipView.js';
@@ -48,7 +49,7 @@ import { safeFetchJson } from './lib/safeFetch.js';
 import { loadAssetRegistry, hydrateAssetRegistryFromList } from './lib/assetRegistry.js';
 import { isWebSocketSupported, reportWebSocketSuccess, reportWebSocketFailure } from './utils/wsHelper.js';
 import { SpotPreferencesModal, SPOT_LAYOUT_LABELS } from './components/trading/SpotPreferencesModal.js';
-import { ChevronDown, Search, Zap, Bot, Building2, SlidersHorizontal, Eye, EyeOff } from 'lucide-react';
+import { ChevronDown, Search, Zap, Bot, Building2, SlidersHorizontal, Eye, EyeOff, Cpu } from 'lucide-react';
 
 export type ActiveViewType =
   | 'OVERVIEW'
@@ -90,7 +91,7 @@ function AppContent() {
     return 'TRADE';
   });
 
-  const [botConsoleMode, setBotConsoleMode] = useState<'STRATEGIES' | 'AUTOMATED' | 'MM_CONSOLE'>('STRATEGIES');
+  const [botConsoleMode, setBotConsoleMode] = useState<'STRATEGIES' | 'MODULAR_BOT' | 'AUTOMATED' | 'MM_CONSOLE'>('MODULAR_BOT');
   const [lang, setLangState] = useState<AppLanguage>(() => {
     return (localStorage.getItem('dimonex_lang') as AppLanguage) || 'EN';
   });
@@ -1203,6 +1204,11 @@ function AppContent() {
                 onChange={setBotConsoleMode}
                 tabs={[
                   {
+                    id: 'MODULAR_BOT',
+                    label: 'Modular Strategy Bot',
+                    icon: <Cpu className="w-3.5 h-3.5" />,
+                  },
+                  {
                     id: 'STRATEGIES',
                     label: 'Bot Trading Strategies',
                     icon: <Zap className="w-3.5 h-3.5" />,
@@ -1219,6 +1225,16 @@ function AppContent() {
                   },
                 ]}
               />
+
+              {botConsoleMode === 'MODULAR_BOT' && (
+                <ModularStrategyDashboard
+                  user={user}
+                  pairs={pairs}
+                  onOpenAuthModal={() => setIsAuthModalOpen(true)}
+                  onRefreshBalances={refreshBalances}
+                  onRefreshOrders={refreshUserOrders}
+                />
+              )}
 
               {botConsoleMode === 'STRATEGIES' && (
                 <BotConsoleView

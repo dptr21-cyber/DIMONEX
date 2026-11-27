@@ -18,6 +18,7 @@ import { matchingEngine } from '../engine/MatchingEngine.js';
 import { LedgerService } from '../ledger/LedgerService.js';
 import { marketWsService } from '../websocket/MarketDataWs.js';
 import { ListingActivationService } from './listing/ListingActivationService.js';
+import { earnService } from './earn/EarnService.js';
 
 export interface DelistExecutionResult {
   pair: TradingPair;
@@ -233,6 +234,18 @@ export function executeDelistMarket(
     market.status = 'CLOSED';
     market.updatedAt = now;
     db.markets.set(market.id, market);
+  }
+
+  // 4b. Auto-pause Earn vaults if all market pairs for this base asset are now delisted
+  const hasRemainingNonDelistedPair = Array.from(db.tradingPairs.values()).some(
+    p => p.baseCurrency.toUpperCase() === pair.baseCurrency.toUpperCase() && !p.isDelisted
+  );
+  if (!hasRemainingNonDelistedPair) {
+    earnService.pauseVaultsForAsset(
+      pair.baseCurrency,
+      actorId,
+      `Market ${pair.id} di-delisting`
+    );
   }
 
   // 5. Audit log + persist + broadcast

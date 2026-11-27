@@ -160,6 +160,11 @@ export class OrderBook {
     let bookIdx = 0;
     while (bookIdx < bookSide.length && takerRemainingQty > 0n) {
       const makerOrder = bookSide[bookIdx];
+      const makerRemCheck = BigInt(makerOrder.quantity) - BigInt(makerOrder.filledQuantity);
+      if (makerRemCheck <= 0n || makerOrder.status === 'FILLED' || makerOrder.status === 'CANCELLED') {
+        bookSide.splice(bookIdx, 1);
+        continue;
+      }
       const makerPriceUnits = BigInt(makerOrder.price);
 
       // Check price matching condition
@@ -337,17 +342,194 @@ export class OrderBook {
           LedgerService.unlockBalanceUpToLocked(takerOrder.userId, unlockCurrency, remainingLock);
         }
       } else {
-        // Limit GTC: Insert remaining order into book
-        this.insertOrderIntoBook(takerOrder);
+        // Limit GTC: Insert remaining order into book and ensure no crossed resting book remains
+        this.insertOrderIntoBook(takerOrder, result);
       }
     }
 
     return result;
   }
 
-  insertOrderIntoBook(order: Order) {
+  matchRestingBook(result?: MatchResult): MatchResult {
+    const res = result || {
+      trades: [],
+      takerOrder: {} as Order,
+      makerOrdersUpdated: [],
+      cancelledOrders: [],
+      events: []
+    };
+
+    while (this.bids.length > 0 && this.asks.length > 0) {
+      const bestBid = this.bids[0];
+      const bestAsk = this.asks[0];
+      const bidPrice = BigInt(bestBid.price);
+      const askPrice = BigInt(bestAsk.price);
+
+      if (bidPrice < askPrice) {
+        break;
+      }
+
+      const isBidMaker = bestBid.createdAt <= bestAsk.createdAt;
+      const makerOrder = isBidMaker ? bestBid : bestAsk;
+      const takerOrder = isBidMaker ? bestAsk : bestBid;
+
+      const makerRem = BigInt(makerOrder.quantity) - BigInt(makerOrder.filledQuantity);
+      const takerRem = BigInt(takerOrder.quantity) - BigInt(takerOrder.filledQuantity);
+
+      if (makerRem <= 0n) {
+        if (isBidMaker) this.bids.shift();
+        else this.asks.shift();
+        continue;
+      }
+      if (takerRem <= 0n) {
+        if (isBidMaker) this.asks.shift();
+        else this.bids.shift();
+        continue;
+      }
+
+      const matchQty = takerRem < makerRem ? takerRem : makerRem;
+      const executionPriceUnits = BigInt(makerOrder.price);
+      const quoteVolumeUnits = PrecisionMath.calculateQuoteAmount(
+        matchQty,
+        this.pairConfig.baseDecimals,
+        executionPriceUnits
+      );
+
+      const isSelfTrade = makerOrder.userId === takerOrder.userId;
+      const makerFeeUnits = isSelfTrade ? 0n : PrecisionMath.calculateFee(quoteVolumeUnits, this.pairConfig.makerFeeBps);
+      const takerFeeUnits = isSelfTrade ? 0n : PrecisionMath.calculateFee(quoteVolumeUnits, this.pairConfig.takerFeeBps);
+
+      const makerPrevLock = makerOrder.lockedAmount;
+      const takerPrevLock = takerOrder.lockedAmount;
+      const makerRemAfter = makerRem - matchQty;
+      const takerRemAfter = takerRem - matchQty;
+      const makerLockedSliceUnits = this.consumeOrderLockSlice(makerOrder, matchQty, makerRem, makerRemAfter);
+      const takerLockedSliceUnits = this.consumeOrderLockSlice(takerOrder, matchQty, takerRem, takerRemAfter);
+
+      const tradeId = crypto.randomUUID();
+      const trade: Trade = {
+        id: tradeId,
+        pairId: this.pairId,
+        makerOrderId: makerOrder.id,
+        takerOrderId: takerOrder.id,
+        makerUserId: makerOrder.userId,
+        takerUserId: takerOrder.userId,
+        price: executionPriceUnits.toString(),
+        quantity: matchQty.toString(),
+        quoteVolume: quoteVolumeUnits.toString(),
+        makerFee: makerFeeUnits.toString(),
+        takerFee: takerFeeUnits.toString(),
+        takerSide: takerOrder.side,
+        createdAt: Date.now()
+      };
+
+      try {
+        LedgerService.settleTrade({
+          tradeId,
+          pairId: this.pairId,
+          makerUserId: makerOrder.userId,
+          takerUserId: takerOrder.userId,
+          makerSide: makerOrder.side,
+          matchPriceUnits: executionPriceUnits,
+          matchQuantityUnits: matchQty,
+          quoteVolumeUnits,
+          makerFeeUnits,
+          takerFeeUnits,
+          makerLockedSliceUnits,
+          takerLockedSliceUnits,
+          baseCurrency: this.pairConfig.baseCurrency,
+          quoteCurrency: this.pairConfig.quoteCurrency
+        });
+      } catch (err: any) {
+        // Restore lock metadata and safely evict unbacked resting order(s) rather than faking a trade
+        makerOrder.lockedAmount = makerPrevLock;
+        takerOrder.lockedAmount = takerPrevLock;
+        const msg = String(err?.message || err);
+        console.error(`[OrderBook] Match settlement failed for resting cross (${makerOrder.id} vs ${takerOrder.id}):`, msg);
+
+        const evictOrder = (ord: Order, isBid: boolean) => {
+          const rem = BigInt(ord.quantity) - BigInt(ord.filledQuantity);
+          const unlockAmt = this.calculateRemainingLockForOrder(ord, rem);
+          ord.status = 'CANCELLED';
+          ord.lockedAmount = '0';
+          ord.updatedAt = Date.now();
+          db.orders.set(ord.id, ord);
+          res.cancelledOrders.push(ord);
+          res.events.push(this.recordEvent('ORDER_CANCELLED', { orderId: ord.id, reason: 'SETTLEMENT_INVARIANT_EVICTION' }));
+          if (isBid) this.bids.shift();
+          else this.asks.shift();
+          if (unlockAmt > 0n) {
+            const unlockCurr = ord.side === 'BUY' ? this.pairConfig.quoteCurrency : this.pairConfig.baseCurrency;
+            try {
+              LedgerService.unlockBalanceUpToLocked(ord.userId, unlockCurr, unlockAmt);
+            } catch {}
+          }
+        };
+
+        if (msg.includes('Maker')) {
+          evictOrder(makerOrder, isBidMaker);
+        } else if (msg.includes('Taker')) {
+          evictOrder(takerOrder, !isBidMaker);
+        } else {
+          evictOrder(makerOrder, isBidMaker);
+        }
+        continue;
+      }
+
+      makerOrder.filledQuantity = (BigInt(makerOrder.filledQuantity) + matchQty).toString();
+      makerOrder.updatedAt = Date.now();
+      if (BigInt(makerOrder.filledQuantity) >= BigInt(makerOrder.quantity)) {
+        makerOrder.status = 'FILLED';
+        makerOrder.lockedAmount = '0';
+        if (isBidMaker) this.bids.shift();
+        else this.asks.shift();
+      } else {
+        makerOrder.status = 'PARTIALLY_FILLED';
+      }
+      db.orders.set(makerOrder.id, makerOrder);
+      if (!res.makerOrdersUpdated.some(o => o.id === makerOrder.id)) {
+        res.makerOrdersUpdated.push(makerOrder);
+      }
+
+      takerOrder.filledQuantity = (BigInt(takerOrder.filledQuantity) + matchQty).toString();
+      takerOrder.updatedAt = Date.now();
+      if (BigInt(takerOrder.filledQuantity) >= BigInt(takerOrder.quantity)) {
+        takerOrder.status = 'FILLED';
+        takerOrder.lockedAmount = '0';
+        if (isBidMaker) this.asks.shift();
+        else this.bids.shift();
+      } else {
+        takerOrder.status = 'PARTIALLY_FILLED';
+      }
+      db.orders.set(takerOrder.id, takerOrder);
+      if (!res.makerOrdersUpdated.some(o => o.id === takerOrder.id) && takerOrder.id !== res.takerOrder?.id) {
+        res.makerOrdersUpdated.push(takerOrder);
+      }
+
+      db.trades.push(trade);
+      this.updateTickerWithTrade(trade);
+      klineService.processTrade(trade);
+      res.trades.push(trade);
+      res.events.push(this.recordEvent('ORDER_MATCHED', trade));
+
+      for (const listener of tradeSettledListeners) {
+        try {
+          listener(trade);
+        } catch (err: any) {
+          console.warn('[OrderBook] Trade listener error:', err?.message || err);
+        }
+      }
+    }
+
+    return res;
+  }
+
+  insertOrderIntoBook(order: Order, result?: MatchResult): MatchResult {
+    if (this.bids.some(o => o.id === order.id) || this.asks.some(o => o.id === order.id)) {
+      return this.matchRestingBook(result);
+    }
+
     if (order.side === 'BUY') {
-      // Insert into bids: Price DESCENDING, then timestamp ASCENDING
       const price = BigInt(order.price);
       let i = 0;
       while (i < this.bids.length) {
@@ -361,7 +543,6 @@ export class OrderBook {
       }
       this.bids.splice(i, 0, order);
     } else {
-      // Insert into asks: Price ASCENDING, then timestamp ASCENDING
       const price = BigInt(order.price);
       let i = 0;
       while (i < this.asks.length) {
@@ -375,6 +556,8 @@ export class OrderBook {
       }
       this.asks.splice(i, 0, order);
     }
+
+    return this.matchRestingBook(result);
   }
 
   cancelOrder(orderId: string, userId: string, userRole?: string): Order {

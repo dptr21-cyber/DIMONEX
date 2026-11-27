@@ -11,6 +11,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { safeFetchJson, runConcurrentTasks } from '../../../lib/safeFetch.js';
 import {
+  AlertTriangle,
   CheckCircle2,
   Coins,
   Database,
@@ -25,6 +26,7 @@ import {
   Search,
   ShieldAlert,
   ShieldCheck,
+  Trash2,
   TrendingUp,
   Users,
   Zap,
@@ -154,6 +156,22 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
 
   // Epoch Simulation Confirmation Modal
   const [showEpochModal, setShowEpochModal] = useState(false);
+
+  // Delete Vault / Token / Orphaned Cleanup Modal
+  const [deleteTarget, setDeleteTarget] = useState<EarnVaultItem | null>(null);
+  const [deleteScope, setDeleteScope] = useState<'VAULT' | 'TOKEN' | 'ORPHANED'>('VAULT');
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteForce, setDeleteForce] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteDependencies, setDeleteDependencies] = useState<{
+    vaultIds: string[];
+    vaultNames: string[];
+    asset: string;
+    activePositionsCount: number;
+    activeStakersCount: number;
+    totalStakedDisplay: string;
+    accruedYieldDisplay: string;
+  } | null>(null);
 
   const notify = useCallback(
     (type: 'success' | 'error', text: string) => {
@@ -285,6 +303,16 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
       uniqueStakers,
     };
   }, [vaults, positions]);
+
+  const orphanedVaults = useMemo(
+    () => vaults.filter(v => Boolean(v.isAssetDeleted || v.isDelisted || v.assetStatus === 'RETIRED')),
+    [vaults]
+  );
+
+  const orphanedSymbols = useMemo(
+    () => Array.from(new Set(orphanedVaults.map(v => v.asset))),
+    [orphanedVaults]
+  );
 
   const filteredVaults = useMemo(() => {
     const q = vaultSearch.trim().toLowerCase();
@@ -486,6 +514,88 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
       onAuditRefresh?.();
     } catch (err: any) {
       notify('error', err.message || 'Gagal membuka lockup posisi');
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const openDeleteVaultModal = (v: EarnVaultItem, initialScope: 'VAULT' | 'TOKEN' = 'VAULT') => {
+    setDeleteTarget(v);
+    setDeleteScope(initialScope);
+    setDeleteForce(false);
+    setDeleteError(null);
+    setDeleteDependencies(null);
+    setDeleteModalOpen(true);
+  };
+
+  const openCleanupOrphanedModal = () => {
+    setDeleteTarget(null);
+    setDeleteScope('ORPHANED');
+    setDeleteForce(false);
+    setDeleteError(null);
+    setDeleteDependencies(null);
+    setDeleteModalOpen(true);
+  };
+
+  const handleConfirmDeleteVault = async () => {
+    const token = localStorage.getItem('dimonex_auth_token');
+    if (!token) {
+      notify('error', 'Sesi administrator tidak ditemukan. Silakan masuk ulang.');
+      return;
+    }
+
+    setActionBusy(true);
+    setDeleteError(null);
+    try {
+      const forceQuery = deleteForce ? '?force=1' : '';
+      let url = '';
+      let method: 'DELETE' | 'POST' = 'DELETE';
+
+      if (deleteScope === 'ORPHANED') {
+        url = `/api/admin/earn/pools/cleanup-delisted${forceQuery}`;
+        method = 'POST';
+      } else if (deleteScope === 'TOKEN' && deleteTarget) {
+        url = `/api/admin/earn/tokens/${encodeURIComponent(deleteTarget.asset)}${forceQuery}`;
+        method = 'DELETE';
+      } else if (deleteTarget) {
+        url = `/api/admin/earn/pools/${encodeURIComponent(deleteTarget.id)}${forceQuery}`;
+        method = 'DELETE';
+      } else {
+        return;
+      }
+
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ force: deleteForce }),
+      });
+      const data = await res.json();
+
+      if (res.status === 409 && data.requiresForce) {
+        setDeleteDependencies(data.dependencies || null);
+        setDeleteError(data.error || 'Masih terdapat posisi staker aktif pada vault ini.');
+        return;
+      }
+
+      if (!res.ok) {
+        setDeleteError(data.error || 'Gagal menghapus vault / token staking');
+        notify('error', data.error || 'Gagal menghapus vault / token staking');
+        return;
+      }
+
+      notify('success', data.message || 'Vault / token staking berhasil dihapus.');
+      setDeleteModalOpen(false);
+      setDeleteTarget(null);
+      setDeleteDependencies(null);
+      await loadConsoleData(true);
+      onAuditRefresh?.();
+    } catch (err: any) {
+      const msg = err?.message || 'Gagal menghapus vault / token staking';
+      setDeleteError(msg);
+      notify('error', msg);
     } finally {
       setActionBusy(false);
     }
@@ -693,7 +803,34 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
           SUB-TAB 1: VAULTS & APY MANAGER
           ===================================================================== */}
       {subTab === 'VAULTS' && (
-        <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
+        <div className="space-y-3">
+          {orphanedVaults.length > 0 && (
+            <div className="p-3.5 rounded-[10px] bg-[#2C2415]/60 border border-[#D6A85C]/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start gap-2.5 text-xs">
+                <AlertTriangle className="w-4 h-4 text-[#D6A85C] shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-semibold text-[#E4EBEF]">
+                    {orphanedVaults.length} Vault Terkait Token Terhapus / Delisted ({orphanedSymbols.join(', ')})
+                  </div>
+                  <div className="text-[11px] text-[#A1AFB8] mt-0.5">
+                    Token tersebut sudah dihapus dari Asset Management atau di-delisting dari pasar. Bersihkan vault terkait agar daftar produk tetap sinkron.
+                  </div>
+                </div>
+              </div>
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={actionBusy}
+                onClick={openCleanupOrphanedModal}
+                icon={<Trash2 className="w-3.5 h-3.5" />}
+                className="whitespace-nowrap shrink-0 self-start sm:self-auto"
+              >
+                Bersihkan Vault Delisted / Terhapus
+              </Button>
+            </div>
+          )}
+
+          <div className="rounded-[10px] bg-[#141C24] border border-[#202B34] overflow-hidden">
           <div className="p-4 border-b border-[#202B34] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="relative flex-1 max-w-sm">
               <Search className="w-3.5 h-3.5 text-[#71818B] absolute left-3 top-1/2 -translate-y-1/2" />
@@ -747,16 +884,22 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
                 ) : (
                   filteredVaults.map(v => {
                     const utilPct = Math.min(100, (v.utilizationBps || 0) / 100);
+                    const isOrphaned = Boolean(v.isAssetDeleted || v.isDelisted || v.assetStatus === 'RETIRED');
                     return (
                       <tr key={v.id} className="hover:bg-[#17212B]/60 transition-colors">
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-2.5">
                             <AssetIcon symbol={v.asset} size="sm" logoUrl={v.assetLogoUrl} />
                             <div className="min-w-0">
-                              <div className="font-semibold text-[#E4EBEF] flex items-center gap-1.5">
+                              <div className="font-semibold text-[#E4EBEF] flex items-center gap-1.5 flex-wrap">
                                 <span className="truncate max-w-[190px]">{v.name}</span>
                                 {v.isFeatured && (
                                   <span className="text-[10px] font-mono text-[#D6A85C]">Featured</span>
+                                )}
+                                {isOrphaned && (
+                                  <StatusBadge tone="danger">
+                                    {v.isAssetDeleted ? 'ASET DIHAPUS' : 'DELISTED'}
+                                  </StatusBadge>
                                 )}
                               </div>
                               <div className="text-[11px] font-mono text-[#71818B]">
@@ -813,8 +956,13 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                disabled={actionBusy}
+                                disabled={actionBusy || (v.status !== 'ACTIVE' && isOrphaned)}
                                 onClick={() => handleToggleVaultStatus(v)}
+                                title={
+                                  v.status !== 'ACTIVE' && isOrphaned
+                                    ? 'Tidak dapat diaktifkan karena aset sudah dihapus atau delisted'
+                                    : undefined
+                                }
                                 icon={
                                   v.status === 'ACTIVE' ? (
                                     <PauseCircle className="w-3.5 h-3.5 text-[#D6A85C]" />
@@ -834,6 +982,16 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
                             >
                               Edit Vault
                             </Button>
+                            <Button
+                              variant="danger"
+                              size="sm"
+                              disabled={actionBusy}
+                              onClick={() => openDeleteVaultModal(v, 'VAULT')}
+                              icon={<Trash2 className="w-3.5 h-3.5" />}
+                              title={`Hapus vault atau seluruh token ${v.asset}`}
+                            >
+                              Hapus
+                            </Button>
                           </div>
                         </td>
                       </tr>
@@ -842,6 +1000,7 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
                 )}
               </tbody>
             </table>
+          </div>
           </div>
         </div>
       )}
@@ -1596,6 +1755,202 @@ export const StakingAdminConsole: React.FC<Props> = ({ onNotify, onAuditRefresh 
               onClick={() => handleRunYieldSettlement(true)}
             >
               Jalankan Siklus Yield (+1d)
+            </Button>
+          </div>
+        </div>
+      </Modal>
+      {/* =====================================================================
+          MODAL: DELETE VAULT / TOKEN VAULTS / ORPHANED DELISTED CLEANUP
+          ===================================================================== */}
+      <Modal
+        isOpen={deleteModalOpen}
+        onClose={() => {
+          if (!actionBusy) {
+            setDeleteModalOpen(false);
+            setDeleteTarget(null);
+            setDeleteDependencies(null);
+            setDeleteError(null);
+          }
+        }}
+        title={
+          deleteScope === 'ORPHANED'
+            ? 'Bersihkan Vault Token Terhapus / Delisted'
+            : deleteTarget
+              ? deleteScope === 'TOKEN'
+                ? `Hapus Seluruh Vault Token — ${deleteTarget.asset}`
+                : `Hapus Staking Vault — ${deleteTarget.name}`
+              : 'Hapus Vault'
+        }
+        subtitle={
+          deleteScope === 'ORPHANED'
+            ? `${orphanedVaults.length} vault terkait aset yang telah dihapus atau di-delisting akan dibersihkan.`
+            : deleteTarget
+              ? `${deleteTarget.asset} · ${deleteTarget.id}`
+              : undefined
+        }
+        maxWidth="max-w-lg"
+      >
+        <div className="space-y-4 text-xs">
+          {deleteTarget && deleteScope !== 'ORPHANED' && (() => {
+            const sameTokenCount = vaults.filter(
+              item => item.asset.toUpperCase() === deleteTarget.asset.toUpperCase()
+            ).length;
+            return (
+              <>
+                <div className="p-3.5 rounded-[10px] bg-[#111820] border border-[#202B34] flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <AssetIcon symbol={deleteTarget.asset} logoUrl={deleteTarget.assetLogoUrl} size="md" />
+                    <div className="min-w-0">
+                      <div className="font-mono font-bold text-[#E4EBEF] truncate">
+                        {deleteTarget.asset} · {deleteTarget.name}
+                      </div>
+                      <div className="text-[11px] font-mono text-[#71818B]">
+                        TVL: {deleteTarget.totalStakedDisplay} {deleteTarget.asset} · {deleteTarget.activePositionsCount} posisi aktif
+                      </div>
+                    </div>
+                  </div>
+                  {(deleteTarget.isAssetDeleted || deleteTarget.isDelisted) && (
+                    <StatusBadge tone="danger">
+                      {deleteTarget.isAssetDeleted ? 'ASET DIHAPUS' : 'DELISTED'}
+                    </StatusBadge>
+                  )}
+                </div>
+
+                {sameTokenCount > 1 && (
+                  <div className="p-3 rounded-[8px] bg-[#111820] border border-[#202B34] space-y-2">
+                    <div className="text-[11px] font-medium text-[#A1AFB8]">
+                      Cakupan Penghapusan Token ({deleteTarget.asset} memiliki {sameTokenCount} vault):
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeleteScope('VAULT');
+                          setDeleteDependencies(null);
+                          setDeleteError(null);
+                          setDeleteForce(false);
+                        }}
+                        className={`p-2.5 rounded-[7px] border text-left transition-colors cursor-pointer ${
+                          deleteScope === 'VAULT'
+                            ? 'bg-[#1D2832] border-[#8DA5B1] text-[#E4EBEF]'
+                            : 'bg-[#141C24] border-[#202B34] text-[#71818B] hover:text-[#E4EBEF]'
+                        }`}
+                      >
+                        <div className="font-semibold">Hanya Vault Ini</div>
+                        <div className="text-[11px] font-mono truncate mt-0.5">{deleteTarget.id}</div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeleteScope('TOKEN');
+                          setDeleteDependencies(null);
+                          setDeleteError(null);
+                          setDeleteForce(false);
+                        }}
+                        className={`p-2.5 rounded-[7px] border text-left transition-colors cursor-pointer ${
+                          deleteScope === 'TOKEN'
+                            ? 'bg-[#401F27]/70 border-[#EA5B65]/60 text-[#E4EBEF]'
+                            : 'bg-[#141C24] border-[#202B34] text-[#71818B] hover:text-[#E4EBEF]'
+                        }`}
+                      >
+                        <div className="font-semibold">Hapus Token {deleteTarget.asset}</div>
+                        <div className="text-[11px] font-mono mt-0.5">
+                          Seluruh {sameTokenCount} vault {deleteTarget.asset}
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+
+          {deleteScope === 'ORPHANED' && (
+            <div className="p-3.5 rounded-[10px] bg-[#111820] border border-[#202B34] space-y-2">
+              <div className="font-semibold text-[#E4EBEF]">
+                Daftar Vault Aset Terhapus / Delisted ({orphanedVaults.length}):
+              </div>
+              <div className="max-h-36 overflow-y-auto space-y-1.5 text-[11px] font-mono">
+                {orphanedVaults.map(ov => (
+                  <div key={ov.id} className="flex items-center justify-between gap-2 text-[#A1AFB8]">
+                    <span className="truncate">
+                      {ov.asset} · {ov.name}
+                    </span>
+                    <span className="shrink-0 text-[#E4EBEF]">
+                      {ov.activePositionsCount} pos ({ov.totalStakedDisplay} {ov.asset})
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {deleteError && (
+            <div className="p-3 rounded-[8px] bg-[#401F27]/70 border border-[#EA5B65]/50 text-xs text-[#E4EBEF] flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-[#EA5B65] shrink-0 mt-0.5" />
+              <span>{deleteError}</span>
+            </div>
+          )}
+
+          {deleteDependencies && (
+            <div className="p-3.5 rounded-[10px] bg-[#2C2415]/60 border border-[#D6A85C]/40 space-y-2">
+              <div className="font-semibold text-[#D6A85C]">
+                Posisi Staker Aktif Terdeteksi:
+              </div>
+              <ul className="space-y-1 text-[11px] font-mono text-[#E4EBEF]">
+                <li>• Posisi Staker Aktif: {deleteDependencies.activePositionsCount} posisi ({deleteDependencies.activeStakersCount} pengguna)</li>
+                <li>• Total Principal Terkunci: {deleteDependencies.totalStakedDisplay} {deleteDependencies.asset}</li>
+                <li>• Accrued Yield Tertunda: {deleteDependencies.accruedYieldDisplay} {deleteDependencies.asset}</li>
+              </ul>
+              <label className="pt-2 border-t border-[#D6A85C]/25 flex items-start gap-2 text-xs font-semibold text-[#E4EBEF] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={deleteForce}
+                  onChange={e => setDeleteForce(e.target.checked)}
+                  className="mt-0.5 rounded border-[#40515D] bg-[#141C24] accent-[#EA5B65]"
+                />
+                <span>
+                  Aktifkan Hapus Paksa (Force Delete): cairkan &amp; kembalikan 100% pokok + yield terakumulasi ke dompet Spot pengguna (0% penalti), lalu hapus vault permanen.
+                </span>
+              </label>
+            </div>
+          )}
+
+          {!deleteDependencies && (
+            <p className="text-[#A1AFB8] leading-relaxed">
+              Vault yang dihapus tidak lagi muncul di halaman Earn &amp; Staking pengguna maupun Admin Console. Jika masih ada staker aktif, sistem akan meminta konfirmasi pengembalian dana terlebih dahulu.
+            </p>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-[#202B34]">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={actionBusy}
+              onClick={() => {
+                setDeleteModalOpen(false);
+                setDeleteTarget(null);
+              }}
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              isLoading={actionBusy}
+              disabled={actionBusy || (Boolean(deleteDependencies) && !deleteForce)}
+              onClick={handleConfirmDeleteVault}
+              icon={<Trash2 className="w-3.5 h-3.5" />}
+            >
+              {deleteDependencies
+                ? 'Konfirmasi Hapus Paksa & Refund'
+                : deleteScope === 'ORPHANED'
+                  ? `Bersihkan ${orphanedVaults.length} Vault`
+                  : deleteScope === 'TOKEN' && deleteTarget
+                    ? `Hapus Token ${deleteTarget.asset}`
+                    : 'Hapus Vault'}
             </Button>
           </div>
         </div>
