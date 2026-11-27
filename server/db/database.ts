@@ -242,12 +242,15 @@ class DatabaseStore {
       this.scheduleSave();
     }
 
-    // Register exit handlers to ensure state is flushed to disk
-    const onExit = () => {
+    // Register exit handlers to ensure state is flushed to disk without blocking process shutdown
+    const onExit = (signal: NodeJS.Signals) => {
       this.flushSync();
+      if (process.listenerCount(signal) <= 1) {
+        process.exit(0);
+      }
     };
-    process.on('SIGINT', onExit);
-    process.on('SIGTERM', onExit);
+    process.on('SIGINT', () => onExit('SIGINT'));
+    process.on('SIGTERM', () => onExit('SIGTERM'));
   }
 
   // Hash password using PBKDF2
