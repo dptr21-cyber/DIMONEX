@@ -8,7 +8,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { TradingPairItem, UserProfile, UserBalance } from '../../types/index.js';
+import { TradingPairItem, UserProfile, UserBalance, OrderItem, TradeItem } from '../../types/index.js';
 import {
   formatCrypto,
   formatQuotePrice,
@@ -26,7 +26,10 @@ interface Props {
   balances: UserBalance[];
   selectedPriceUnits: string | null;
   layoutMode?: 'STACKED' | 'HORIZONTAL';
-  onOrderPlaced: (order?: any) => void;
+  onOrderPlaced?: (order?: any) => void;
+  onOptimisticOrderCreate?: (optimisticOrder: OrderItem) => void;
+  onOptimisticOrderConfirm?: (optimisticId: string, serverOrder?: OrderItem, trades?: TradeItem[]) => void;
+  onOptimisticOrderRollback?: (optimisticId: string) => void;
   onOpenAuthModal: () => void;
 }
 
@@ -49,6 +52,9 @@ export const OrderPlacementForm: React.FC<Props> = ({
   selectedPriceUnits,
   layoutMode = 'STACKED',
   onOrderPlaced,
+  onOptimisticOrderCreate,
+  onOptimisticOrderConfirm,
+  onOptimisticOrderRollback,
   onOpenAuthModal,
 }) => {
   const { showToast } = useToast();
@@ -58,7 +64,7 @@ export const OrderPlacementForm: React.FC<Props> = ({
   const [priceInput, setPriceInput] = useState<string>('');
   const [quantityInput, setQuantityInput] = useState<string>('');
   const [allocationPct, setAllocationPct] = useState<number | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingSubmissionsCount, setPendingSubmissionsCount] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const prevPairIdRef = useRef<string | null>(null);
 
@@ -179,6 +185,21 @@ export const OrderPlacementForm: React.FC<Props> = ({
       return;
     }
 
+    const minOrderUnits = safeBigInt(pair?.minOrderSize);
+    const maxOrderUnits = safeBigInt(pair?.maxOrderSize);
+    if (minOrderUnits > 0n && qtyUnits < minOrderUnits) {
+      setErrorMessage(
+        `Minimum order quantity is ${formatCrypto(minOrderUnits.toString(), baseDecimals)} ${pair.baseCurrency}.`
+      );
+      return;
+    }
+    if (maxOrderUnits > 0n && qtyUnits > maxOrderUnits) {
+      setErrorMessage(
+        `Maximum order quantity is ${formatCrypto(maxOrderUnits.toString(), baseDecimals)} ${pair.baseCurrency}.`
+      );
+      return;
+    }
+
     if ((orderType === 'LIMIT' || orderType === 'STOP_LIMIT') && priceUnits <= 0n) {
       setErrorMessage('Please enter a valid price.');
       return;
@@ -189,23 +210,86 @@ export const OrderPlacementForm: React.FC<Props> = ({
       return;
     }
 
-    setIsSubmitting(true);
+    // Estimate exact locked funds matching server MatchingEngine rules
+    const effectiveLockUnits =
+      side === 'BUY'
+        ? (orderType === 'MARKET'
+            ? ((quoteVolumeUnits * 101n) / 100n) + estimatedFeeUnits
+            : quoteVolumeUnits + estimatedFeeUnits)
+        : qtyUnits;
+
+    if (side === 'BUY' && effectiveLockUnits > 0n && availableQuoteBig < effectiveLockUnits) {
+      setErrorMessage(
+        `Insufficient ${pair.quoteCurrency} available balance (need ${formatQuotePrice(
+          effectiveLockUnits.toString(),
+          pair.quoteCurrency,
+          quoteDecimals,
+          true
+        )}).`
+      );
+      return;
+    }
+
+    if (side === 'SELL' && qtyUnits > availableBaseBig) {
+      setErrorMessage(
+        `Insufficient ${pair.baseCurrency} available balance.`
+      );
+      return;
+    }
+
+    const submittedQtyDisplay = quantityInput;
+    const clientOrderId =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? `ui-${crypto.randomUUID().slice(0, 12)}`
+        : `ui-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const optimisticOrder: OrderItem = {
+      id: `opt-${clientOrderId}`,
+      userId: user.id,
+      pairId: pair.id,
+      side,
+      orderType: orderType === 'STOP_LIMIT' ? 'LIMIT' : orderType,
+      timeInForce: 'GTC',
+      price: orderType === 'MARKET' ? '0' : priceUnits.toString(),
+      quantity: qtyUnits.toString(),
+      filledQuantity: '0',
+      status: 'NEW',
+      lockedAmount: effectiveLockUnits.toString(),
+      lockedCurrency: side === 'BUY' ? pair.quoteCurrency : pair.baseCurrency,
+      clientOrderId,
+      createdAt: Date.now(),
+      optimistic: true,
+      optimisticState: 'PENDING',
+    };
+
+    // Immediately apply optimistic order + balance lock & reset input so rapid entries feel instant
+    onOptimisticOrderCreate?.(optimisticOrder);
+    setQuantityInput('');
+    setAllocationPct(null);
+    setPendingSubmissionsCount(c => c + 1);
+    showToast(
+      'info',
+      `${side === 'BUY' ? 'Buy' : 'Sell'} Order Queued`,
+      `Processing ${side} ${submittedQtyDisplay} ${pair.baseCurrency}...`
+    );
+
+    const payload: any = {
+      pairId: pair.id,
+      side,
+      orderType: orderType === 'STOP_LIMIT' ? 'LIMIT' : orderType,
+      quantity: qtyUnits.toString(),
+      clientOrderId,
+    };
+
+    if (orderType === 'LIMIT' || orderType === 'STOP_LIMIT') {
+      payload.price = priceUnits.toString();
+    }
+    if (orderType === 'STOP_LIMIT' && stopPriceUnits > 0n) {
+      payload.stopPrice = stopPriceUnits.toString();
+    }
+
     try {
       const token = localStorage.getItem('dimonex_auth_token');
-      const payload: any = {
-        pairId: pair.id,
-        side,
-        orderType: orderType === 'STOP_LIMIT' ? 'LIMIT' : orderType,
-        quantity: qtyUnits.toString(),
-      };
-
-      if (orderType === 'LIMIT' || orderType === 'STOP_LIMIT') {
-        payload.price = priceUnits.toString();
-      }
-      if (orderType === 'STOP_LIMIT' && stopPriceUnits > 0n) {
-        payload.stopPrice = stopPriceUnits.toString();
-      }
-
       const res = await fetch('/api/trading/order', {
         method: 'POST',
         headers: {
@@ -224,19 +308,28 @@ export const OrderPlacementForm: React.FC<Props> = ({
         throw new Error(data.error || `Error HTTP ${res.status}`);
       }
 
+      if (onOptimisticOrderConfirm) {
+        onOptimisticOrderConfirm(optimisticOrder.id, data?.order, data?.trades);
+      } else {
+        onOrderPlaced?.(data?.order);
+      }
+
+      const confirmedOrder = data?.order;
+      const isFilled = confirmedOrder?.status === 'FILLED';
       showToast(
         'success',
-        `${side === 'BUY' ? 'Buy' : 'Sell'} Order Submitted`,
-        `Placed ${side} ${quantityInput} ${pair.baseCurrency}.`
+        isFilled
+          ? `${side === 'BUY' ? 'Buy' : 'Sell'} Order Filled`
+          : `${side === 'BUY' ? 'Buy' : 'Sell'} Order Confirmed`,
+        `${side} ${submittedQtyDisplay} ${pair.baseCurrency} ${isFilled ? 'executed immediately' : 'active on order book'}.`
       );
-      setQuantityInput('');
-      setAllocationPct(null);
-      onOrderPlaced(data?.order);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to place order');
-      showToast('error', 'Order Failed', err.message || 'Execution error');
+      onOptimisticOrderRollback?.(optimisticOrder.id);
+      const msg = err?.message || 'Failed to place order';
+      setErrorMessage(msg);
+      showToast('error', 'Order Rejected (Rolled Back)', msg);
     } finally {
-      setIsSubmitting(false);
+      setPendingSubmissionsCount(c => Math.max(0, c - 1));
     }
   };
 
@@ -427,12 +520,18 @@ export const OrderPlacementForm: React.FC<Props> = ({
           </div>
         ) : null}
 
+        {pendingSubmissionsCount > 0 && (
+          <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-[6px] bg-[#1D2832]/80 border border-[#8DA5B1]/30 text-[11px] text-[#C1D0D6] font-mono">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-[#16A879] animate-pulse" />
+            <span>Syncing {pendingSubmissionsCount} order{pendingSubmissionsCount > 1 ? 's' : ''} asynchronously...</span>
+          </div>
+        )}
+
         <Button
           type="submit"
           variant={side === 'BUY' ? 'profit' : 'danger'}
           size="lg"
           className="w-full font-semibold"
-          isLoading={isSubmitting}
           disabled={Boolean(pair.isDelisted) || pair.isHalted || !pair.isActive}
         >
           {pair.isDelisted

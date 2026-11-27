@@ -242,12 +242,15 @@ class DatabaseStore {
       this.scheduleSave();
     }
 
-    // Register exit handlers to ensure state is flushed to disk
-    const onExit = () => {
+    // Register exit handlers to ensure state is flushed to disk without blocking process shutdown
+    const onExit = (signal: NodeJS.Signals) => {
       this.flushSync();
+      if (process.listenerCount(signal) <= 1) {
+        process.exit(0);
+      }
     };
-    process.on('SIGINT', onExit);
-    process.on('SIGTERM', onExit);
+    process.on('SIGINT', () => onExit('SIGINT'));
+    process.on('SIGTERM', () => onExit('SIGTERM'));
   }
 
   // Hash password using PBKDF2
@@ -822,7 +825,7 @@ class DatabaseStore {
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
       void this.saveToDiskAsync();
-    }, 10_000);
+    }, 25_000);
     if (typeof this.saveTimer.unref === 'function') {
       this.saveTimer.unref();
     }
@@ -849,8 +852,25 @@ class DatabaseStore {
     const window24hStart = now - 24 * 60 * 60 * 1000;
     const updatedPairs: TradingPair[] = [];
 
+    // Single-pass index of trades by pairId when updating multiple pairs
+    const tradesByPair = new Map<string, Trade[]>();
+    if (!pairId) {
+      for (let i = 0; i < this.trades.length; i++) {
+        const t = this.trades[i];
+        if (!t) continue;
+        let arr = tradesByPair.get(t.pairId);
+        if (!arr) {
+          arr = [];
+          tradesByPair.set(t.pairId, arr);
+        }
+        arr.push(t);
+      }
+    }
+
     for (const pair of pairsToUpdate) {
-      const pairTrades = this.trades.filter(t => t.pairId === pair.id);
+      const pairTrades = pairId
+        ? this.trades.filter(t => t && t.pairId === pair.id)
+        : (tradesByPair.get(pair.id) || []);
 
       if (pairTrades.length === 0) {
         // Zero trades executed historically: freeze at lastPrice or seed defaults

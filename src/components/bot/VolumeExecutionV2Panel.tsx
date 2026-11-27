@@ -10,6 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { runSingleFlight } from '../../lib/safeFetch.js';
 import {
   Activity,
   AlertTriangle,
@@ -171,27 +172,32 @@ export const VolumeExecutionV2Panel: React.FC<Props> = ({
   const loadBots = useCallback(async () => {
     const token = localStorage.getItem('dimonex_auth_token');
     if (!user || !token) return;
-    setIsLoading(true);
-    try {
-      const res = await fetch('/api/bot/volume-v2/list', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          setBots(data);
+    return runSingleFlight('volume-v2:list', async () => {
+      setIsLoading(true);
+      try {
+        const res = await fetch('/api/bot/volume-v2/list', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            setBots(data);
+          }
         }
+      } catch {
+        // silent
+      } finally {
+        setIsLoading(false);
       }
-    } catch {
-      // silent
-    } finally {
-      setIsLoading(false);
-    }
+    });
   }, [user]);
 
   useEffect(() => {
     loadBots();
-    const timer = setInterval(loadBots, 2500);
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      loadBots();
+    }, 5000);
     return () => clearInterval(timer);
   }, [loadBots]);
 

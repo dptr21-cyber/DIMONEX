@@ -8,7 +8,8 @@
  * Strategy Library, Account Risk Snapshot, and real-time WebSocket updates.
  */
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { runSingleFlight } from '../../../lib/safeFetch.js';
 import {
   Activity,
   BarChart3,
@@ -80,26 +81,31 @@ export const ModularStrategyDashboard: React.FC<Props> = ({
     } catch {}
   }, []);
 
+  const wsConnectedRef = useRef(false);
+  const lastPollRef = useRef(0);
+
   const loadBots = useCallback(async () => {
     if (!user) return;
-    setIsLoading(true);
-    try {
-      const res = await fetch('/api/modular-bots', {
-        headers: { Authorization: `Bearer ${localStorage.getItem('dimonex_auth_token') || localStorage.getItem('dimonex_token') || ''}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        const list: ModularBotInstance[] = data.bots || [];
-        setBots(list);
-        setPortfolioRisk(data.portfolioRisk || null);
-        if (list.length > 0 && (!selectedBotId || !list.some(b => b.id === selectedBotId))) {
-          setSelectedBotId(list[0].id);
+    return runSingleFlight('modular:bots-list', async () => {
+      setIsLoading(true);
+      try {
+        const res = await fetch('/api/modular-bots', {
+          headers: { Authorization: `Bearer ${localStorage.getItem('dimonex_auth_token') || localStorage.getItem('dimonex_token') || ''}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const list: ModularBotInstance[] = data.bots || [];
+          setBots(list);
+          setPortfolioRisk(data.portfolioRisk || null);
+          if (list.length > 0 && (!selectedBotId || !list.some(b => b.id === selectedBotId))) {
+            setSelectedBotId(list[0].id);
+          }
         }
+      } catch {
+      } finally {
+        setIsLoading(false);
       }
-    } catch {
-    } finally {
-      setIsLoading(false);
-    }
+    });
   }, [user, selectedBotId]);
 
   useEffect(() => {
@@ -113,13 +119,23 @@ export const ModularStrategyDashboard: React.FC<Props> = ({
       return;
     }
     loadBots();
-    const poll = setInterval(loadBots, 6000);
+    const poll = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      const now = Date.now();
+      const targetMs = wsConnectedRef.current ? 20000 : 6000;
+      if (now - lastPollRef.current < targetMs) return;
+      lastPollRef.current = now;
+      loadBots();
+    }, 3000);
     return () => clearInterval(poll);
   }, [user, loadBots]);
 
   // Real-time WebSocket stream for modular_bots:<userId>
   useEffect(() => {
-    if (!user || !isWebSocketSupported()) return;
+    if (!user || !isWebSocketSupported()) {
+      wsConnectedRef.current = false;
+      return;
+    }
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws`;
     let ws: WebSocket | null = null;
@@ -127,6 +143,7 @@ export const ModularStrategyDashboard: React.FC<Props> = ({
       ws = new WebSocket(wsUrl);
       ws.onopen = () => {
         reportWebSocketSuccess();
+        wsConnectedRef.current = true;
         ws?.send(
           JSON.stringify({
             action: 'subscribe',
@@ -155,10 +172,17 @@ export const ModularStrategyDashboard: React.FC<Props> = ({
           }
         } catch {}
       };
-      ws.onerror = () => reportWebSocketFailure();
+      ws.onclose = () => {
+        wsConnectedRef.current = false;
+      };
+      ws.onerror = () => {
+        wsConnectedRef.current = false;
+        reportWebSocketFailure();
+      };
     } catch {}
 
     return () => {
+      wsConnectedRef.current = false;
       try {
         ws?.close();
       } catch {}

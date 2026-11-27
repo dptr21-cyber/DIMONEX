@@ -132,3 +132,24 @@ export async function runConcurrentTasks<const T extends readonly (() => Promise
   await Promise.all(Array.from({ length: limit }, () => worker()));
   return results as { -readonly [K in keyof T]: Awaited<ReturnType<T[K]>> };
 }
+
+const inFlightRequests = new Map<string, Promise<any>>();
+
+/**
+ * Deduplicates concurrent/polling requests sharing the same key so that
+ * a new poll tick never queues up behind an already-pending request.
+ */
+export function runSingleFlight<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const existing = inFlightRequests.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+  const promise = task().finally(() => {
+    if (inFlightRequests.get(key) === promise) {
+      inFlightRequests.delete(key);
+    }
+  });
+  inFlightRequests.set(key, promise);
+  return promise;
+}
+

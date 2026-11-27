@@ -13,6 +13,12 @@ import { WebSocketServer } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
+import dns from 'node:dns';
+import zlib from 'node:zlib';
+
+try {
+  dns.setDefaultResultOrder('ipv4first');
+} catch {}
 
 import { authRouter } from './routes/auth.js';
 import { kycRouter } from './routes/kyc.js';
@@ -67,6 +73,37 @@ export async function startServer() {
 
   // JSON Body Parser (10mb limit supports base64-encoded 5 MB cover & asset image uploads)
   app.use(express.json({ limit: '10mb' }));
+
+  // Lightweight gzip compression for /api JSON payloads >= 1KB (reduces bandwidth & queue time)
+  app.use('/api', (req, res, next) => {
+    const acceptEnc = String(req.headers['accept-encoding'] || '');
+    if (!acceptEnc.includes('gzip')) return next();
+    const origJson = res.json.bind(res);
+    res.json = ((body: any) => {
+      try {
+        if (res.headersSent) return origJson(body);
+        const jsonStr = JSON.stringify(body);
+        if (!jsonStr || jsonStr.length < 1024) {
+          return origJson(body);
+        }
+        zlib.gzip(Buffer.from(jsonStr, 'utf-8'), (err, gz) => {
+          if (err || res.headersSent) {
+            if (!res.headersSent) origJson(body);
+            return;
+          }
+          res.setHeader('Content-Encoding', 'gzip');
+          res.setHeader('Vary', 'Accept-Encoding');
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.setHeader('Content-Length', String(gz.length));
+          res.end(gz);
+        });
+        return res;
+      } catch {
+        return origJson(body);
+      }
+    }) as any;
+    next();
+  });
 
   // WebSocket Server for High-Speed Market Data
   const wss = new WebSocketServer({ server, path: '/ws' });
@@ -206,12 +243,32 @@ export async function startServer() {
     copyTradingService.start();
     pnlService.startScheduler();
     modularBotOrchestrator.startRecovery();
-
-    // Background periodic live rate sync every 120 seconds (respects syncIntervalMinutes cache & CMC cooldown)
-    setInterval(() => {
-      fxConversionService.fetchAndSyncLiveRate('system@dimonex.id', 12).catch(() => {});
-    }, 120_000);
   });
+
+  // Clean graceful shutdown for PM2 / Cloud Run SIGTERM & SIGINT
+  let isShuttingDown = false;
+  const gracefulShutdown = (signal: string) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`[DIMONEX] Received ${signal}, flushing state and shutting down cleanly...`);
+    try {
+      db.flushSync();
+    } catch {}
+    try {
+      wss.close();
+    } catch {}
+    try {
+      server.close(() => {
+        process.exit(0);
+      });
+    } catch {
+      process.exit(0);
+    }
+    const forceExitTimer = setTimeout(() => process.exit(0), 1500);
+    forceExitTimer.unref?.();
+  };
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 }
 
 // Auto-start if executed directly
