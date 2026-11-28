@@ -2247,7 +2247,11 @@ export const MMConsoleView: React.FC<Props> = ({
                   : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
               }`}>
                 <span className={`w-2 h-2 rounded-full ${fxData?.config?.isManualLocked ? 'bg-amber-400' : 'bg-emerald-400'}`}></span>
-                {fxData?.config?.isManualLocked ? 'Kurs Terkunci Manual' : 'Auto-Sync CMC Aktif'}
+                {fxData?.config?.isManualLocked
+                  ? 'Kurs Terkunci Manual'
+                  : fxData?.currentRate?.source === 'BINANCE_WS'
+                    ? 'Auto-Sync Binance WS (USDTIDR)'
+                    : 'Auto-Sync Live FX Aktif'}
               </span>
             </div>
           </div>

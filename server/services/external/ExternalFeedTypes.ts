@@ -88,7 +88,7 @@ export interface AggregatedReferencePrice {
 
 export interface FxRateRecord {
   rate: number;                     // IDR per 1 USDT (e.g. 16350.00)
-  source: 'MANUAL_ADMIN' | 'EXTERNAL_FEED' | 'COINMARKETCAP' | 'INDODAX' | 'LIVE_API' | 'SYSTEM_DEFAULT';
+  source: 'MANUAL_ADMIN' | 'EXTERNAL_FEED' | 'COINMARKETCAP' | 'BINANCE_WS' | 'INDODAX' | 'LIVE_API' | 'SYSTEM_DEFAULT';
   updatedBy: string;                // Admin email or system
   updatedAt: number;
   validUntil: number;               // Epoch ms until this rate is considered valid
@@ -103,7 +103,7 @@ export interface FxRateAuditEntry {
   previousRate: number;
   newRate: number;
   percentChange: number;
-  source: 'MANUAL_ADMIN' | 'EXTERNAL_FEED' | 'COINMARKETCAP' | 'INDODAX' | 'LIVE_API' | 'SYSTEM_DEFAULT';
+  source: 'MANUAL_ADMIN' | 'EXTERNAL_FEED' | 'COINMARKETCAP' | 'BINANCE_WS' | 'INDODAX' | 'LIVE_API' | 'SYSTEM_DEFAULT';
   notes?: string;
   hash?: string;
 }

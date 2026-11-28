@@ -88,6 +88,32 @@ export class PriceAggregatorService {
     this.bybit = new BybitPublicFeed();
     this.cmc = new CoinMarketCapFeed();
 
+    // Register Binance WS USDTIDR live stream as primary real-time FX source
+    fxConversionService.registerBinanceWsFxProvider(() => {
+      const tick = this.binance.getTick('USDTIDR');
+      if (!tick) return null;
+      const mid = tick.bestBid > 0 && tick.bestAsk >= tick.bestBid
+        ? parseFloat(((tick.bestBid + tick.bestAsk) / 2).toFixed(2))
+        : tick.lastPrice;
+      return {
+        rate: mid,
+        receivedAt: tick.receivedAt,
+        isFresh: tick.isFresh,
+        isValid: tick.isValid && mid > 0
+      };
+    });
+
+    this.binance.onTick((tick) => {
+      if (tick.symbol === 'USDTIDR' && tick.isValid) {
+        const mid = tick.bestBid > 0 && tick.bestAsk >= tick.bestBid
+          ? parseFloat(((tick.bestBid + tick.bestAsk) / 2).toFixed(2))
+          : tick.lastPrice;
+        if (mid > 0) {
+          fxConversionService.ingestBinanceWsTick(mid, tick.receivedAt);
+        }
+      }
+    });
+
     // Start background connections (non-blocking)
     this.binance.connect().catch(() => {});
     this.bybit.connect().catch(() => {});

@@ -21,8 +21,10 @@ export class BinancePublicFeed implements ExternalMarketDataProvider {
 
   private ws: WebSocket | null = null;
   private status: ProviderConnectionStatus = 'DISCONNECTED';
-  private symbols: Set<string> = new Set(['BTCUSDT', 'ETHUSDT']);
+  private readonly pinnedSymbols: Set<string> = new Set(['USDTIDR']);
+  private symbols: Set<string> = new Set(['BTCUSDT', 'ETHUSDT', 'USDTIDR']);
   private ticks: Map<string, ExternalPriceTick> = new Map();
+  private tickListeners: Set<(tick: ExternalPriceTick) => void> = new Set();
   private reconnectAttempts = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private pingInterval: NodeJS.Timeout | null = null;
@@ -181,9 +183,10 @@ export class BinancePublicFeed implements ExternalMarketDataProvider {
   }
 
   public syncSymbols(nextSymbols: string[]): void {
-    const desired = new Set(
-      nextSymbols.map(s => s.trim().toUpperCase()).filter(Boolean)
-    );
+    const desired = new Set([
+      ...nextSymbols.map(s => s.trim().toUpperCase()).filter(Boolean),
+      ...this.pinnedSymbols
+    ]);
     const toAdd: string[] = [];
     const toRemove: string[] = [];
 
@@ -203,6 +206,21 @@ export class BinancePublicFeed implements ExternalMarketDataProvider {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       if (toRemove.length > 0) this.sendStreamBatch('UNSUBSCRIBE', toRemove);
       if (toAdd.length > 0) this.sendStreamBatch('SUBSCRIBE', toAdd);
+    }
+  }
+
+  public onTick(listener: (tick: ExternalPriceTick) => void): () => void {
+    this.tickListeners.add(listener);
+    return () => {
+      this.tickListeners.delete(listener);
+    };
+  }
+
+  private emitTick(tick: ExternalPriceTick) {
+    for (const listener of this.tickListeners) {
+      try {
+        listener(tick);
+      } catch {}
     }
   }
 
@@ -236,6 +254,9 @@ export class BinancePublicFeed implements ExternalMarketDataProvider {
       const lower = sym.toLowerCase();
       streams.push(`${lower}@trade`);
       streams.push(`${lower}@bookTicker`);
+      if (this.pinnedSymbols.has(sym)) {
+        streams.push(`${lower}@miniTicker`);
+      }
     }
 
     // Binance recommends <= 200 streams per connection; chunk at 80 streams per payload
@@ -270,7 +291,10 @@ export class BinancePublicFeed implements ExternalMarketDataProvider {
         const bestBid = parseFloat(msg.b);
         const bestAsk = parseFloat(msg.a);
         const prev = this.ticks.get(symbol);
-        const lastPrice = prev?.lastPrice || (bestBid + bestAsk) / 2;
+        const isBookValid = bestBid > 0 && bestAsk >= bestBid;
+        const lastPrice = (symbol === 'USDTIDR' && isBookValid)
+          ? parseFloat(((bestBid + bestAsk) / 2).toFixed(2))
+          : (prev?.lastPrice || (bestBid + bestAsk) / 2);
 
         const tick: ExternalPriceTick = {
           provider: 'binance',
@@ -282,9 +306,10 @@ export class BinancePublicFeed implements ExternalMarketDataProvider {
           receivedAt: now,
           latencyMs: 10,
           isFresh: true,
-          isValid: bestBid > 0 && bestAsk >= bestBid
+          isValid: isBookValid
         };
         this.ticks.set(symbol, tick);
+        if (tick.isValid) this.emitTick(tick);
         return;
       }
 
@@ -309,6 +334,35 @@ export class BinancePublicFeed implements ExternalMarketDataProvider {
           isValid: lastPrice > 0
         };
         this.ticks.set(symbol, tick);
+        if (tick.isValid) this.emitTick(tick);
+        return;
+      }
+
+      // Handle 24hrMiniTicker event: { e: "24hrMiniTicker", E: 123456789, s: "USDTIDR", c: "18465.00", ... }
+      if (msg.e === '24hrMiniTicker' && msg.s && msg.c) {
+        const symbol = msg.s.toUpperCase();
+        const closePrice = parseFloat(msg.c);
+        const exchangeTime = Number(msg.E || now);
+        const prev = this.ticks.get(symbol);
+        const hasFreshBook = prev && (now - prev.receivedAt < 15000) && prev.bestBid > 0 && prev.bestAsk >= prev.bestBid;
+        const effectivePrice = (symbol === 'USDTIDR' && hasFreshBook)
+          ? parseFloat(((prev.bestBid + prev.bestAsk) / 2).toFixed(2))
+          : closePrice;
+
+        const tick: ExternalPriceTick = {
+          provider: 'binance',
+          symbol,
+          lastPrice: effectivePrice,
+          bestBid: prev?.bestBid || effectivePrice,
+          bestAsk: prev?.bestAsk || effectivePrice,
+          exchangeTimestamp: exchangeTime,
+          receivedAt: now,
+          latencyMs: Math.max(0, now - exchangeTime),
+          isFresh: true,
+          isValid: effectivePrice > 0
+        };
+        this.ticks.set(symbol, tick);
+        if (tick.isValid) this.emitTick(tick);
       }
     } catch (_) {}
   }
